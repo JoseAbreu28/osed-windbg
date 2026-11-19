@@ -614,6 +614,22 @@ var osed_bundle = (() => {
         return bytes.map(hexByte).join(" ");
     }
   }
+  function pythonBadcharsLine(badchars) {
+    const sorted = [...new Set(badchars.map((value) => value & 255))].sort((a, b) => a - b);
+    return `BADCHARS = ${formatByteArray(sorted, "python")}`;
+  }
+  function nextBadcharCommand(command2, addressArg, badchars) {
+    const sorted = [...new Set(badchars.map((value) => value & 255))].sort((a, b) => a - b);
+    return `dx @$osed().${command2}(${addressArg}, "${sorted.map((value) => hexByte(value).toUpperCase()).join(" ")}")`;
+  }
+  function pythonBadcharHelper(badchars) {
+    return [
+      `${pythonBadcharsLine(badchars)}  # add each new bad char here`,
+      "",
+      "def badchar_array(bad=BADCHARS):",
+      "    return bytes(b for b in range(256) if b not in bad)"
+    ];
+  }
   function locateExpectedArray(window, expected, minRun = 8) {
     const expectedIndex = /* @__PURE__ */ new Map();
     for (let i = 0; i < expected.length; i += 1) {
@@ -654,43 +670,110 @@ var osed_bundle = (() => {
     }
     return void 0;
   }
-  function compareBadchars(observed, expected) {
+  function findReturnSlot(before, ip, pointerSize) {
+    const needle = [];
+    let rest = ip;
+    for (let i = 0; i < pointerSize; i += 1) {
+      needle.push(Number(rest & BigInt(255)));
+      rest = rest >> BigInt(8);
+    }
+    for (let offset = before.length - pointerSize; offset >= 0; offset -= 1) {
+      let match = true;
+      for (let i = 0; i < pointerSize && match; i += 1) {
+        match = before[offset + i] === needle[i];
+      }
+      if (match) return offset;
+    }
+    return void 0;
+  }
+  var EXPANSION_SLACK = 32;
+  function compareBadchars(observed, expected, leadingSlack = 0) {
+    var _a;
+    const n = expected.length;
+    const m = Math.min(observed.length, n + EXPANSION_SLACK);
+    const width = m + 1;
+    const cost = new Uint32Array((n + 1) * width);
+    for (let j2 = 0; j2 <= m; j2 += 1) cost[j2] = Math.max(0, j2 - leadingSlack);
+    for (let i2 = 1; i2 <= n; i2 += 1) {
+      cost[i2 * width] = i2;
+      for (let j2 = 1; j2 <= m; j2 += 1) {
+        const pair = cost[(i2 - 1) * width + j2 - 1] + (expected[i2 - 1] === observed[j2 - 1] ? 0 : 1);
+        const dropped = cost[(i2 - 1) * width + j2] + 1;
+        const extra = cost[i2 * width + j2 - 1] + 1;
+        cost[i2 * width + j2] = Math.min(pair, dropped, extra);
+      }
+    }
+    let end = 0;
+    for (let j2 = 1; j2 <= m; j2 += 1) {
+      if (cost[n * width + j2] < cost[n * width + end]) end = j2;
+    }
+    const fate = new Array(n);
+    const seen = new Array(n).fill(-1);
+    const extras = [];
+    let i = n;
+    let j = end;
+    while (i > 0 || j > leadingSlack) {
+      const here = cost[i * width + j];
+      if (i > 0 && j > 0 && expected[i - 1] === observed[j - 1] && here === cost[(i - 1) * width + j - 1]) {
+        fate[i - 1] = "kept";
+        seen[i - 1] = observed[j - 1];
+        i -= 1;
+        j -= 1;
+      } else if (i > 0 && j > 0 && here === cost[(i - 1) * width + j - 1] + 1) {
+        fate[i - 1] = "changed";
+        seen[i - 1] = observed[j - 1];
+        i -= 1;
+        j -= 1;
+      } else if (i > 0 && here === cost[(i - 1) * width + j] + 1) {
+        fate[i - 1] = "dropped";
+        i -= 1;
+      } else {
+        extras.push({ gap: i, value: observed[j - 1] });
+        j -= 1;
+      }
+    }
+    let tested = 0;
+    let score = 0;
+    let best = 0;
+    for (let k = 0; k < n; k += 1) {
+      score += fate[k] === "kept" ? 1 : -1;
+      if (fate[k] === "kept" && score > 0 && score >= best) {
+        best = score;
+        tested = k + 1;
+      }
+    }
+    const truncated = n - tested >= 2;
+    if (!truncated) tested = n;
+    const expanded = /* @__PURE__ */ new Map();
+    for (const { gap, value } of extras) {
+      const before = gap - 1;
+      const owner = before >= 0 && (fate[before] !== "kept" || gap >= n) ? before : gap;
+      if (owner < tested && !expanded.has(owner)) expanded.set(owner, value);
+    }
     const badChars = [];
     const mismatches = [];
-    let e = 0;
-    let o = 0;
-    while (e < expected.length && o < observed.length) {
-      if (observed[o] === expected[e]) {
-        e += 1;
-        o += 1;
-      } else if (expected[e] < observed[o]) {
-        badChars.push(expected[e]);
-        mismatches.push({ offset: e, expected: expected[e], observed: -1 });
-        e += 1;
-      } else {
-        break;
+    let survivorCount = 0;
+    for (let k = 0; k < tested; k += 1) {
+      if (fate[k] === "kept" && !expanded.has(k)) {
+        survivorCount += 1;
+        continue;
       }
+      badChars.push(expected[k]);
+      const value = fate[k] === "dropped" ? -1 : fate[k] === "kept" ? (_a = expanded.get(k)) != null ? _a : -1 : seen[k];
+      mismatches.push({ offset: k, expected: expected[k], observed: value });
     }
-    return {
+    return __spreadValues({
       badChars,
       mismatches,
-      survivorCount: o,
-      expectedConsumed: e
-    };
+      survivorCount,
+      expectedConsumed: tested,
+      startOffset: j
+    }, truncated ? { truncatedAt: expected[tested] } : {});
   }
 
-  // src/core/scan_engine.ts
-  var IMAGE_SCN_MEM_EXECUTE = 536870912;
-  function decodeAscii(bytes) {
-    let result3 = "";
-    for (const byte of bytes) {
-      if (byte === 0) {
-        break;
-      }
-      result3 += String.fromCharCode(byte);
-    }
-    return result3;
-  }
+  // src/commands/modules.ts
+  var IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = 64;
+  var IMAGE_DLLCHARACTERISTICS_NX_COMPAT = 256;
   function parseBigIntString(value) {
     const text = value.trim();
     if (/^0x[0-9a-fA-F]+$/.test(text)) {
@@ -745,15 +828,220 @@ var osed_bundle = (() => {
     }
     return [];
   }
-  function getModules() {
+  function parseSafeSeh(base, pe, optionalHeaderMagic) {
+    if (optionalHeaderMagic !== 267) {
+      return "unknown";
+    }
+    try {
+      const optionalHeaderOffset = pe + BigInt(24);
+      const dataDirectoryOffset = optionalHeaderOffset + BigInt(96);
+      const loadConfigRva = readUint32LE(dataDirectoryOffset + BigInt(8 * 10));
+      const loadConfigSize = readUint32LE(dataDirectoryOffset + BigInt(8 * 10 + 4));
+      if (loadConfigRva === 0 || loadConfigSize === 0) {
+        return "disabled";
+      }
+      const loadConfig = base + BigInt(loadConfigRva);
+      const sehTable = readUint32LE(loadConfig + BigInt(64));
+      const sehCount = readUint32LE(loadConfig + BigInt(68));
+      if (sehTable !== 0 && sehCount > 0) {
+        return "enabled";
+      }
+      return "disabled";
+    } catch (_error) {
+      return "unknown";
+    }
+  }
+  function listModulesWithMitigations(filter) {
     const process = host.currentProcess;
     const modules = asArray(process == null ? void 0 : process.Modules);
+    const listed = modules.map((entry) => {
+      var _a, _b, _c, _d, _e;
+      const module = entry;
+      const name = (_a = module.Name) != null ? _a : "<unknown>";
+      const path = (_b = module.Path) != null ? _b : name;
+      const base = toBigInt((_d = (_c = module.BaseAddress) != null ? _c : module.Base) != null ? _d : module.Address);
+      let size = toBigInt((_e = module.Size) != null ? _e : module.Length);
+      const end = toBigInt(module.EndAddress);
+      if (size === BigInt(0) && end > base) {
+        size = end - base;
+      }
+      let characteristics = 0;
+      let dllCharacteristics = 0;
+      let aslr = "unknown";
+      let nxcompat = "unknown";
+      let safeseh = "unknown";
+      let preferredBase = base;
+      try {
+        const mz = readUint16LE(base);
+        if (mz === 23117) {
+          const peOffset = readUint32LE(base + BigInt(60));
+          const pe = base + BigInt(peOffset);
+          const sig = readUint32LE(pe);
+          if (sig === 17744) {
+            characteristics = readUint16LE(pe + BigInt(22));
+            const optionalHeaderMagic = readUint16LE(pe + BigInt(24));
+            dllCharacteristics = readUint16LE(pe + BigInt(94));
+            if (optionalHeaderMagic === 267) {
+              preferredBase = BigInt(readUint32LE(pe + BigInt(52)));
+            }
+            aslr = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) !== 0 ? "enabled" : "disabled";
+            nxcompat = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
+            safeseh = parseSafeSeh(base, pe, optionalHeaderMagic);
+          }
+        }
+      } catch (_error) {
+      }
+      const system = path.toLowerCase().includes("\\windows\\system32");
+      return {
+        name,
+        path,
+        base,
+        size,
+        characteristics,
+        dllCharacteristics,
+        aslr,
+        nxcompat,
+        safeseh,
+        system,
+        preferredBase
+      };
+    }).filter((item) => {
+      if (!filter) {
+        return true;
+      }
+      const needle = filter.toLowerCase();
+      return item.name.toLowerCase().includes(needle) || item.path.toLowerCase().includes(needle);
+    }).sort((a, b) => a.base < b.base ? -1 : 1);
+    return listed;
+  }
+  function findModuleByAddress(address) {
+    return listModulesWithMitigations().find((module) => {
+      const start = module.base;
+      const end = module.base + module.size;
+      return address >= start && address < end;
+    });
+  }
+  function createModulesCommand() {
+    return {
+      name: "modules",
+      description: "Enumerate modules and mitigation states.",
+      usage: "dx @$osed().modules(filter?)",
+      examples: ["dx @$osed().modules()", 'dx @$osed().modules("kernel32")'],
+      schema: {
+        filter: { type: "string" }
+      },
+      execute(options) {
+        const modules = listModulesWithMitigations(options.filter);
+        const pointerSize = getPointerSize();
+        section("Modules");
+        table(
+          [
+            { key: "name", header: "Module", width: 20 },
+            { key: "base", header: "Base", width: 18 },
+            { key: "size", header: "Size", width: 10 },
+            { key: "aslr", header: "ASLR", width: 8 },
+            { key: "nxcompat", header: "NX_COMPAT", width: 10 },
+            { key: "safeseh", header: "SafeSEH", width: 8 },
+            { key: "system", header: "System", width: 8 }
+          ],
+          modules.map((module) => ({
+            name: module.name,
+            base: formatAddress(module.base, pointerSize),
+            size: `0x${module.size.toString(16).toUpperCase()}`,
+            aslr: module.aslr,
+            nxcompat: module.nxcompat,
+            safeseh: module.safeseh,
+            system: module.system ? "yes" : "no"
+          }))
+        );
+        whyItMatters("Mitigation triage identifies practical modules for reliable exploitation paths.");
+        return {
+          command: "modules",
+          args: options,
+          success: true,
+          findings: modules,
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/core/scan_engine.ts
+  var IMAGE_SCN_MEM_EXECUTE = 536870912;
+  function decodeAscii(bytes) {
+    let result3 = "";
+    for (const byte of bytes) {
+      if (byte === 0) {
+        break;
+      }
+      result3 += String.fromCharCode(byte);
+    }
+    return result3;
+  }
+  function parseBigIntString2(value) {
+    const text = value.trim();
+    if (/^0x[0-9a-fA-F]+$/.test(text)) {
+      return BigInt(text);
+    }
+    if (/^[0-9a-fA-F]+$/.test(text)) {
+      return BigInt(`0x${text}`);
+    }
+    if (/^[0-9]+$/.test(text)) {
+      return BigInt(text);
+    }
+    return BigInt(0);
+  }
+  function toBigInt2(value) {
+    if (typeof value === "bigint") {
+      return value;
+    }
+    if (typeof value === "number") {
+      return BigInt(Math.max(0, Math.trunc(value)));
+    }
+    if (typeof value === "string") {
+      return parseBigIntString2(value);
+    }
+    if (value && typeof value === "object") {
+      const valueOf = value.valueOf;
+      if (typeof valueOf === "function") {
+        const resolved = valueOf.call(value);
+        if (resolved !== value) {
+          const parsed = toBigInt2(resolved);
+          if (parsed !== BigInt(0)) {
+            return parsed;
+          }
+        }
+      }
+      const asString = value.toString;
+      if (typeof asString === "function") {
+        return parseBigIntString2(asString.call(value));
+      }
+    }
+    return BigInt(0);
+  }
+  function asArray2(value) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (value && typeof value[Symbol.iterator] === "function") {
+      try {
+        return Array.from(value);
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function getModules() {
+    const process = host.currentProcess;
+    const modules = asArray2(process == null ? void 0 : process.Modules);
     return modules.map((entry) => {
       var _a, _b, _c, _d, _e, _f;
       const module = entry;
-      const base = toBigInt((_b = (_a = module.BaseAddress) != null ? _a : module.Base) != null ? _b : module.Address);
-      let size = toBigInt((_c = module.Size) != null ? _c : module.Length);
-      const end = toBigInt(module.EndAddress);
+      const base = toBigInt2((_b = (_a = module.BaseAddress) != null ? _a : module.Base) != null ? _b : module.Address);
+      let size = toBigInt2((_c = module.Size) != null ? _c : module.Length);
+      const end = toBigInt2(module.EndAddress);
       if (size === BigInt(0) && end > base) {
         size = end - base;
       }
@@ -1339,9 +1627,25 @@ var osed_bundle = (() => {
       return false;
     }
   }
-  function resolveTeb32Address(thread, reader = readPointer) {
+  function debuggerTebPseudoRegister() {
+    try {
+      for (const line of executeDebuggerCommand("? @$teb")) {
+        const match = line.match(/=\s*([0-9a-f`]+)\s*$/i);
+        if (match) return BigInt(`0x${match[1].replace(/`/g, "")}`);
+      }
+    } catch (_error) {
+    }
+    return void 0;
+  }
+  var WOW64_TEB_DISTANCE = BigInt(8192);
+  function resolveTeb32Address(thread, reader = readPointer, debuggerTeb = debuggerTebPseudoRegister) {
     const fromEnvironment = environmentTeb(thread);
     if (fromEnvironment !== BigInt(0)) return fromEnvironment;
+    const teb = debuggerTeb();
+    if (teb !== void 0) {
+      const fromPseudoRegister = [teb, teb + WOW64_TEB_DISTANCE].find((candidate) => looksLikeTeb32(candidate, reader));
+      if (fromPseudoRegister !== void 0) return fromPseudoRegister;
+    }
     for (const key2 of ["Teb", "Teb32", "TebAddress", "Wow64Teb", "Wow64Teb32"]) {
       const parsed = toAddress(safeGet(thread, key2));
       if (parsed !== BigInt(0)) return parsed;
@@ -1389,202 +1693,6 @@ var osed_bundle = (() => {
   }
   function readSehRecords(teb, maxRecords = 64, reader = readPointer) {
     return walkSehRecords(teb, maxRecords, reader).records;
-  }
-
-  // src/commands/modules.ts
-  var IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = 64;
-  var IMAGE_DLLCHARACTERISTICS_NX_COMPAT = 256;
-  function parseBigIntString2(value) {
-    const text = value.trim();
-    if (/^0x[0-9a-fA-F]+$/.test(text)) {
-      return BigInt(text);
-    }
-    if (/^[0-9a-fA-F]+$/.test(text)) {
-      return BigInt(`0x${text}`);
-    }
-    if (/^[0-9]+$/.test(text)) {
-      return BigInt(text);
-    }
-    return BigInt(0);
-  }
-  function toBigInt2(value) {
-    if (typeof value === "bigint") {
-      return value;
-    }
-    if (typeof value === "number") {
-      return BigInt(Math.max(0, Math.trunc(value)));
-    }
-    if (typeof value === "string") {
-      return parseBigIntString2(value);
-    }
-    if (value && typeof value === "object") {
-      const valueOf = value.valueOf;
-      if (typeof valueOf === "function") {
-        const resolved = valueOf.call(value);
-        if (resolved !== value) {
-          const parsed = toBigInt2(resolved);
-          if (parsed !== BigInt(0)) {
-            return parsed;
-          }
-        }
-      }
-      const asString = value.toString;
-      if (typeof asString === "function") {
-        return parseBigIntString2(asString.call(value));
-      }
-    }
-    return BigInt(0);
-  }
-  function asArray2(value) {
-    if (Array.isArray(value)) {
-      return value;
-    }
-    if (value && typeof value[Symbol.iterator] === "function") {
-      try {
-        return Array.from(value);
-      } catch (_error) {
-        return [];
-      }
-    }
-    return [];
-  }
-  function parseSafeSeh(base, pe, optionalHeaderMagic) {
-    if (optionalHeaderMagic !== 267) {
-      return "unknown";
-    }
-    try {
-      const optionalHeaderOffset = pe + BigInt(24);
-      const dataDirectoryOffset = optionalHeaderOffset + BigInt(96);
-      const loadConfigRva = readUint32LE(dataDirectoryOffset + BigInt(8 * 10));
-      const loadConfigSize = readUint32LE(dataDirectoryOffset + BigInt(8 * 10 + 4));
-      if (loadConfigRva === 0 || loadConfigSize === 0) {
-        return "disabled";
-      }
-      const loadConfig = base + BigInt(loadConfigRva);
-      const sehTable = readUint32LE(loadConfig + BigInt(64));
-      const sehCount = readUint32LE(loadConfig + BigInt(68));
-      if (sehTable !== 0 && sehCount > 0) {
-        return "enabled";
-      }
-      return "disabled";
-    } catch (_error) {
-      return "unknown";
-    }
-  }
-  function listModulesWithMitigations(filter) {
-    const process = host.currentProcess;
-    const modules = asArray2(process == null ? void 0 : process.Modules);
-    const listed = modules.map((entry) => {
-      var _a, _b, _c, _d, _e;
-      const module = entry;
-      const name = (_a = module.Name) != null ? _a : "<unknown>";
-      const path = (_b = module.Path) != null ? _b : name;
-      const base = toBigInt2((_d = (_c = module.BaseAddress) != null ? _c : module.Base) != null ? _d : module.Address);
-      let size = toBigInt2((_e = module.Size) != null ? _e : module.Length);
-      const end = toBigInt2(module.EndAddress);
-      if (size === BigInt(0) && end > base) {
-        size = end - base;
-      }
-      let characteristics = 0;
-      let dllCharacteristics = 0;
-      let aslr = "unknown";
-      let nxcompat = "unknown";
-      let safeseh = "unknown";
-      let preferredBase = base;
-      try {
-        const mz = readUint16LE(base);
-        if (mz === 23117) {
-          const peOffset = readUint32LE(base + BigInt(60));
-          const pe = base + BigInt(peOffset);
-          const sig = readUint32LE(pe);
-          if (sig === 17744) {
-            characteristics = readUint16LE(pe + BigInt(22));
-            const optionalHeaderMagic = readUint16LE(pe + BigInt(24));
-            dllCharacteristics = readUint16LE(pe + BigInt(94));
-            if (optionalHeaderMagic === 267) {
-              preferredBase = BigInt(readUint32LE(pe + BigInt(52)));
-            }
-            aslr = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) !== 0 ? "enabled" : "disabled";
-            nxcompat = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
-            safeseh = parseSafeSeh(base, pe, optionalHeaderMagic);
-          }
-        }
-      } catch (_error) {
-      }
-      const system = path.toLowerCase().includes("\\windows\\system32");
-      return {
-        name,
-        path,
-        base,
-        size,
-        characteristics,
-        dllCharacteristics,
-        aslr,
-        nxcompat,
-        safeseh,
-        system,
-        preferredBase
-      };
-    }).filter((item) => {
-      if (!filter) {
-        return true;
-      }
-      const needle = filter.toLowerCase();
-      return item.name.toLowerCase().includes(needle) || item.path.toLowerCase().includes(needle);
-    }).sort((a, b) => a.base < b.base ? -1 : 1);
-    return listed;
-  }
-  function findModuleByAddress(address) {
-    return listModulesWithMitigations().find((module) => {
-      const start = module.base;
-      const end = module.base + module.size;
-      return address >= start && address < end;
-    });
-  }
-  function createModulesCommand() {
-    return {
-      name: "modules",
-      description: "Enumerate modules and mitigation states.",
-      usage: "dx @$osed().modules(filter?)",
-      examples: ["dx @$osed().modules()", 'dx @$osed().modules("kernel32")'],
-      schema: {
-        filter: { type: "string" }
-      },
-      execute(options) {
-        const modules = listModulesWithMitigations(options.filter);
-        const pointerSize = getPointerSize();
-        section("Modules");
-        table(
-          [
-            { key: "name", header: "Module", width: 20 },
-            { key: "base", header: "Base", width: 18 },
-            { key: "size", header: "Size", width: 10 },
-            { key: "aslr", header: "ASLR", width: 8 },
-            { key: "nxcompat", header: "NX_COMPAT", width: 10 },
-            { key: "safeseh", header: "SafeSEH", width: 8 },
-            { key: "system", header: "System", width: 8 }
-          ],
-          modules.map((module) => ({
-            name: module.name,
-            base: formatAddress(module.base, pointerSize),
-            size: `0x${module.size.toString(16).toUpperCase()}`,
-            aslr: module.aslr,
-            nxcompat: module.nxcompat,
-            safeseh: module.safeseh,
-            system: module.system ? "yes" : "no"
-          }))
-        );
-        whyItMatters("Mitigation triage identifies practical modules for reliable exploitation paths.");
-        return {
-          command: "modules",
-          args: options,
-          success: true,
-          findings: modules,
-          warnings: [],
-          errors: []
-        };
-      }
-    };
   }
 
   // src/core/exploit_strategy_advisor.ts
@@ -2146,6 +2254,23 @@ var osed_bundle = (() => {
     }
     return best;
   }
+  var RETURN_SLOT_REACH = 64;
+  var CONTENT_BACKTRACK = 8;
+  function readAfterReturnSlot(anchor, pointerSize, length) {
+    var _a;
+    const ip = readRegisters(pointerSize).ip;
+    if (ip === void 0 || findModuleByAddress(ip) !== void 0) return void 0;
+    const reach = RETURN_SLOT_REACH + pointerSize;
+    const start = anchor - BigInt(reach);
+    const before = tryReadMemory(start, reach);
+    if (!before) return void 0;
+    const offset = findReturnSlot(before, ip, pointerSize);
+    if (offset === void 0) return void 0;
+    const slot = start + BigInt(offset);
+    const landing2 = slot + BigInt(pointerSize);
+    const observed = (_a = tryReadMemory(landing2, length)) != null ? _a : readLargestWindow(landing2, length);
+    return observed ? { slot, landing: landing2, observed } : void 0;
+  }
   function createBadcharsCommand() {
     return {
       name: "badchars",
@@ -2186,11 +2311,17 @@ var osed_bundle = (() => {
           warn(
             `Array truncated after ${formatHexByte(lastTested)}; bytes ${formatHexByte(firstUntested)}-0xFF not tested.`
           );
+          if (compared.truncatedAt !== void 0) {
+            warn(`Likely terminator: ${formatHexByte(compared.truncatedAt)} (first byte that never arrived).`);
+          }
         }
         const allExclude = [.../* @__PURE__ */ new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
         info(
           `Copy-ready exclude list: ${allExclude.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`
         );
+        const nextRun = compared.truncatedAt === void 0 ? allExclude : [...allExclude, compared.truncatedAt].sort((a, b) => a - b);
+        info(`Exploit line: ${pythonBadcharsLine(nextRun)}`);
+        info(`Next command: ${nextBadcharCommand("badchars", formatAddress(address, pointerSize), nextRun)}`);
         whyItMatters("Accurate badchar profiling prevents payload corruption before shellcode staging.");
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
         return result(
@@ -2204,6 +2335,7 @@ var osed_bundle = (() => {
               survivorCount: compared.survivorCount,
               expectedConsumed: compared.expectedConsumed,
               mismatches: compared.mismatches,
+              truncatedAt: compared.truncatedAt,
               exclude: normalizedExclude.values,
               allExclude
             }
@@ -2242,6 +2374,29 @@ var osed_bundle = (() => {
           [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex4 } }],
           warnings
         );
+      }
+    };
+  }
+  function createBadcharFunctionCommand() {
+    return {
+      name: "badchar_function",
+      description: "Print a Python BADCHARS list plus a badchar_array() helper for the exploit, so each run only grows the list.",
+      usage: "dx @$osed().badchar_function(badchars?)",
+      examples: ['dx @$osed().badchar_function("00")', 'dx @$osed().badchar_function("00 0A 0D")'],
+      schema: {
+        exclude: { type: "array", elementType: "number", default: [] }
+      },
+      execute(options) {
+        var _a;
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const lines = pythonBadcharHelper(normalizedExclude.values);
+        section("Bad Character Python Helper");
+        for (const line of lines) print(line);
+        print("");
+        print("payload += badchar_array()  # where the test array goes");
+        whyItMatters("Each badchar_find run prints the updated BADCHARS line; paste it over this one and send again.");
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        return result("badchar_function", __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }), [{ exclude: normalizedExclude.values, lines }], warnings);
       }
     };
   }
@@ -2297,15 +2452,38 @@ var osed_bundle = (() => {
           warn(`Anchor range was only partially readable; scanned ${window.length} byte(s).`);
         }
         const located = locateExpectedArray(window, expected, minRun);
-        if (!located) {
-          warn(`Test array not found within ${windowBytes} bytes of the anchor (min run ${minRun}).`);
-          return result("badchar_find", options, [{ located: false }], warnings.length > 0 ? warnings : ["Test array not found near anchor."]);
+        let landing2;
+        let observed;
+        let locatedBy;
+        let slack = 0;
+        if (located) {
+          const back = located.expectedStart + CONTENT_BACKTRACK;
+          const runAddress = anchor + BigInt(located.offset);
+          const backRead = tryReadMemory(runAddress - BigInt(back), back + expected.length + 64);
+          landing2 = backRead ? runAddress - BigInt(back) : runAddress;
+          observed = backRead != null ? backRead : window.slice(located.offset);
+          slack = backRead ? back : 0;
+          locatedBy = "content";
+          info(`Matched ${located.matchedRun} survivor bytes at anchor + 0x${located.offset.toString(16).toUpperCase()} (expected index ${located.expectedStart}).`);
+        } else {
+          const afterSlot = readAfterReturnSlot(anchor, pointerSize, expected.length + 64);
+          if (!afterSlot) {
+            warn(`Test array not found within ${windowBytes} bytes of the anchor (min run ${minRun}).`);
+            warn("The overwritten return address was not found just before the anchor either. If the array sits before EIP, pass its address.");
+            return result("badchar_find", options, [{ located: false }], warnings.length > 0 ? warnings : ["Test array not found near anchor."]);
+          }
+          landing2 = afterSlot.landing;
+          observed = afterSlot.observed;
+          locatedBy = "return-slot";
+          info(
+            `No survivor run near the anchor. Comparing from ${formatAddress(landing2, pointerSize)}, right after the overwritten return address at ${formatAddress(afterSlot.slot, pointerSize)}.`
+          );
         }
-        const landing2 = anchor + BigInt(located.offset);
-        const observed = window.slice(located.offset);
-        const compared = compareBadchars(observed, expected);
-        info(`Located at ${formatAddress(landing2, pointerSize)} (anchor + 0x${located.offset.toString(16).toUpperCase()}).`);
-        info(`Matched ${located.matchedRun} survivor bytes starting at expected index ${located.expectedStart}.`);
+        const compared = compareBadchars(observed, expected, slack);
+        if (locatedBy === "content") {
+          landing2 += BigInt(compared.startOffset);
+          info(`Located at ${formatAddress(landing2, pointerSize)}.`);
+        }
         if (compared.badChars.length > 0) {
           warn(`Bad characters found: ${compared.badChars.map((v) => formatHexByte(v)).join(" ")}`);
         } else if (compared.expectedConsumed >= expected.length) {
@@ -2320,25 +2498,38 @@ var osed_bundle = (() => {
           warn(
             `Array truncated after ${formatHexByte(lastTested)}; bytes ${formatHexByte(firstUntested)}-0xFF not tested.`
           );
+          if (compared.truncatedAt !== void 0) {
+            warn(`Likely terminator: ${formatHexByte(compared.truncatedAt)} (first byte that never arrived).`);
+          }
+          if (compared.survivorCount === 0) {
+            warn(
+              "Nothing arrived after the return address. If the next run stops at the next byte again, the target caps the input length; move the array before EIP."
+            );
+          }
         }
         const allExclude = [.../* @__PURE__ */ new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
         info(
           `Copy-ready exclude list: ${allExclude.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`
         );
+        const nextRun = compared.truncatedAt === void 0 ? allExclude : [...allExclude, compared.truncatedAt].sort((a, b) => a - b);
+        info(`Exploit line: ${pythonBadcharsLine(nextRun)}`);
+        info(`Next command: ${nextBadcharCommand("badchar_find", options.address === void 0 ? "@esp" : formatAddress(anchor, pointerSize), nextRun)}`);
         return result(
           "badchar_find",
           __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
           [
             {
               located: true,
+              locatedBy,
               landingAddress: landing2,
-              anchorOffset: located.offset,
-              expectedStart: located.expectedStart,
-              matchedRun: located.matchedRun,
+              anchorOffset: located == null ? void 0 : located.offset,
+              expectedStart: located == null ? void 0 : located.expectedStart,
+              matchedRun: located == null ? void 0 : located.matchedRun,
               badChars: compared.badChars,
               survivorCount: compared.survivorCount,
               expectedConsumed: compared.expectedConsumed,
               mismatches: compared.mismatches,
+              truncatedAt: compared.truncatedAt,
               allExclude,
               exclude: normalizedExclude.values
             }
@@ -11125,10 +11316,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-17T23:50:04.166Z" : globalThis[key2];
+        value = true ? "2026-11-19T09:36:50.122Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "4326f460bd3a" : globalThis[key2];
+        value = true ? "45c72b7df0a9" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -11332,7 +11523,7 @@ var osed_bundle = (() => {
     if (name.startsWith("sc.")) return "pe-api";
     if (name.startsWith("str.")) return "strings";
     if (name.startsWith("fmt.") || name === "fmt_build" || name === "fmt_offset") return "format";
-    if (name.startsWith("pattern") || ["badchars", "badchar_array", "badchar_find"].includes(name)) return "payload";
+    if (name.startsWith("pattern") || ["badchars", "badchar_array", "badchar_function", "badchar_find"].includes(name)) return "payload";
     if (["triage", "landing", "stackmap", "findmsp"].includes(name)) return "crash";
     if (["modules", "memory", "code_caves", "find_mem_bytes", "find_ptr", "find_stack_bytes", "find_bytes"].includes(name)) return "target";
     if (["egghunter", "encode", "nop"].includes(name)) return "shellcode";
@@ -11350,6 +11541,7 @@ var osed_bundle = (() => {
     pattern_offset: "Resolve a cyclic offset",
     badchars: "Compare candidate bytes with memory",
     badchar_array: "Generate a bad-character test array",
+    badchar_function: "Python BADCHARS list and array helper for the exploit",
     badchar_find: "Locate a sent bad-character array in memory",
     find_bytes: "Find byte sequence in PE sections",
     find_mem_bytes: "Find byte sequence in a memory range",
@@ -11445,8 +11637,8 @@ var osed_bundle = (() => {
     version: "Show loaded build identity"
   };
   function shortSummary(name, description, supplied) {
-    var _a, _b, _c;
-    return (_c = (_b = (_a = LISTING_SUMMARIES[name]) != null ? _a : supplied) != null ? _b : description.split(new RegExp("(?<=[.!?])\\s"))[0]) != null ? _c : description;
+    var _a, _b, _c, _d;
+    return (_d = (_c = (_a = LISTING_SUMMARIES[name]) != null ? _a : supplied) != null ? _c : (_b = /^[\s\S]*?[.!?](?=\s)/.exec(description)) == null ? void 0 : _b[0]) != null ? _d : description;
   }
   var toDocument = (entry) => __spreadProps(__spreadValues({}, entry), { summary: shortSummary(entry.name, entry.description, entry.summary) });
   function registryDocument(command2) {
@@ -17647,6 +17839,7 @@ var osed_bundle = (() => {
       ...createPatternCommands(),
       createBadcharsCommand(),
       createBadcharArrayCommand(),
+      createBadcharFunctionCommand(),
       createBadcharFindCommand(),
       createEgghunterCommand(),
       createSehCommand(),
@@ -20333,6 +20526,7 @@ var osed_bundle = (() => {
       case "badchars":
         return { address: args[0], exclude: parseHexByteList(args[1]) };
       case "badchar_array":
+      case "badchar_function":
         return { exclude: parseHexByteList(args[0]) };
       case "badchar_find":
         return {

