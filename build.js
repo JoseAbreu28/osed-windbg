@@ -13,10 +13,33 @@ function readGitValue(command, fallback) {
 const gitCommit = readGitValue("git rev-parse --short=12 HEAD", "unknown");
 const gitStatus = readGitValue("git status --porcelain", "");
 
-esbuild
+const fs = require("fs");
+const path = require("path");
+const { createLegacyTransformer } = require("./legacy/bigint_transform.js");
+
+const legacyBigInt = {
+  name: "legacy-bigint",
+  setup(build) {
+    const legacy = createLegacyTransformer(__dirname, ["src"]);
+    build.onLoad({ filter: /\.ts$/ }, (args) => (legacy.has(args.path) ? { contents: legacy.transformFile(args.path), loader: "ts" } : undefined));
+  },
+};
+
+const targets = [
+  { outfile: "dist/osed.js", plugins: [] },
+  {
+    outfile: "dist/osed-legacy.js",
+    plugins: [legacyBigInt],
+    banner: { js: fs.readFileSync(path.join(__dirname, "legacy", "runtime.js"), "utf8") },
+  },
+];
+
+Promise.all(targets.map((target) => esbuild
   .build({
     entryPoints: ["src/index.ts"],
-    outfile: "dist/osed.js",
+    outfile: target.outfile,
+    plugins: target.plugins,
+    banner: target.banner,
     bundle: true,
     platform: "neutral",
     target: ["es2017"],
@@ -37,7 +60,7 @@ esbuild
       __OSED_GIT_DIRTY__: JSON.stringify(gitStatus.length > 0),
     },
     logLevel: "info",
-  })
+  })))
   .catch((error) => {
     console.error(error);
     process.exit(1);
