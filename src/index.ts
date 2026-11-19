@@ -3389,7 +3389,7 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
         minRun: args[3],
       };
     case "egghunter":
-      return { tag: args[0], mode: args[1], wow64: args[2], badchars: parseHexByteList(args[3]) };
+      return { tag: args[0], mode: args[1], wow64: args[2], badchars: parseHexByteList(args[3]), os: args[4], syscall: args[5] };
     case "exploit":
       return { mode: args[0], tag: args[1], offset: args[2], address: args[3] };
     case "modules":

@@ -113,12 +113,12 @@ dx @$osed().seh_ppr("libspp.dll", "00 0A 0D")
 ### 7. Hunt for the egg
 
 ```text
-dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")
-dx @$osed().egghunter("W00T", "ntaccess", true)
+dx @$osed().egghunter("W00T", "ntaccess", true, "00 0A 0D", "win10")
+dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D", "win10-1909")
 dx @$osed().egghunter("W00T", "seh")
 ```
 
-You get the stub as hex and as Python bytes, with a warning for each stub byte that is a bad character. Put `W00TW00T` in front of the payload. Use `true` as the third argument for a 32-bit process on 64-bit Windows. The `ntaccess` stub uses the Windows 10 syscall number. The [shellcode reference](Documentation/commands/shellcode.md#egghunter) explains how to change it.
+You get the stub as hex and as Python bytes, with a warning for each stub byte that is a bad character. Put `W00TW00T` in front of the payload. Use `true` as the third argument for a 32-bit process on 64-bit Windows. The fifth argument names the Windows build, which sets the syscall number. Without it you get the Windows 10 22H2 number and a warning. The [shellcode reference](Documentation/commands/shellcode.md#egghunter) lists the builds and shows how to pass the number yourself.
 
 ### 8. Bypass DEP with ROP
 
@@ -221,7 +221,7 @@ Each file documents one category with a signature, examples, and the meaning of 
 ## Known limitations
 
 - `findmsp` accepts no arguments from `dx`. It always uses a 10000-byte pattern.
-- `egghunter` ignores its `os` and `syscall` arguments from `dx`, so the `ntaccess` stub always uses the Windows 10 syscall number.
+- The `egghunter` WOW64 stub supports Windows 10 and 11 only.
 - `exploit(...)` is listed by `help("all")` but is not callable. `exploit.state()` and `exploit.clear()` work.
 - Pseudo-registers such as `@$t0` need a cast, as in `(unsigned int)@$t0`.
 

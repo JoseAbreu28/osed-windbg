@@ -1,0 +1,6 @@
+LIBRARY kernel32.dll
+EXPORTS
+VirtualAlloc@16
+CreateFileA@28
+ReadFile@20
+ExitProcess@4
