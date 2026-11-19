@@ -3392,6 +3392,8 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
       return { tag: args[0], mode: args[1], wow64: args[2], badchars: parseHexByteList(args[3]), os: args[4], syscall: args[5] };
     case "exploit":
       return { mode: args[0], tag: args[1], offset: args[2], address: args[3] };
+    case "findmsp":
+      return { patternLength: args[0], stackBytes: args[1], probeBytes: args[2] };
     case "modules":
       return { filter: args[0] };
     case "code_caves":

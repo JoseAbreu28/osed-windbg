@@ -220,7 +220,6 @@ Each file documents one category with a signature, examples, and the meaning of 
 
 ## Known limitations
 
-- `findmsp` accepts no arguments from `dx`. It always uses a 10000-byte pattern.
 - The `egghunter` WOW64 stub supports Windows 10 and 11 only.
 - `exploit(...)` is listed by `help("all")` but is not callable. `exploit.state()` and `exploit.clear()` work.
 - Pseudo-registers such as `@$t0` need a cast, as in `(unsigned int)@$t0`.
