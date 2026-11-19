@@ -25,6 +25,34 @@ describe("x86 SEH analysis", () => {
     expect(resolveTeb32Address(thread, () => BigInt(0))).toBe(BigInt("0x7ffdc000"));
   });
 
+  test("falls back to the debugger's $teb when the data model has no TEB (no symbols)", () => {
+    const memory = new Map<string, bigint>([
+      ["0x466000", BigInt("0x63f954")],
+      ["0x466018", BigInt("0x466000")],
+    ]);
+    const reader = (address: bigint): bigint => {
+      const value = memory.get(`0x${address.toString(16)}`);
+      if (value === undefined) throw new Error("unmapped");
+      return value;
+    };
+
+    expect(resolveTeb32Address({}, reader, () => BigInt("0x466000"))).toBe(BigInt("0x466000"));
+  });
+
+  test("takes the WOW64 TEB next to a native $teb", () => {
+    const memory = new Map<string, bigint>([
+      ["0x466000", BigInt("0x63f954")],
+      ["0x466018", BigInt("0x466000")],
+    ]);
+    const reader = (address: bigint): bigint => {
+      const value = memory.get(`0x${address.toString(16)}`);
+      if (value === undefined) throw new Error("unmapped");
+      return value;
+    };
+
+    expect(resolveTeb32Address({}, reader, () => BigInt("0x464000"))).toBe(BigInt("0x466000"));
+  });
+
   test("reads the active record and preserves attacker-controlled values", () => {
     const memory = new Map<string, bigint>([
       ["0x7ffde000", BigInt("0x9fec80")],
