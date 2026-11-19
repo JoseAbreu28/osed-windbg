@@ -547,6 +547,16 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     ],
   },
   {
+    name: "exploit.workflow",
+    description: "Prints a fixed list of dx commands for one workflow: egghunter, offset, or badchars.",
+    usage: "dx @$osed().exploit.workflow(mode, tag?, offset?, address?)",
+    examples: [
+      'dx @$osed().exploit.workflow("offset")',
+      'dx @$osed().exploit.workflow("egghunter", "W00T")',
+      'dx @$osed().exploit.workflow("badchars", "", 0, 0x00B8F900)',
+    ],
+  },
+  {
     name: "exploit.state",
     description: "Views or updates the cached exploit state used by rop.synthesize(). Populated automatically by triage(); individual fields can be set or overridden manually.",
     usage: "dx @$osed().exploit.state(overrides?)",

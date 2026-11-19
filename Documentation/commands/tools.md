@@ -19,7 +19,7 @@ Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../CO
 | [`clear_last_result`](#clear_last_result) | Clear the stored last result. |
 | [`exploit.state`](#exploitstate) | Show the exploit state that `triage()` cached, such as the control mechanism, the stack pointer, and the bad characters, which `rop.synthesize` reads. |
 | [`exploit.clear`](#exploitclear) | Clear the cached exploit state. |
-| [`exploit`](#exploit) | Print a fixed list of `dx` commands for one workflow, such as `offset`, `badchars`, or `egghunter`. |
+| [`exploit.workflow`](#exploitworkflow) | Print a fixed list of `dx` commands for one workflow: `offset`, `badchars`, or `egghunter`. |
 
 ## ASLR leaks
 
@@ -215,16 +215,18 @@ exploit.clear()
 dx @$osed().exploit.clear()
 ```
 
-### exploit
+### exploit.workflow
 
-Print a fixed list of `dx` commands for one workflow, such as `offset`, `badchars`, or `egghunter`.
+Print a fixed list of `dx` commands for one workflow: `offset`, `badchars`, or `egghunter`.
 
 ```text
-exploit(mode, tag?, offset?, address?)
+exploit.workflow(mode, tag?, offset?, address?)
 ```
 
 ```text
-dx @$osed().help("exploit")
+dx @$osed().exploit.workflow("offset")
+dx @$osed().exploit.workflow("egghunter", "W00T")
+dx @$osed().exploit.workflow("badchars", "", 0, 0x00B8F900)
 ```
 
-Limitation: `help("all")` lists this command, but `dx @$osed().exploit(...)` fails in this build, because `@$osed().exploit` is the namespace that holds `exploit.state` and `exploit.clear`. The workflow sections of the [README](../../README.md#exam-workflow) list the same commands.
+`badchars` needs `address`, the start of the test array in memory. No mode reads `offset` yet. Earlier builds documented this command as `exploit(...)`, which `dx` could not call: `@$osed().exploit` is the object that holds `exploit.state` and `exploit.clear`, so the workflow now sits next to them.

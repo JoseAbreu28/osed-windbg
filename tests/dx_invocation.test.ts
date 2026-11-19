@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import { createFindMspCommand } from "../src/commands/findmsp";
+import { findHelpEntry } from "../src/core/help_catalog";
 import { stripDml } from "../src/core/output";
 import { validateOptions } from "../src/core/validation";
 import { initializeScript, normalizeInvocation } from "../src/index";
@@ -92,5 +93,26 @@ describe("findmsp from dx", () => {
     api.findmsp(20000, 4096);
     const errors = api.last_result()?.errors ?? [];
     expect(errors.join(" ")).not.toContain("Unknown option key");
+  });
+});
+
+describe("exploit workflow from dx", () => {
+  test("exploit.workflow prints the commands for a mode", () => {
+    const api = loadApi();
+    expect(api.exploit.workflow("egghunter", "B33F")).toBe(true);
+    expect(printed()).toContain('dx @$osed().egghunter("B33F")');
+  });
+
+  test("exploit.workflow returns the help entry for help", () => {
+    const api = loadApi();
+    api.exploit.workflow("help");
+    expect(findHelpEntry("exploit.workflow")?.usage).toBe("dx @$osed().exploit.workflow(mode, tag?, offset?, address?)");
+  });
+
+  test("exploit.state and exploit.clear still work next to workflow", () => {
+    const api = loadApi();
+    expect(api.exploit.state).toBeTypeOf("function");
+    api.exploit.clear();
+    expect(printed()).toContain("Cached exploit state cleared.");
   });
 });

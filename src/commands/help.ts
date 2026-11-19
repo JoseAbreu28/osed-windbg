@@ -111,7 +111,7 @@ const LISTING_SUMMARIES: Record<string, string> = {
   "fmt.build": "Construct format-string payload components",
   "fmt.offset": "Find the controlled parameter index",
   "fmt.inspect": "Inspect a paused printf-family format argument",
-  exploit: "Emit exploit-development command workflows",
+  "exploit.workflow": "Print the dx commands for a workflow",
   "exploit.state": "View or update cached exploit state",
   "exploit.clear": "Clear the cached exploit state",
   math: "Format an integer as hex, signed, unsigned, LE",
@@ -139,6 +139,7 @@ function groupedDocuments(registry: CommandRegistry): Map<string, HelpDocument[]
   for (const command of registry.getAll()) documents.set(command.name, registryDocument(command));
   for (const entry of NAMESPACE_HELP_ENTRIES) documents.set(entry.name, toDocument(entry));
   documents.delete("rop");
+  documents.delete("exploit");
   const groups = new Map<string, HelpDocument[]>();
   for (const entry of [...documents.values()].sort((a, b) => a.name.localeCompare(b.name))) {
     const category = entry.category ?? categoryForName(entry.name);
