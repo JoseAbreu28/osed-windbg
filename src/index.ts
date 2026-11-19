@@ -43,7 +43,7 @@ import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
 import { createDepFunctionCommand } from "./commands/dep_function";
-import { createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
+import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
@@ -448,6 +448,7 @@ function registerAll(): void {
     createScPushStringCommand(),
     createScCallFrameCommand(),
     createScTemplateCommand(),
+    createScBuilderCommand(),
     ...createFmtCommands(),
     createExploitCommand(),
     createHelpCommand(registry),
@@ -3259,6 +3260,7 @@ function bindApi(): OsedApi {
     push_string: writer("sc.push_string", "sc_push_string"),
     call_frame: writer("sc.call_frame", "sc_call_frame"),
     template: writer("sc.template", "sc_template"),
+    builder: writer("sc.builder", "sc_builder"),
   };
 
   const analysisAddress = (value: unknown): bigint => {
@@ -3463,6 +3465,7 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
       return { api: args[0], args: rest, badchars: bad };
     }
     case "sc_template":
+    case "sc_builder":
       return { tasks: args.map(String) };
     case "fmt_build":
       // Positional single-write form for the dx REPL, which cannot pass object/array literals.

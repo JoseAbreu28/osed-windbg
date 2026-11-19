@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, test } from "vitest";
 import { initializeScript } from "../src/index";
+import { SC_BUILDER_SOURCE } from "../src/shellcode/sc_builder_source";
 import type { AsmLine } from "../src/shellcode/writer";
 
 const logs: string[] = [];
@@ -180,13 +182,75 @@ describe("writer help", () => {
     const api = loadApi();
     expect(api.help("all")).toBe(true);
     const all = output();
-    for (const name of ["sc.push_string", "sc.call_frame", "sc.template"]) expect(all).toContain(name);
+    for (const name of ["sc.push_string", "sc.call_frame", "sc.template", "sc.builder"]) expect(all).toContain(name);
     expect(all).not.toContain("sc_template");
+    expect(all).not.toContain("sc_builder ");
     logs.length = 0;
     expect(api.help("shellcode")).toBe(true);
     expect(output()).toContain("sc.template");
     logs.length = 0;
     api.sc.template("help");
     expect(output()).toContain("build_sc.py");
+    logs.length = 0;
+    api.sc.builder("help");
+    expect(output()).toContain("sc_builder.py");
   });
 });
+
+describe("sc.builder", () => {
+  let api: Api;
+  beforeEach(() => {
+    api = loadApi();
+  });
+
+  const shipped = readFileSync(new URL("../tools/sc_builder.py", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const script = (): string => lastFinding(api).script as string;
+  const config = (text: string): string => text.split("# >>> CONFIG\n")[1].split("# <<< CONFIG\n")[0];
+  const outsideConfig = (text: string): string => text.replace(/# >>> CONFIG\n[\s\S]*?# <<< CONFIG\n/, "");
+
+  test("embeds tools/sc_builder.py unchanged (run npm run build after editing it)", () => {
+    expect(SC_BUILDER_SOURCE).toBe(shipped);
+  });
+
+  test("prints the shipped script with no arguments", () => {
+    expect(api.sc.builder()).toBe(true);
+    expect(script()).toBe(shipped);
+    const text = output();
+    expect(text).toContain("Save everything below this line as sc_builder.py");
+    expect(text).toContain("#!/usr/bin/env python3\n");
+    expect(text).toContain('CALLS = [\n    ("kernel32.dll", "WinExec", [s("calc.exe"), 1]),\n]');
+  });
+
+  test("fills only the CONFIG block from sc.template tasks, xor and max", () => {
+    expect(api.sc.builder("show=0", 'winexec=cmd.exe /c echo "ok" > C:\\o.txt', "terminate", "bad=00 0A 0D 20 2F", "xor", "max=0x200")).toBe(true);
+    expect(outsideConfig(script())).toBe(outsideConfig(shipped));
+    expect(config(script()).split("\n")).toEqual([
+      'BADCHARS = b"\\x00\\x0a\\x0d\\x20\\x2f"',
+      "MAX_SIZE = 512",
+      "CALLS = [",
+      '    ("kernel32.dll", "WinExec", [s("cmd.exe /c echo \\"ok\\" > C:\\\\o.txt"), 0]),',
+      "]",
+      'EXIT = "terminate"',
+      "XOR_ENCODER = True",
+      "",
+    ]);
+  });
+
+  test("maps loadlibrary and getprocaddress to calls, and no exit task to ret", () => {
+    expect(api.sc.builder("loadlibrary=user32.dll", "getprocaddress=MessageBoxA")).toBe(true);
+    const block = config(script());
+    expect(block).toContain('("kernel32.dll", "LoadLibraryA", [s("user32.dll")]),');
+    expect(block).toContain('("kernel32.dll", "GetProcAddress", [ref(1), s("MessageBoxA")]),');
+    expect(block).toContain('EXIT = "ret"');
+    expect(api.sc.builder("getprocaddress=WinExec", "exit")).toBe(true);
+    expect(config(script())).toContain('[base("kernel32.dll"), s("WinExec")]');
+    expect(config(script())).toContain('EXIT = "exit"');
+  });
+
+  test("names the valid tasks on a typo and rejects a bad max", () => {
+    expect(api.sc.builder("winexex=calc.exe")).toBe(false);
+    expect(output()).toContain("xor, max=<bytes>");
+    expect(api.sc.builder("winexec=calc.exe", "max=-4")).toBe(false);
+  });
+});
+

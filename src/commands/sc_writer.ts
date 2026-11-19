@@ -1,6 +1,6 @@
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
-import { buildTemplate, callFrame, parseBadchars, parseTemplateArgs, pushString, Reg, renderAsm, renderKeystoneCode } from "../shellcode/writer";
+import { buildTemplate, builderScript, callFrame, parseBadchars, parseTemplateArgs, pushString, Reg, renderAsm, renderKeystoneCode } from "../shellcode/writer";
 
 const REGISTERS = ["eax", "ecx", "edx", "ebx", "ebp", "esi", "edi"];
 
@@ -106,6 +106,41 @@ export function createScTemplateCommand(): Command {
       out.info("Save everything below this line as build_sc.py and run: python build_sc.py");
       for (const line of result.script) out.print(line);
       return { command: "sc_template", args: { tasks: plan.tasks, badchars: plan.badchars }, success: true, findings: [{ tasks: plan.tasks, script: result.script.join("\n") }], warnings: [], errors: [] };
+    },
+  };
+}
+
+export function createScBuilderCommand(): Command {
+  return {
+    name: "sc_builder",
+    description: "Print sc_builder.py, a config-driven Python 3 + Keystone builder: list the API calls at its top, run it, and get shellcode checked for bad bytes, size and forward calls, with an optional XOR decoder stub.",
+    usage: 'dx @$osed().sc.builder(task..., "bad=<list>"?, "xor"?, "max=<bytes>"?)',
+    examples: [
+      "dx @$osed().sc.builder()",
+      'dx @$osed().sc.builder("show=0", "winexec=cmd.exe /c whoami > C:\\\\out.txt", "terminate", "bad=00 0A 0D 20 2F")',
+      'dx @$osed().sc.builder("winexec=calc.exe", "exit", "bad=00 0A 0D", "xor", "max=400")',
+    ],
+    compactExampleCount: 2,
+    schema: { tasks: { type: "array" } },
+    execute(options: Record<string, unknown>): CommandResult {
+      const tokens = ((options.tasks as unknown[] | undefined) ?? []).map(String);
+      const result = builderScript(tokens);
+      if (!result.ok) return fail("sc_builder", options, result.error);
+
+      const plan = result.plan;
+      out.section(plan
+        ? `sc.builder: sc_builder.py, ${plan.tasks.length} task(s), bad chars ${badList(plan.badchars)}${plan.xor ? ", XOR encoder on" : ""}`
+        : "sc.builder: sc_builder.py with its default CONFIG (WinExec calc.exe, then TerminateProcess)");
+      out.info("Save everything below this line as sc_builder.py and run: python sc_builder.py");
+      for (const line of result.script.replace(/\n$/, "").split("\n")) out.print(line);
+      return {
+        command: "sc_builder",
+        args: plan ? { tasks: plan.tasks, badchars: plan.badchars, xor: plan.xor, maxSize: plan.maxSize } : {},
+        success: true,
+        findings: [{ script: result.script }],
+        warnings: [],
+        errors: [],
+      };
     },
   };
 }

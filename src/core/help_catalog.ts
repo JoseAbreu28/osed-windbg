@@ -530,8 +530,22 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     ],
     details: "Tasks run in order: winexec=<command line>, loadlibrary=<dll>, getprocaddress=<export>, exit (ExitProcess(0)), terminate (TerminateProcess(-1, 0)). show=<n> sets uCmdShow for later winexec tasks (default 1). Without an exit task the shellcode returns to its caller, which suits a test loader. With no tasks you get winexec=calc.exe and exit. Default output contains no 00 byte; other bad chars in the fixed routines are reported by the script for you to rewrite.",
     limitations: ["32-bit only. The kernel32 lookup matches the first 12-character module name starting with K in initialization order, which was kernel32.dll on the Windows 10 (19045) and Windows 11 (26200) builds tested."],
-    seeAlso: ["sc.push_string", "sc.call_frame", "sc.hash"],
+    seeAlso: ["sc.builder", "sc.push_string", "sc.call_frame", "sc.hash"],
     keywords: ["shellcode", "keystone", "peb", "export", "custom shellcode", "build_sc"],
+  },
+  {
+    name: "sc.builder",
+    description: "Prints sc_builder.py, a Python 3 builder for custom x86 shellcode driven by the CONFIG block at its top: BADCHARS, MAX_SIZE, CALLS as (dll, api, [args]) in execution order, EXIT and XOR_ENCODER. It prints the ROR13 hash of each API, walks the PEB to kernel32, loads other DLLs once with LoadLibraryA, caches each API address next to EBP, and pushes strings and constants without bad bytes. Keystone assembles it line by line; the script reports the size, every bad byte with its offset and line, and forward calls, and Capstone (when installed) disassembles the result. It writes shellcode.bin and prints a Python literal. Exit code 1 means a check failed.",
+    usage: "dx @$osed().sc.builder(task..., \"bad=<list>\"?, \"xor\"?, \"max=<bytes>\"?)",
+    examples: [
+      { label: "The script with its default CONFIG", command: "dx @$osed().sc.builder()" },
+      { label: "Hidden command, space and slash are bad", command: "dx @$osed().sc.builder(\"show=0\", \"winexec=cmd.exe /c whoami > C:\\\\out.txt\", \"terminate\", \"bad=00 0A 0D 20 2F\")" },
+      { label: "Plan B: XOR decoder stub and a size limit", command: "dx @$osed().sc.builder(\"winexec=calc.exe\", \"exit\", \"bad=00 0A 0D\", \"xor\", \"max=400\")" },
+    ],
+    details: "With no arguments the script prints exactly as shipped (tools/sc_builder.py in the repository). Arguments take the sc.template tasks (winexec=, loadlibrary=, getprocaddress=, exit, terminate, show=, bad=) and fill CONFIG from them, plus xor and max=<bytes>. For any other API sequence, edit CALLS: each arg is an int, s(\"text\"), w(\"text\") for W APIs, ref(n) for the return value of call n (counted from 1), buf(size) for scratch space below EBP, or base(\"dll\"). EXIT is terminate, exit or ret.",
+    limitations: ["32-bit only. Forwarded exports (an export whose address is a \"DLL.Name\" string) are not followed; call the target DLL's export instead. buf() space is not zeroed."],
+    seeAlso: ["sc.template", "sc.hash", "sc.push_string"],
+    keywords: ["shellcode", "keystone", "capstone", "builder", "custom shellcode", "config", "ror13", "xor encoder"],
   },
   {
     name: "sc.algorithms",

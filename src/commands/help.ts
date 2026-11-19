@@ -3,7 +3,7 @@ import * as out from "../core/output";
 import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES, HelpEntry } from "../core/help_catalog";
 import { HelpDocument, renderAll, renderCandidates, renderCompactDetail, renderFullDetail, renderNamespace, renderOverview, renderSearch } from "../core/help_render";
 
-const SHELLCODE_WRITERS = ["sc.push_string", "sc.call_frame", "sc.template"];
+const SHELLCODE_WRITERS = ["sc.push_string", "sc.call_frame", "sc.template", "sc.builder"];
 
 const categoryForName = (name: string): string => {
   if (SHELLCODE_WRITERS.includes(name)) return "shellcode";
@@ -102,6 +102,7 @@ const LISTING_SUMMARIES: Record<string, string> = {
   "sc.push_string": "x86 pushes that build a string on the stack, null-free",
   "sc.call_frame": "x86 push sequence and ROR13 hash for one API call",
   "sc.template": "Print a Keystone build_sc.py for custom shellcode",
+  "sc.builder": "Print sc_builder.py: list API calls, get checked shellcode",
   "str.find": "Search process memory for strings",
   "str.read": "Read a string from memory",
   "str.refs": "Find executable pointers to a string",

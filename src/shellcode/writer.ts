@@ -1,4 +1,5 @@
 import { ror13Hash } from "./index";
+import { SC_BUILDER_SOURCE } from "./sc_builder_source";
 
 export type Reg = "eax" | "ecx" | "edx" | "ebx" | "esp" | "ebp" | "esi" | "edi";
 const REGS: Reg[] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
@@ -569,4 +570,79 @@ export function buildTemplate(plan: TemplatePlan, invocation: string): Outcome<T
     ...SCRIPT_TAIL.split("\n"),
   ];
   return { ok: true, script, asm };
+}
+
+export type BuilderPlan = TemplatePlan & { xor: boolean; maxSize?: number };
+
+export function parseBuilderArgs(tokens: string[]): Outcome<BuilderPlan> {
+  let xor = false;
+  let maxSize: number | undefined;
+  const rest: string[] = [];
+  for (const raw of tokens) {
+    const token = raw.trim().toLowerCase();
+    if (token === "xor") {
+      xor = true;
+    } else if (token.startsWith("max=")) {
+      const value = Number(token.slice(4).trim());
+      if (!Number.isInteger(value) || value <= 0) return { ok: false, error: `max takes a byte count such as 400 or 0x200, not "${raw.trim().slice(4)}".` };
+      maxSize = value;
+    } else {
+      rest.push(raw);
+    }
+  }
+  const plan = parseTemplateArgs(rest);
+  if (!plan.ok) return { ok: false, error: plan.error.replace(/\.$/, ", xor, max=<bytes>.") };
+  return { ...plan, xor, maxSize };
+}
+
+const pyText = (text: string): string => `"${[...text].map((char) => {
+  const code = char.charCodeAt(0);
+  if (char === "\\" || char === '"') return `\\${char}`;
+  if (code >= 0x20 && code <= 0x7e) return char;
+  return code <= 0xff ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u${code.toString(16).padStart(4, "0")}`;
+}).join("")}"`;
+
+/** The CONFIG block of sc_builder.py for the sc.template task grammar. */
+export function builderConfig(plan: BuilderPlan): string[] {
+  const calls: string[] = [];
+  let lastLoad: number | undefined;
+  let exit = "ret";
+  for (const task of plan.tasks) {
+    if (task.kind === "winexec") {
+      calls.push(`("kernel32.dll", "WinExec", [s(${pyText(task.command)}), ${task.show}]),`);
+    } else if (task.kind === "loadlibrary") {
+      calls.push(`("kernel32.dll", "LoadLibraryA", [s(${pyText(task.dll)})]),`);
+      lastLoad = calls.length;
+    } else if (task.kind === "getprocaddress") {
+      calls.push(`("kernel32.dll", "GetProcAddress", [${lastLoad ? `ref(${lastLoad})` : 'base("kernel32.dll")'}, s(${pyText(task.name)})]),`);
+    } else {
+      exit = task.kind === "exitprocess" ? "exit" : "terminate";
+    }
+  }
+  const direct = plan.tasks.some((task) => task.kind === "loadlibrary" || task.kind === "getprocaddress")
+    ? ['    # The builder loads DLLs and resolves exports itself: ("user32.dll", "MessageBoxA", [0, s("text"), s("caption"), 0]) needs neither call.']
+    : [];
+  return [
+    `BADCHARS = b"${plan.badchars.map((byte) => `\\x${byte.toString(16).padStart(2, "0")}`).join("")}"`,
+    `MAX_SIZE = ${plan.maxSize ?? "None"}`,
+    "CALLS = [",
+    ...direct,
+    ...calls.map((call) => `    ${call}`),
+    "]",
+    `EXIT = "${exit}"`,
+    `XOR_ENCODER = ${plan.xor ? "True" : "False"}`,
+  ];
+}
+
+const CONFIG_START = "# >>> CONFIG\n";
+const CONFIG_END = "# <<< CONFIG\n";
+
+/** sc_builder.py as shipped, or with its CONFIG block filled from sc.template-style tasks. */
+export function builderScript(tokens: string[]): Outcome<{ script: string; plan?: BuilderPlan }> {
+  if (tokens.length === 0) return { ok: true, script: SC_BUILDER_SOURCE };
+  const plan = parseBuilderArgs(tokens);
+  if (!plan.ok) return plan;
+  const start = SC_BUILDER_SOURCE.indexOf(CONFIG_START) + CONFIG_START.length;
+  const end = SC_BUILDER_SOURCE.indexOf(CONFIG_END);
+  return { ok: true, plan, script: `${SC_BUILDER_SOURCE.slice(0, start)}${builderConfig(plan).join("\n")}\n${SC_BUILDER_SOURCE.slice(end)}` };
 }

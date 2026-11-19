@@ -7,6 +7,12 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-19 - Config-driven shellcode builder
+
+- `sc.builder(task..., "bad=<list>"?, "xor"?, "max=<bytes>"?)` prints `sc_builder.py`, kept in the repository as `tools/sc_builder.py`. `npm run build` embeds it, and a test fails when the copies differ. Its `CONFIG` block takes `BADCHARS`, `MAX_SIZE`, `CALLS` as `(dll, api, [args])` with int, `s()`, `w()`, `ref(n)`, `buf(size)` and `base()` arguments, `EXIT` and `XOR_ENCODER`. Arguments fill `CONFIG` from the `sc.template` tasks.
+- The script prints the ROR13 table, resolves each API once into a slot next to EBP after loading other DLLs with `LoadLibraryA`, pushes strings with a XOR key per dword that holds a bad character, and loads constants with the shortest clean form. It assembles with Keystone line by line, reports every bad byte with its offset and line, forward calls and `MAX_SIZE`, disassembles with Capstone when installed, and can prepend a XOR decoder stub.
+- `tests/manual/sc_builder/check.py` builds a WinExec command with `00 0A 0D 20 2F` bad, a `MessageBoxA` from user32, a `CreateFileA` + `WriteFile` + `CloseHandle` file write, and the command with the XOR stub, all with 0 bad bytes. The command, the file write and the XOR-encoded command ran in a 32-bit loader on Windows 10 (19045) and wrote their files.
+
 ### 2026-11-19 - Custom shellcode writers
 
 - `sc.push_string(text, badchars?, register?)` prints the pushes that build a NUL-terminated string on the stack, last dword first, with the bytes and the 4 characters of each push, then the same lines as a Keystone `CODE` string. The terminator and partial dwords are built through a scratch register (`not`, `neg`, `xor` key, or `add` split), so no line holds `00` or a given bad character.
