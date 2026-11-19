@@ -12,6 +12,7 @@ Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../CO
 | [`pivots`](#pivots) | Find stack pivot gadgets, which move ESP to a register or an offset. |
 | [`rop.find`](#ropfind) | Run the older ROP helper that scans one module and prints a module summary. |
 | [`rop_template`](#rop_template) | Print a commented chain skeleton for one API, with the `dx` commands that find each address it needs. |
+| [`dep_function`](#dep_function) | Print a Python call-frame skeleton for VirtualAlloc or WriteProcessMemory. |
 | [`rop.scan_live`](#ropscan_live) | Find gadgets in one or more loaded modules and load them into the corpus that the other `rop.*` commands use. |
 | [`rop.scan`](#ropscan) | Load gadget text from RP++ output into the corpus. |
 | [`rop.capabilities`](#ropcapabilities) | Count the gadgets in the corpus by capability, such as `LOAD_REGISTER`, `MEMORY_WRITE`, or `STACK_PIVOT`. |
@@ -133,6 +134,21 @@ dx @$osed().rop_template("GetProcAddress", "essfunc")
 ```
 
 Supported APIs are VirtualProtect, WriteProcessMemory, LoadLibraryA, and GetProcAddress. The skeleton shows the PUSHAD register map and a Python layout with `???` for each value that you still need to find.
+
+### dep_function
+
+Print a Python call-frame skeleton for VirtualAlloc or WriteProcessMemory without choosing addresses for the target.
+
+```text
+dep_function(method)
+```
+
+```text
+dx @$osed().dep_function("VA")
+dx @$osed().dep_function("WPM")
+```
+
+`VA` uses `shellcodeAddr` for `lpAddress`. `WPM` uses `0xFFFFFFFF` as the pseudo process handle. Fill in the remaining addresses and argument values in the printed skeleton before using it.
 
 ## Build the gadget corpus
 

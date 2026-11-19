@@ -148,6 +148,15 @@ dx @$osed().rop.prove("guided")
 
 `sc.iat_find` gives the IAT slot that holds the API address. `rop.construct` gives a gadget recipe and Python `pack()` lines for a value such as `0x201`. `math(-0x201, 32)` gives the negated value `0xFFFFFDFF` to pop before a `neg` gadget. `rop.verify` flags bad characters and stack problems in the chain. After `rop.prove("guided")`, run `g` yourself and then `dx @$osed().rop.prove()` at each stop. The [ROP reference](Documentation/commands/rop.md) covers the other chain builders.
 
+**Print payload skeletons for a DEP bypass:**
+
+```text
+dx @$osed().dep_function("VA")
+dx @$osed().dep_function("WPM")
+```
+
+`dep_function("VA")` prints a `VirtualAlloc` call-frame skeleton; `"WPM"` prints one for `WriteProcessMemory`. Fill in the addresses and argument values for the target before using either skeleton.
+
 ### 9. Defeat ASLR with a leak
 
 ```text
