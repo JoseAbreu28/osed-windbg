@@ -150,8 +150,8 @@ var osed_bundle = (() => {
       if (/^[0-9]+$/.test(trimmed)) {
         throw new Error("Decimal address strings are not allowed.");
       }
-      const hex4 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-      return BigInt(hex4);
+      const hex5 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+      return BigInt(hex5);
     }
     throw new Error("Address must be a number or hex string.");
   }
@@ -388,13 +388,13 @@ var osed_bundle = (() => {
     if (!/^(0x)?[0-9a-fA-F]+$/.test(value)) {
       throw new Error("String pattern_offset value must be raw hex only.");
     }
-    const hex4 = value.startsWith("0x") ? value.slice(2) : value;
-    if (hex4.length % 2 !== 0) {
+    const hex5 = value.startsWith("0x") ? value.slice(2) : value;
+    if (hex5.length % 2 !== 0) {
       throw new Error("Hex string length must be even.");
     }
     const chars = [];
-    for (let i = 0; i < hex4.length; i += 2) {
-      chars.push(parseInt(hex4.slice(i, i + 2), 16));
+    for (let i = 0; i < hex5.length; i += 2) {
+      chars.push(parseInt(hex5.slice(i, i + 2), 16));
     }
     return String.fromCharCode(...chars.reverse());
   }
@@ -2360,18 +2360,18 @@ var osed_bundle = (() => {
         const expected = expectedBytes(normalizedExclude.values);
         const python = formatByteArray(expected, "python");
         const c = formatByteArray(expected, "c");
-        const hex4 = formatByteArray(expected, "hex");
+        const hex5 = formatByteArray(expected, "hex");
         section("Bad Character Test Array");
         info(`Bytes: ${expected.length} (excluded ${normalizedExclude.values.length})`);
         print(`Python: ${python}`);
         print(`C:      ${c}`);
-        print(`Hex:    ${hex4}`);
+        print(`Hex:    ${hex5}`);
         whyItMatters("Send this array to the target, then use badchar_find to locate it in memory and see which bytes were mangled.");
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
         return result(
           "badchar_array",
           __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
-          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex4 } }],
+          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex5 } }],
           warnings
         );
       }
@@ -2541,10 +2541,65 @@ var osed_bundle = (() => {
   }
 
   // src/commands/egghunter.ts
-  var SYSCALL_TABLE = {
-    win7: 2,
-    win10: 457
+  var OS_TABLE = [
+    { key: "xp", label: "Windows XP", builds: ["2600"], ntaccess32: 2, ntdisplay32: 67 },
+    { key: "2003", label: "Windows Server 2003", builds: ["3790"], ntaccess32: 2, ntdisplay32: 70 },
+    { key: "vista", label: "Windows Vista", builds: ["6000", "6001", "6002"], ntaccess32: 2, ntdisplay32: 128 },
+    { key: "win7", label: "Windows 7", builds: ["7600", "7601"], ntaccess32: 2, ntdisplay32: 109 },
+    { key: "win8", label: "Windows 8", builds: ["9200"], ntaccess32: 426, ntdisplay32: 305 },
+    { key: "win8.1", label: "Windows 8.1", builds: ["9600", "win81"], ntaccess32: 431, ntdisplay32: 309 },
+    { key: "win10-1507", label: "Windows 10 1507", builds: ["10240"], ntaccess32: 439, ntaccess64: 41, ntdisplay32: 314 },
+    { key: "win10-1511", label: "Windows 10 1511", builds: ["10586"], ntaccess32: 442, ntaccess64: 41, ntdisplay32: 316 },
+    { key: "win10-1607", label: "Windows 10 1607", builds: ["14393"], ntaccess32: 444, ntaccess64: 41, ntdisplay32: 318 },
+    { key: "win10-1703", label: "Windows 10 1703", builds: ["15063"], ntaccess32: 450, ntaccess64: 41, ntdisplay32: 321 },
+    { key: "win10-1709", label: "Windows 10 1709", builds: ["16299"], ntaccess32: 454, ntaccess64: 41, ntdisplay32: 324 },
+    { key: "win10-1803", label: "Windows 10 1803", builds: ["17134"], ntaccess32: 454, ntaccess64: 41, ntdisplay32: 324 },
+    { key: "win10-1809", label: "Windows 10 1809", builds: ["17763"], ntaccess32: 454, ntaccess64: 41, ntdisplay32: 323 },
+    { key: "win10-1903", label: "Windows 10 1903", builds: ["18362"], ntaccess32: 454, ntaccess64: 41, ntdisplay32: 323 },
+    { key: "win10-1909", label: "Windows 10 1909", builds: ["18363"], ntaccess32: 454, ntaccess64: 41, ntdisplay32: 323 },
+    { key: "win10-2004", label: "Windows 10 2004", builds: ["19041"], ntaccess32: 456, ntaccess64: 41, ntdisplay32: 323 },
+    { key: "win10-20h2", label: "Windows 10 20H2", builds: ["19042"], ntaccess32: 456, ntaccess64: 41, ntdisplay32: 323 },
+    { key: "win10-21h1", label: "Windows 10 21H1", builds: ["19043"], ntaccess32: 456, ntaccess64: 41, ntdisplay32: 323 },
+    { key: "win10-21h2", label: "Windows 10 21H2", builds: ["19044"], ntaccess32: 457, ntaccess64: 41, ntdisplay32: 323 },
+    { key: "win10-22h2", label: "Windows 10 22H2", builds: ["19045", "win10"], ntaccess32: 457, ntaccess64: 41, ntdisplay32: 323 },
+    { key: "win11", label: "Windows 11", builds: ["22000", "22621", "22631", "26100", "26200"], ntaccess64: 41 }
+  ];
+  var DEFAULT_OS = {
+    ntaccess32: "win10-22h2",
+    ntaccess64: "win10-22h2",
+    ntdisplay32: "xp"
   };
+  var SERVICE_NAME = {
+    ntaccess32: "NtAccessCheckAndAuditAlarm",
+    ntaccess64: "NtAccessCheckAndAuditAlarm",
+    ntdisplay32: "NtDisplayString"
+  };
+  function findOs(name) {
+    const needle = name.trim().toLowerCase();
+    return OS_TABLE.find((row) => row.key === needle || row.builds.includes(needle));
+  }
+  function hex(value) {
+    return `0x${value.toString(16).toUpperCase()}`;
+  }
+  function resolveSyscall(kind, os, syscall) {
+    if (syscall !== null) {
+      return { number: syscall, source: "explicit" };
+    }
+    const row = os === null ? void 0 : findOs(os);
+    const number = row == null ? void 0 : row[kind];
+    if (row && number !== void 0) {
+      return { number, source: row.label };
+    }
+    const fallback = findOs(DEFAULT_OS[kind]);
+    const fallbackNumber = fallback[kind];
+    const known = OS_TABLE.filter((entry) => entry[kind] !== void 0).map((entry) => entry.key).join(", ");
+    const reason = os === null ? "No os given" : row ? `No ${SERVICE_NAME[kind]} number for ${row.label} in this stub` : `Unknown os "${os}"`;
+    return {
+      number: fallbackNumber,
+      source: fallback.label,
+      warning: `${reason}; using ${hex(fallbackNumber)} (${fallback.label}). Pass os (${known}) or syscall, or read the number with u ntdll!${SERVICE_NAME[kind]} L1.`
+    };
+  }
   var NTACCESS_X86 = [
     102,
     129,
@@ -2597,33 +2652,55 @@ var osed_bundle = (() => {
     // jmp edi
   ];
   var NTACCESS_WOW64 = [
+    51,
+    219,
+    // xor ebx, ebx
+    83,
+    83,
+    83,
+    83,
+    83,
+    // push ebx x10 (zeroed arguments 2-11)
+    83,
+    83,
+    83,
+    83,
+    83,
+    179,
+    192,
+    // mov bl, 0xc0
     102,
     129,
-    201,
+    202,
     255,
     15,
-    // or cx, 0x0fff
-    65,
-    // inc ecx
-    81,
-    // push ecx
+    // or dx, 0x0fff
+    66,
+    // inc edx
+    82,
+    // push edx (SubsystemName = probed address)
+    82,
+    // push edx (return-address slot)
     184,
-    201,
-    1,
+    41,
     0,
     0,
-    // mov eax, 0x1C9
-    205,
-    46,
-    // int 0x2e
+    0,
+    // mov eax, 0x29
+    100,
+    255,
+    19,
+    // call dword ptr fs:[ebx]
+    90,
+    // pop edx
+    90,
+    // pop edx
     60,
     5,
     // cmp al, 0x5
-    89,
-    // pop ecx
     116,
-    237,
-    // je short (back to or cx)
+    234,
+    // je short (back to or dx)
     184,
     84,
     48,
@@ -2631,18 +2708,18 @@ var osed_bundle = (() => {
     87,
     // mov eax, <TAG>
     139,
-    249,
-    // mov edi, ecx
-    175,
-    // scasd
-    117,
-    232,
-    // jne short (back to inc ecx)
+    250,
+    // mov edi, edx
     175,
     // scasd
     117,
     229,
-    // jne short (back to inc ecx)
+    // jne short (back to inc edx)
+    175,
+    // scasd
+    117,
+    226,
+    // jne short (back to inc edx)
     255,
     231
     // jmp edi
@@ -2697,64 +2774,8 @@ var osed_bundle = (() => {
     231
     // jmp edi
   ];
-  var NTDISPLAY_WOW64 = [
-    102,
-    129,
-    201,
-    255,
-    15,
-    // or cx, 0x0fff
-    65,
-    // inc ecx
-    81,
-    // push ecx
-    106,
-    67,
-    // push 0x43  (NtDisplayString syscall)
-    88,
-    // pop eax
-    205,
-    46,
-    // int 0x2e
-    60,
-    5,
-    // cmp al, 0x5
-    89,
-    // pop ecx
-    116,
-    239,
-    // je short (back to or cx)
-    184,
-    84,
-    48,
-    48,
-    87,
-    // mov eax, <TAG>
-    139,
-    249,
-    // mov edi, ecx
-    175,
-    // scasd
-    117,
-    234,
-    // jne short (back to inc ecx)
-    175,
-    // scasd
-    117,
-    231,
-    // jne short (back to inc ecx)
-    255,
-    231
-    // jmp edi
-  ];
   var TAG_OFFSET_NTDISPLAY = 18;
-  var TAG_OFFSET_NTDISPLAY_WOW64 = 18;
   var SYSCALL_OFFSET_NTDISPLAY = 8;
-  var SYSCALL_OFFSET_NTDISPLAY_WOW64 = 8;
-  var NTDISPLAY_SYSCALL = {
-    win7: 67,
-    win10: 67
-  };
   var SEH_EGGHUNTER = [
     // jmp short install_seh
     235,
@@ -2859,10 +2880,10 @@ var osed_bundle = (() => {
     // jmp edi
   ];
   var TAG_OFFSET_NTACCESS = 20;
-  var TAG_OFFSET_NTACCESS_WOW64 = 20;
+  var TAG_OFFSET_NTACCESS_WOW64 = 37;
   var TAG_OFFSET_SEH = 52;
   var SYSCALL_OFFSET_NTACCESS = 8;
-  var SYSCALL_OFFSET_NTACCESS_WOW64 = 8;
+  var SYSCALL_OFFSET_NTACCESS_WOW64 = 23;
   function uniqueBytes(values) {
     const seen = /* @__PURE__ */ new Set();
     for (const v of values != null ? values : []) {
@@ -2886,58 +2907,62 @@ var osed_bundle = (() => {
     return [val & 255, val >> 8 & 255, val >> 16 & 255, val >> 24 & 255];
   }
   function buildEgghunter(options) {
-    var _a;
+    var _a, _b, _c;
     const tag = tagBytes(options.tag);
     const badSet = new Set(uniqueBytes(options.badchars));
     let template;
     let tagOffset;
     let syscallOffset = null;
+    let kind = null;
     let label;
-    let syscallSize = 4;
     if (options.mode === "seh") {
       template = [...SEH_EGGHUNTER];
       tagOffset = TAG_OFFSET_SEH;
       label = "seh egghunter";
     } else if (options.mode === "ntdisplay") {
       if (options.wow64) {
-        template = [...NTDISPLAY_WOW64];
-        tagOffset = TAG_OFFSET_NTDISPLAY_WOW64;
-        syscallOffset = SYSCALL_OFFSET_NTDISPLAY_WOW64;
-        label = "ntdisplay wow64 egghunter";
-      } else {
-        template = [...NTDISPLAY_X86];
-        tagOffset = TAG_OFFSET_NTDISPLAY;
-        syscallOffset = SYSCALL_OFFSET_NTDISPLAY;
-        label = "ntdisplay egghunter";
+        throw new Error('ntdisplay has no WOW64 stub: int 0x2e raises STATUS_ILLEGAL_INSTRUCTION in a WOW64 process. Use mode "ntaccess" with wow64 = true.');
       }
-      syscallSize = 1;
+      template = [...NTDISPLAY_X86];
+      tagOffset = TAG_OFFSET_NTDISPLAY;
+      syscallOffset = SYSCALL_OFFSET_NTDISPLAY;
+      kind = "ntdisplay32";
+      label = "ntdisplay egghunter";
     } else if (options.wow64) {
       template = [...NTACCESS_WOW64];
       tagOffset = TAG_OFFSET_NTACCESS_WOW64;
       syscallOffset = SYSCALL_OFFSET_NTACCESS_WOW64;
+      kind = "ntaccess64";
       label = "ntaccess wow64 egghunter";
     } else {
       template = [...NTACCESS_X86];
       tagOffset = TAG_OFFSET_NTACCESS;
       syscallOffset = SYSCALL_OFFSET_NTACCESS;
+      kind = "ntaccess32";
       label = "ntaccess egghunter";
     }
     template.splice(tagOffset, 4, ...tag);
-    let syscallUsed = null;
-    if (syscallOffset !== null) {
-      const defaultSyscall = options.mode === "ntdisplay" ? NTDISPLAY_SYSCALL[options.os] : SYSCALL_TABLE[options.os];
-      const sysnum = (_a = options.syscall) != null ? _a : defaultSyscall;
-      if (syscallSize === 1) {
-        if (sysnum < 1 || sysnum > 127) {
+    let resolved = null;
+    if (syscallOffset !== null && kind !== null) {
+      resolved = resolveSyscall(kind, options.os, options.syscall);
+      if (kind === "ntdisplay32") {
+        if (resolved.number < 1 || resolved.number > 127) {
+          throw new Error(`NtDisplayString number ${hex(resolved.number)} (${resolved.source}) does not fit the push imm8 in the ntdisplay stub (0x01-0x7F). Use mode "ntaccess".`);
         }
-        template.splice(syscallOffset, 1, sysnum & 255);
+        template.splice(syscallOffset, 1, resolved.number);
       } else {
-        template.splice(syscallOffset, 4, ...dwordLE(sysnum));
+        template.splice(syscallOffset, 4, ...dwordLE(resolved.number));
       }
-      syscallUsed = sysnum;
     }
     const badcharHits3 = checkBadchars(template, label, badSet);
-    return { bytes: template, size: template.length, badcharHits: badcharHits3, syscallUsed };
+    return {
+      bytes: template,
+      size: template.length,
+      badcharHits: badcharHits3,
+      syscallUsed: (_a = resolved == null ? void 0 : resolved.number) != null ? _a : null,
+      syscallSource: (_b = resolved == null ? void 0 : resolved.source) != null ? _b : null,
+      osWarning: (_c = resolved == null ? void 0 : resolved.warning) != null ? _c : null
+    };
   }
   function bytesToHex(bytes) {
     return bytes.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join("");
@@ -2951,37 +2976,37 @@ var osed_bundle = (() => {
       description: "Generate NtAccess/SEH egghunter stubs with badchar checking.",
       usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?, os?, syscall?)",
       examples: [
-        'dx @$osed().egghunter("W00T")',
-        'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win7")',
-        'dx @$osed().egghunter("W00T", "ntdisplay")',
-        'dx @$osed().egghunter("W00T", "ntdisplay", false, "00 0A 0D")',
-        'dx @$osed().egghunter("B33F", "seh")',
-        'dx @$osed().egghunter("W00T", "ntaccess", true)',
-        'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")',
-        'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win10", 0x1c9)'
+        'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win10-1909")',
+        'dx @$osed().egghunter("W00T", "ntaccess", true, "00 0A 0D", "win10")',
+        'dx @$osed().egghunter("W00T", "ntaccess", false, "", "", 0x1c8)',
+        'dx @$osed().egghunter("W00T", "ntdisplay", false, "00 0A 0D", "win7")',
+        'dx @$osed().egghunter("B33F", "seh")'
       ],
       schema: {
         tag: { type: "string", default: "W00T" },
         mode: { type: "string", enum: ["ntaccess", "ntdisplay", "seh"], default: "ntaccess" },
         wow64: { type: "boolean", default: false },
         badchars: { type: "array", default: [] },
-        os: { type: "string", enum: ["win7", "win10"], default: "win10" },
-        syscall: { type: "number", default: null }
+        os: { type: "string" },
+        syscall: { type: "number", min: 0, max: 4294967295 }
       },
       execute(options) {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e;
         const opts = {
           tag: (_a = options.tag) != null ? _a : "W00T",
           mode: (_b = options.mode) != null ? _b : "ntaccess",
           wow64: (_c = options.wow64) != null ? _c : false,
           badchars: (_d = options.badchars) != null ? _d : [],
-          os: (_e = options.os) != null ? _e : "win10",
-          syscall: (_f = options.syscall) != null ? _f : null
+          os: options.os || null,
+          syscall: (_e = options.syscall) != null ? _e : null
         };
         const result3 = buildEgghunter(opts);
         section("Egghunter");
-        const sysLabel = result3.syscallUsed !== null ? ` | Syscall: 0x${result3.syscallUsed.toString(16).toUpperCase()} (${opts.os})` : "";
+        const sysLabel = result3.syscallUsed !== null ? ` | Syscall: ${hex(result3.syscallUsed)} (${result3.syscallSource})` : "";
         info(`Tag: ${opts.tag} | Mode: ${opts.mode}${opts.wow64 ? " (WoW64)" : ""} | Size: ${result3.size} bytes${sysLabel}`);
+        if (result3.osWarning) {
+          warn(result3.osWarning);
+        }
         print(bytesToHex(result3.bytes));
         print(bytesToPython(result3.bytes));
         if (result3.badcharHits.length > 0) {
@@ -2994,7 +3019,7 @@ var osed_bundle = (() => {
           args: options,
           success: result3.badcharHits.length === 0,
           findings: [result3],
-          warnings: result3.badcharHits,
+          warnings: result3.osWarning ? [result3.osWarning, ...result3.badcharHits] : result3.badcharHits,
           errors: []
         };
       }
@@ -5599,7 +5624,7 @@ var osed_bundle = (() => {
           done = true;
           break;
         }
-        if (!done) unsatisfied.push(`no \`mov <valreg>, [ptr] ; ret\` + settable pointer to deref ${hex(word.derefSlot)} for ${word.comment}`);
+        if (!done) unsatisfied.push(`no \`mov <valreg>, [ptr] ; ret\` + settable pointer to deref ${hex2(word.derefSlot)} for ${word.comment}`);
       } else if (word.placeholder || word.value !== void 0 && isBadcharFree3(word.value, bc)) {
         const store = stores.find((s) => popFor(s.reg) !== void 0);
         if (!store) {
@@ -5617,7 +5642,7 @@ var osed_bundle = (() => {
             break;
           }
         }
-        if (!done) unsatisfied.push(`cannot build any of [${stores.map((s) => s.reg).join(", ")}] = ${hex(word.value)} for ${word.comment} while preserving eax`);
+        if (!done) unsatisfied.push(`cannot build any of [${stores.map((s) => s.reg).join(", ")}] = ${hex2(word.value)} for ${word.comment} while preserving eax`);
       }
     }
     if (unsatisfied.length > 0) {
@@ -5634,7 +5659,7 @@ var osed_bundle = (() => {
       }
       steps.push(...retImmPadding(retImmBytes(popEax)));
     };
-    setEax(bufAddress, `eax = BUF ${(_b = bufAddress.placeholder) != null ? _b : hex(bufAddress.value)}`);
+    setEax(bufAddress, `eax = BUF ${(_b = bufAddress.placeholder) != null ? _b : hex2(bufAddress.value)}`);
     resolved.forEach((r, i) => {
       if (i > 0) {
         steps.push(gadgetStep2(advance.gadget, `add eax, 4 -> BUF+0x${(i * 4).toString(16)}`));
@@ -5646,12 +5671,12 @@ var osed_bundle = (() => {
       if (r.deref) {
         if (r.deref.ptrPop) {
           steps.push(gadgetStep2(r.deref.ptrPop, `pop ${r.deref.ptrReg}`));
-          steps.push({ kind: "value", value: r.deref.slot >>> 0, comment: `${r.deref.ptrReg} = ${hex(r.deref.slot)} (IAT slot of ${r.word.comment})` });
+          steps.push({ kind: "value", value: r.deref.slot >>> 0, comment: `${r.deref.ptrReg} = ${hex2(r.deref.slot)} (IAT slot of ${r.word.comment})` });
           steps.push(...retImmPadding(retImmBytes(r.deref.ptrPop)));
         } else {
           steps.push(...r.deref.ptrRecipe.steps);
         }
-        steps.push(gadgetStep2(r.deref.memLoad, `mov ${r.reg}, [${r.deref.ptrReg}]  -> ${r.reg} = *${hex(r.deref.slot)} (${r.word.comment})`));
+        steps.push(gadgetStep2(r.deref.memLoad, `mov ${r.reg}, [${r.deref.ptrReg}]  -> ${r.reg} = *${hex2(r.deref.slot)} (${r.word.comment})`));
         steps.push(...retImmPadding(retImmBytes(r.deref.memLoad)));
       } else if (r.recipe) {
         steps.push(...r.recipe.steps);
@@ -5661,14 +5686,14 @@ var osed_bundle = (() => {
           placeholders.add(r.word.placeholder);
           steps.push({ kind: "value", placeholder: r.word.placeholder, comment: `${r.reg} = ${r.word.placeholder} (${r.word.comment})` });
         } else {
-          steps.push({ kind: "value", value: r.word.value >>> 0, comment: `${r.reg} = ${hex(r.word.value)} (${r.word.comment})` });
+          steps.push({ kind: "value", value: r.word.value >>> 0, comment: `${r.reg} = ${hex2(r.word.value)} (${r.word.comment})` });
         }
         steps.push(...retImmPadding(retImmBytes(r.pop)));
       }
       steps.push(gadgetStep2(r.store.gadget, `mov [eax], ${r.reg}  -> BUF+0x${(i * 4).toString(16)} = ${r.word.comment}`));
       steps.push(...retImmPadding(retImmBytes(r.store.gadget)));
     });
-    setEax(bufAddress, `eax = BUF ${(_c = bufAddress.placeholder) != null ? _c : hex(bufAddress.value)} (for pivot)`);
+    setEax(bufAddress, `eax = BUF ${(_c = bufAddress.placeholder) != null ? _c : hex2(bufAddress.value)} (for pivot)`);
     steps.push(gadgetStep2(pivot, "xchg eax, esp  -> ESP = BUF; ret dispatches into BUF[0]"));
     steps.push(...retImmPadding(retImmBytes(pivot)));
     return {
@@ -5685,7 +5710,7 @@ var osed_bundle = (() => {
       success: true
     };
   }
-  function hex(value) {
+  function hex2(value) {
     return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
   }
 
@@ -5797,12 +5822,12 @@ var osed_bundle = (() => {
     const derefAddr = firstKnownAddress(chain.deref);
     const jmpAddr = firstKnownAddress(chain.dispatch);
     const unstable = [];
-    if (!isAddressStable(popAddr)) unstable.push(`pop ${chain.ptrReg} @ ${hex2(Number(popAddr))}`);
-    if (!isAddressStable(derefAddr)) unstable.push(`mov ${chain.valReg},[${chain.ptrReg}] @ ${hex2(Number(derefAddr))}`);
-    if (!isAddressStable(jmpAddr)) unstable.push(`jmp ${chain.valReg} @ ${hex2(Number(jmpAddr))}`);
+    if (!isAddressStable(popAddr)) unstable.push(`pop ${chain.ptrReg} @ ${hex3(Number(popAddr))}`);
+    if (!isAddressStable(derefAddr)) unstable.push(`mov ${chain.valReg},[${chain.ptrReg}] @ ${hex3(Number(derefAddr))}`);
+    if (!isAddressStable(jmpAddr)) unstable.push(`jmp ${chain.valReg} @ ${hex3(Number(jmpAddr))}`);
     const words2 = [
       { value: Number(popAddr) >>> 0, comment: `pop ${chain.ptrReg} ; ret (deref preamble)` },
-      { value: slot >>> 0, comment: `IAT slot ${hex2(slot)}` },
+      { value: slot >>> 0, comment: `IAT slot ${hex3(slot)}` },
       { value: Number(derefAddr) >>> 0, comment: `mov ${chain.valReg},[${chain.ptrReg}] ; ret (deref -> live API)` },
       { value: Number(jmpAddr) >>> 0, comment: `jmp ${chain.valReg} (dispatch)` },
       ...frame
@@ -5820,7 +5845,7 @@ var osed_bundle = (() => {
       }
     });
   }
-  function hex2(value) {
+  function hex3(value) {
     return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
   }
 
@@ -7465,8 +7490,8 @@ var osed_bundle = (() => {
     const raw = text.trim().toLowerCase();
     if (/^-?0x[0-9a-f]+$/.test(raw)) {
       const negative = raw.startsWith("-");
-      const hex4 = negative ? raw.slice(3) : raw.slice(2);
-      const parsed = Number.parseInt(hex4, 16);
+      const hex5 = negative ? raw.slice(3) : raw.slice(2);
+      const parsed = Number.parseInt(hex5, 16);
       if (!Number.isFinite(parsed)) {
         return void 0;
       }
@@ -11274,6 +11299,16 @@ var osed_bundle = (() => {
       ]
     },
     {
+      name: "exploit.workflow",
+      description: "Prints a fixed list of dx commands for one workflow: egghunter, offset, or badchars.",
+      usage: "dx @$osed().exploit.workflow(mode, tag?, offset?, address?)",
+      examples: [
+        'dx @$osed().exploit.workflow("offset")',
+        'dx @$osed().exploit.workflow("egghunter", "W00T")',
+        'dx @$osed().exploit.workflow("badchars", "", 0, 0x00B8F900)'
+      ]
+    },
+    {
       name: "exploit.state",
       description: "Views or updates the cached exploit state used by rop.synthesize(). Populated automatically by triage(); individual fields can be set or overridden manually.",
       usage: "dx @$osed().exploit.state(overrides?)",
@@ -11316,10 +11351,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-19T09:36:50.122Z" : globalThis[key2];
+        value = true ? "2026-11-19T10:49:13.760Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "45c72b7df0a9" : globalThis[key2];
+        value = true ? "bc6023a41b25" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -11624,7 +11659,7 @@ var osed_bundle = (() => {
     "fmt.build": "Construct format-string payload components",
     "fmt.offset": "Find the controlled parameter index",
     "fmt.inspect": "Inspect a paused printf-family format argument",
-    exploit: "Emit exploit-development command workflows",
+    "exploit.workflow": "Print the dx commands for a workflow",
     "exploit.state": "View or update cached exploit state",
     "exploit.clear": "Clear the cached exploit state",
     math: "Format an integer as hex, signed, unsigned, LE",
@@ -11650,6 +11685,7 @@ var osed_bundle = (() => {
     for (const command2 of registry2.getAll()) documents2.set(command2.name, registryDocument(command2));
     for (const entry of NAMESPACE_HELP_ENTRIES) documents2.set(entry.name, toDocument(entry));
     documents2.delete("rop");
+    documents2.delete("exploit");
     const groups = /* @__PURE__ */ new Map();
     for (const entry of [...documents2.values()].sort((a, b) => a.name.localeCompare(b.name))) {
       const category = (_a = entry.category) != null ? _a : categoryForName(entry.name);
@@ -12019,11 +12055,11 @@ var osed_bundle = (() => {
     return {
       name: "exploit",
       description: "Emit deterministic exploit-development command workflows.",
-      usage: "dx @$osed().exploit(mode, tag?, offset?, address?)",
+      usage: "dx @$osed().exploit.workflow(mode, tag?, offset?, address?)",
       examples: [
-        'dx @$osed().exploit("egghunter", "W00T", 260)',
-        'dx @$osed().exploit("offset")',
-        'dx @$osed().exploit("badchars", "", 0, 0x00B8F900)'
+        'dx @$osed().exploit.workflow("egghunter", "W00T")',
+        'dx @$osed().exploit.workflow("offset")',
+        'dx @$osed().exploit.workflow("badchars", "", 0, 0x00B8F900)'
       ],
       schema: {
         mode: { type: "string", enum: ["egghunter", "offset", "badchars"], required: true },
@@ -12045,7 +12081,7 @@ var osed_bundle = (() => {
           commands = ["dx @$osed().pattern_create(300)", "dx @$osed().pattern_offset(<value>)"];
         } else if (mode === "badchars") {
           if (address === void 0) {
-            throw new Error("exploit.badchars requires address.");
+            throw new Error('exploit.workflow("badchars") requires address.');
           }
           commands = [`dx @$osed().badchars(${address})`];
         } else {
@@ -12605,13 +12641,13 @@ var osed_bundle = (() => {
     if (typeof raw !== "string" || !raw.trim()) {
       throw new Error("shellcode must be a non-empty hex string or byte array.");
     }
-    const hex4 = raw.replace(/[^0-9a-fA-F]/g, "");
-    if (hex4.length % 2 !== 0) {
+    const hex5 = raw.replace(/[^0-9a-fA-F]/g, "");
+    if (hex5.length % 2 !== 0) {
       throw new Error("shellcode hex string must have an even number of hex digits.");
     }
     const result3 = [];
-    for (let i = 0; i < hex4.length; i += 2) {
-      result3.push(parseInt(hex4.slice(i, i + 2), 16));
+    for (let i = 0; i < hex5.length; i += 2) {
+      result3.push(parseInt(hex5.slice(i, i + 2), 16));
     }
     return result3;
   }
@@ -15382,8 +15418,8 @@ var osed_bundle = (() => {
     return chars.join("");
   }
   function toDmlAddress(address, command2) {
-    const hex4 = `0x${address.toString(16).toUpperCase()}`;
-    return `<link cmd="${command2} ${hex4}">${hex4}</link>`;
+    const hex5 = `0x${address.toString(16).toUpperCase()}`;
+    return `<link cmd="${command2} ${hex5}">${hex5}</link>`;
   }
   function toDmlModule(name) {
     var _a;
@@ -16078,8 +16114,8 @@ var osed_bundle = (() => {
     const text = value.trim().replace(/`/g, "");
     if (/^-?0x[0-9a-f]+$/i.test(text)) {
       const negative = text.startsWith("-");
-      const hex4 = negative ? text.slice(3) : text.slice(2);
-      const parsed = BigInt(`0x${hex4}`);
+      const hex5 = negative ? text.slice(3) : text.slice(2);
+      const parsed = BigInt(`0x${hex5}`);
       return negative ? -parsed : parsed;
     }
     if (/^-?[0-9]+$/.test(text)) {
@@ -16100,7 +16136,7 @@ var osed_bundle = (() => {
     const signed = (unsigned & signBit) !== BigInt(0) ? unsigned - modulus : unsigned;
     const width = bits / 4;
     const byteCount = bits / 8;
-    const hex4 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
+    const hex5 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
     const littleEndianBytes = [];
     for (let i = 0; i < byteCount; i += 1) {
       const byte = Number(unsigned >> BigInt(i * 8) & BigInt(255));
@@ -16109,11 +16145,11 @@ var osed_bundle = (() => {
     return {
       input: typeof rawValue === "string" ? rawValue : value.toString(),
       bits,
-      hex: hex4,
+      hex: hex5,
       unsigned: unsigned.toString(),
       signed: signed.toString(),
       littleEndianBytes: littleEndianBytes.join(" "),
-      twosComplement: hex4
+      twosComplement: hex5
     };
   }
 
@@ -17474,7 +17510,7 @@ var osed_bundle = (() => {
     const value = [...field.values.exact][0];
     return value > 0 ? "+" + value : String(value);
   }
-  function hex3(value, width) {
+  function hex4(value, width) {
     return "0x" + value.toString(16).toUpperCase().padStart(width, "0");
   }
   function pad2(value, width) {
@@ -17530,7 +17566,7 @@ var osed_bundle = (() => {
         return ((_b2 = (_a2 = left.rva) != null ? _a2 : left.va) != null ? _b2 : BigInt(-1)) < ((_d = (_c2 = right.rva) != null ? _c2 : right.va) != null ? _d : BigInt(-1)) ? -1 : ((_f = (_e = left.rva) != null ? _e : left.va) != null ? _f : BigInt(-1)) > ((_h = (_g = right.rva) != null ? _g : right.va) != null ? _h : BigInt(-1)) ? 1 : left.instructions < right.instructions ? -1 : left.instructions > right.instructions ? 1 : 0;
       });
       const rendered = rows.map((row) => ({
-        va: row.va === void 0 ? "?" : hex3(row.va, addressWidth),
+        va: row.va === void 0 ? "?" : hex4(row.va, addressWidth),
         rva: row.rva === void 0 ? "?" : "+" + row.rva.toString(16).toUpperCase().padStart(Math.max(1, addressWidth - 2), "0"),
         instructions: row.instructions,
         capability: row.capability,
@@ -17546,7 +17582,7 @@ var osed_bundle = (() => {
       lines.push(
         "",
         "MODULE: " + moduleName,
-        "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex3(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length,
+        "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex4(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length,
         "",
         pad2("VA", widths.va) + "  " + pad2("RVA", widths.rva) + "  " + pad2("INSTRUCTIONS", widths.instructions) + "  " + pad2("CAPABILITY", widths.capability) + "  ESP",
         "-".repeat(widths.va) + "  " + "-".repeat(widths.rva) + "  " + "-".repeat(widths.instructions) + "  " + "-".repeat(widths.capability) + "  " + "-".repeat(widths.esp),
@@ -17681,9 +17717,9 @@ var osed_bundle = (() => {
         byByte.set(entry.byte, list);
       }
       const badSummary = [...byByte.entries()].map(([byte, positions]) => {
-        const hex4 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        const hex5 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
         const posStr = positions.length === 1 ? `offset ${positions[0]}` : positions.length === positions[positions.length - 1] - positions[0] + 1 ? `offsets ${positions[0]}-${positions[positions.length - 1]}` : `offsets ${positions.join(",")}`;
-        return `${hex4} (${posStr})`;
+        return `${hex5} (${posStr})`;
       }).join(", ");
       return `${mod.name} base ${baseHex} | packed: ${packed} | bad bytes: ${badSummary}. No usable gadget addresses.`;
     } catch (e) {
@@ -20339,6 +20375,10 @@ var osed_bundle = (() => {
     };
     api.rop_find = (...args) => invoke("rop", args);
     api.exploit = {
+      workflow: (...args) => {
+        if (args.length === 1 && args[0] === "help") return helperHelp("exploit.workflow");
+        return invoke("exploit", args);
+      },
       state: executeExploitState,
       clear: executeExploitClear
     };
@@ -20536,9 +20576,11 @@ var osed_bundle = (() => {
           minRun: args[3]
         };
       case "egghunter":
-        return { tag: args[0], mode: args[1], wow64: args[2], badchars: parseHexByteList(args[3]) };
+        return { tag: args[0], mode: args[1], wow64: args[2], badchars: parseHexByteList(args[3]), os: args[4], syscall: args[5] };
       case "exploit":
         return { mode: args[0], tag: args[1], offset: args[2], address: args[3] };
+      case "findmsp":
+        return { patternLength: args[0], stackBytes: args[1], probeBytes: args[2] };
       case "modules":
         return { filter: args[0] };
       case "code_caves":
