@@ -24,6 +24,7 @@ export type Command = {
   description: string;
   usage: string;
   examples: string[];
+  compactExampleCount?: number;
   schema: ObjectSchema;
   execute(options: Record<string, unknown>): CommandResult;
 };

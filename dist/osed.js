@@ -11373,10 +11373,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-19T15:41:53.688Z" : globalThis[key2];
+        value = true ? "2026-11-19T17:20:44.510Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "7ddc9eccc55c" : globalThis[key2];
+        value = true ? "3621232ad998" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -11547,16 +11547,19 @@ var osed_bundle = (() => {
     return lines;
   }
   function renderCompactDetail(entry) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const examples = normalizeHelpExamples(entry.examples);
     const lines = ["", `=== Help: ${entry.name} ===`];
     lines.push(...wrapText((_a = entry.summary) != null ? _a : entry.description, HELP_WIDTH));
-    if (examples[0]) {
-      const [command2, note] = examples[0].command.split(/\s+\/\/\s+/, 2);
-      lines.push("", "RUN", `  ${command2}`, ...note ? wrapText(note, HELP_WIDTH, "  ") : []);
+    if (examples.length > 0) {
+      lines.push("", "RUN");
+      for (const example of examples.slice(0, (_b = entry.compactExampleCount) != null ? _b : 1)) {
+        const [command2, note] = example.command.split(/\s+\/\/\s+/, 2);
+        lines.push(`  ${command2}`, ...note ? wrapText(note, HELP_WIDTH, "  ") : []);
+      }
     }
-    if ((_b = entry.prerequisites) == null ? void 0 : _b.length) lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
-    if ((_c = entry.seeAlso) == null ? void 0 : _c.length) lines.push("", "NEXT", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
+    if ((_c = entry.prerequisites) == null ? void 0 : _c.length) lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
+    if ((_d = entry.seeAlso) == null ? void 0 : _d.length) lines.push("", "NEXT", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
     lines.push("", `MORE \u2192 help("${entry.name}", "full")`);
     return lines;
   }
@@ -11575,7 +11578,7 @@ var osed_bundle = (() => {
 
   // src/commands/help.ts
   var categoryForName = (name) => {
-    if (name.startsWith("rop") || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
+    if (name.startsWith("rop") || name === "dep_function" || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
     if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
     if (name.startsWith("sc.")) return "pe-api";
     if (name.startsWith("str.")) return "strings";
@@ -11637,6 +11640,7 @@ var osed_bundle = (() => {
     rop_find: "Flat alias for legacy ROP helper triage",
     rop_suggest: "Suggest exploit-friendly gadget patterns",
     rop_template: "Print a commented ROP chain skeleton",
+    dep_function: "Print a VirtualAlloc or WriteProcessMemory call-frame skeleton",
     pivots: "Scan for stack pivot candidates",
     retn: "Scan for retn N gadgets",
     add_esp: "Scan for add esp, N gadgets",
@@ -11699,7 +11703,7 @@ var osed_bundle = (() => {
   }
   var toDocument = (entry) => __spreadProps(__spreadValues({}, entry), { summary: shortSummary(entry.name, entry.description, entry.summary) });
   function registryDocument(command2) {
-    return { name: command2.name, description: command2.description, summary: shortSummary(command2.name, command2.description), usage: command2.usage, examples: command2.examples, category: categoryForName(command2.name) };
+    return { name: command2.name, description: command2.description, summary: shortSummary(command2.name, command2.description), usage: command2.usage, examples: command2.examples, compactExampleCount: command2.compactExampleCount, category: categoryForName(command2.name) };
   }
   function groupedDocuments(registry2) {
     var _a, _b;
@@ -13095,6 +13099,44 @@ var osed_bundle = (() => {
           warnings: [],
           errors: []
         };
+      }
+    };
+  }
+
+  // src/commands/dep_function.ts
+  function createDepFunctionCommand() {
+    return {
+      name: "dep_function",
+      description: "Print a Python call-frame skeleton for VirtualAlloc or WriteProcessMemory.",
+      usage: 'dx @$osed().dep_function("VA" | "WPM")',
+      examples: ['dx @$osed().dep_function("VA")', 'dx @$osed().dep_function("WPM")'],
+      compactExampleCount: 2,
+      schema: { method: { type: "string", required: true } },
+      execute(options) {
+        const input = options.method.trim().toLowerCase();
+        const method = input === "va" || input === "virtualalloc" ? "VA" : input === "wpm" || input === "writeprocessmemory" ? "WPM" : void 0;
+        if (!method) {
+          return { command: "dep_function", args: options, success: false, findings: [], warnings: [], errors: ['Use "VA" or "WPM".'] };
+        }
+        const lines = method === "VA" ? [
+          'va  = pack("<L", vaAddr)                 # VirtualAlloc address',
+          'va += pack("<L", shellcodeReturnAddr)   # Shellcode return address',
+          'va += pack("<L", shellcodeAddr)         # lpAddress: shellcode destination',
+          'va += pack("<L", dwSize)                # dwSize',
+          'va += pack("<L", flAllocationType)      # flAllocationType',
+          'va += pack("<L", flProtect)             # flProtect'
+        ] : [
+          'wpm  = pack("<L", wpmAddr)              # WriteProcessMemory address',
+          'wpm += pack("<L", shellcodeReturnAddr) # Shellcode return address',
+          'wpm += pack("<L", 0xFFFFFFFF)          # pseudo process handle',
+          'wpm += pack("<L", codeCaveAddr)        # code cave address',
+          'wpm += pack("<L", stackBufferAddr)     # lpBuffer',
+          'wpm += pack("<L", shellcodeSize)       # nSize',
+          'wpm += pack("<L", bytesWrittenAddr)    # lpNumberOfBytesWritten'
+        ];
+        section(`${method} Python Call-Frame Skeleton`);
+        for (const line of lines) print(line);
+        return { command: "dep_function", args: { method }, success: true, findings: [{ method, lines }], warnings: [], errors: [] };
       }
     };
   }
@@ -17921,6 +17963,7 @@ var osed_bundle = (() => {
       createEncodeCommand(),
       createNopCommand(),
       createRopTemplateCommand(),
+      createDepFunctionCommand(),
       ...createFmtCommands(),
       createExploitCommand(),
       createHelpCommand(registry),
@@ -20641,6 +20684,8 @@ var osed_bundle = (() => {
         return { length: args[0], byte: args[1] };
       case "rop_template":
         return { api: args[0], module: args[1] };
+      case "dep_function":
+        return { method: args[0] };
       case "fmt_build":
         return {
           writes: [{ addr: args[0], value: args[1] }],

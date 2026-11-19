@@ -11,7 +11,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   "pe-api": "PE / API",
 };
 
-export type HelpDocument = Pick<HelpEntry, "name" | "description" | "usage" | "examples" | "details" | "summary" | "category" | "arguments" | "prerequisites" | "limitations" | "seeAlso" | "keywords">;
+export type HelpDocument = Pick<HelpEntry, "name" | "description" | "usage" | "examples" | "compactExampleCount" | "details" | "summary" | "category" | "arguments" | "prerequisites" | "limitations" | "seeAlso" | "keywords">;
 
 function words(text: string): string[] {
   return text.trim().split(/\s+/).filter(Boolean);
@@ -173,9 +173,12 @@ export function renderCompactDetail(entry: HelpDocument): string[] {
   const examples = normalizeHelpExamples(entry.examples);
   const lines = ["", `=== Help: ${entry.name} ===`];
   lines.push(...wrapText(entry.summary ?? entry.description, HELP_WIDTH));
-  if (examples[0]) {
-    const [command, note] = examples[0].command.split(/\s+\/\/\s+/, 2);
-    lines.push("", "RUN", `  ${command}`, ...(note ? wrapText(note, HELP_WIDTH, "  ") : []));
+  if (examples.length > 0) {
+    lines.push("", "RUN");
+    for (const example of examples.slice(0, entry.compactExampleCount ?? 1)) {
+      const [command, note] = example.command.split(/\s+\/\/\s+/, 2);
+      lines.push(`  ${command}`, ...(note ? wrapText(note, HELP_WIDTH, "  ") : []));
+    }
   }
   if (entry.prerequisites?.length) lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
   if (entry.seeAlso?.length) lines.push("", "NEXT", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
