@@ -4,7 +4,7 @@ import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES, HelpEntry } from "../c
 import { HelpDocument, renderAll, renderCandidates, renderCompactDetail, renderFullDetail, renderNamespace, renderOverview, renderSearch } from "../core/help_render";
 
 const categoryForName = (name: string): string => {
-  if (name.startsWith("rop") || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
+  if (name.startsWith("rop") || name === "dep_function" || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
   if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
   if (name.startsWith("sc.")) return "pe-api";
   if (name.startsWith("str.")) return "strings";
@@ -67,6 +67,7 @@ const LISTING_SUMMARIES: Record<string, string> = {
   rop_find: "Flat alias for legacy ROP helper triage",
   rop_suggest: "Suggest exploit-friendly gadget patterns",
   rop_template: "Print a commented ROP chain skeleton",
+  dep_function: "Print a VirtualAlloc or WriteProcessMemory call-frame skeleton",
   pivots: "Scan for stack pivot candidates",
   retn: "Scan for retn N gadgets",
   add_esp: "Scan for add esp, N gadgets",
@@ -131,7 +132,7 @@ function shortSummary(name: string, description: string, supplied?: string): str
 const toDocument = (entry: HelpEntry): HelpDocument => ({ ...entry, summary: shortSummary(entry.name, entry.description, entry.summary) });
 
 function registryDocument(command: Command): HelpDocument {
-  return { name: command.name, description: command.description, summary: shortSummary(command.name, command.description), usage: command.usage, examples: command.examples, category: categoryForName(command.name) };
+  return { name: command.name, description: command.description, summary: shortSummary(command.name, command.description), usage: command.usage, examples: command.examples, compactExampleCount: command.compactExampleCount, category: categoryForName(command.name) };
 }
 
 function groupedDocuments(registry: CommandRegistry): Map<string, HelpDocument[]> {

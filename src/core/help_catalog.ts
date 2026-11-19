@@ -19,6 +19,7 @@ export type HelpEntry = {
   usage: string;
   /** Legacy strings and labelled examples coexist during incremental migration. */
   examples: HelpExample[];
+  compactExampleCount?: number;
   // Optional, shown only in the detail view (help("name")): a plain-language
   // note on what the command is for and where it fits a workflow.
   details?: string;

@@ -42,6 +42,7 @@ import { createFindPtrCommand } from "./commands/find_ptr";
 import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
+import { createDepFunctionCommand } from "./commands/dep_function";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
@@ -442,6 +443,7 @@ function registerAll(): void {
     createEncodeCommand(),
     createNopCommand(),
     createRopTemplateCommand(),
+    createDepFunctionCommand(),
     ...createFmtCommands(),
     createExploitCommand(),
     createHelpCommand(registry),
@@ -3438,6 +3440,8 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
       return { length: args[0], byte: args[1] };
     case "rop_template":
       return { api: args[0], module: args[1] };
+    case "dep_function":
+      return { method: args[0] };
     case "fmt_build":
       // Positional single-write form for the dx REPL, which cannot pass object/array literals.
       // Multi-write callers use the object form (handled by the isPlainObject passthrough above).
