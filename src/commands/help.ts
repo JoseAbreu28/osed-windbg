@@ -9,7 +9,7 @@ const categoryForName = (name: string): string => {
   if (name.startsWith("sc.")) return "pe-api";
   if (name.startsWith("str.")) return "strings";
   if (name.startsWith("fmt.") || name === "fmt_build" || name === "fmt_offset") return "format";
-  if (name.startsWith("pattern") || ["badchars", "badchar_array", "badchar_find"].includes(name)) return "payload";
+  if (name.startsWith("pattern") || ["badchars", "badchar_array", "badchar_function", "badchar_find"].includes(name)) return "payload";
   if (["triage", "landing", "stackmap", "findmsp"].includes(name)) return "crash";
   if (["modules", "memory", "code_caves", "find_mem_bytes", "find_ptr", "find_stack_bytes", "find_bytes"].includes(name)) return "target";
   if (["egghunter", "encode", "nop"].includes(name)) return "shellcode";
@@ -28,6 +28,7 @@ const LISTING_SUMMARIES: Record<string, string> = {
   pattern_offset: "Resolve a cyclic offset",
   badchars: "Compare candidate bytes with memory",
   badchar_array: "Generate a bad-character test array",
+  badchar_function: "Python BADCHARS list and array helper for the exploit",
   badchar_find: "Locate a sent bad-character array in memory",
   find_bytes: "Find byte sequence in PE sections",
   find_mem_bytes: "Find byte sequence in a memory range",
@@ -124,7 +125,7 @@ const LISTING_SUMMARIES: Record<string, string> = {
 };
 
 function shortSummary(name: string, description: string, supplied?: string): string {
-  return LISTING_SUMMARIES[name] ?? supplied ?? description.split(/(?<=[.!?])\s/)[0] ?? description;
+  return LISTING_SUMMARIES[name] ?? supplied ?? /^[\s\S]*?[.!?](?=\s)/.exec(description)?.[0] ?? description;
 }
 
 const toDocument = (entry: HelpEntry): HelpDocument => ({ ...entry, summary: shortSummary(entry.name, entry.description, entry.summary) });
