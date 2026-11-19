@@ -1,4 +1,4 @@
-import { readPointer } from "../core/memory";
+import { executeDebuggerCommand, readPointer } from "../core/memory";
 
 type PointerReader = (address: bigint, pointerSize: 4 | 8) => bigint;
 
@@ -114,9 +114,35 @@ function looksLikeTeb32(address: bigint, reader: PointerReader): boolean {
   }
 }
 
-export function resolveTeb32Address(thread: Record<string, unknown>, reader: PointerReader = readPointer): bigint | undefined {
+// The data model only exposes the TEB through ntdll's _TEB type, so it is empty without symbols.
+// The engine's $teb comes from the thread itself and still works offline, like !exchain does.
+function debuggerTebPseudoRegister(): bigint | undefined {
+  try {
+    for (const line of executeDebuggerCommand("? @$teb")) {
+      const match = line.match(/=\s*([0-9a-f`]+)\s*$/i);
+      if (match) return BigInt(`0x${match[1].replace(/`/g, "")}`);
+    }
+  } catch (_error) {
+    // No debugger host, as in unit tests.
+  }
+  return undefined;
+}
+
+const WOW64_TEB_DISTANCE = BigInt(0x2000);
+
+export function resolveTeb32Address(
+  thread: Record<string, unknown>,
+  reader: PointerReader = readPointer,
+  debuggerTeb: () => bigint | undefined = debuggerTebPseudoRegister,
+): bigint | undefined {
   const fromEnvironment = environmentTeb(thread);
   if (fromEnvironment !== BigInt(0)) return fromEnvironment;
+
+  const teb = debuggerTeb();
+  if (teb !== undefined) {
+    const fromPseudoRegister = [teb, teb + WOW64_TEB_DISTANCE].find((candidate) => looksLikeTeb32(candidate, reader));
+    if (fromPseudoRegister !== undefined) return fromPseudoRegister;
+  }
 
   for (const key of ["Teb", "Teb32", "TebAddress", "Wow64Teb", "Wow64Teb32"]) {
     const parsed = toAddress(safeGet(thread, key));
