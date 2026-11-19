@@ -36,31 +36,31 @@ describe("egghunter from dx", () => {
 
   test("os selects the NtAccessCheckAndAuditAlarm number for that build", () => {
     expect(api.egghunter("W00T", "ntaccess", false, "", "win10-2004")).toBe(true);
-    expect(printed()).toContain("B8C8010000CD2E");
+    expect(printed()).toContain("31C066B8C801CD2E");
     expect(printed()).toContain("0x1C8 (Windows 10 2004)");
   });
 
   test("os accepts the build number shown by winver", () => {
     api.egghunter("W00T", "ntaccess", false, "", "18363");
-    expect(printed()).toContain("B8C6010000CD2E");
+    expect(printed()).toContain("31C066B8C601CD2E");
   });
 
   test("syscall overrides os", () => {
     api.egghunter("W00T", "ntaccess", false, "", "win7", 0x1c2);
-    expect(printed()).toContain("B8C2010000CD2E");
+    expect(printed()).toContain("31C066B8C201CD2E");
     expect(printed()).toContain("0x1C2 (explicit)");
   });
 
   test("wow64 uses the 64-bit number through the fs:[0xC0] gate", () => {
     api.egghunter("W00T", "ntaccess", true, "", "win10-2004");
-    expect(printed()).toContain("B829000000" + "64FF13");
+    expect(printed()).toContain("6A2958" + "64FF13");
   });
 
   test("an unknown os warns and names the default", () => {
     api.egghunter("W00T", "ntaccess", false, "", "win95");
     expect(printed()).toContain('Unknown os "win95"');
     expect(printed()).toContain("0x1C9 (Windows 10 22H2)");
-    expect(printed()).toContain("B8C9010000CD2E");
+    expect(printed()).toContain("31C066B8C901CD2E");
   });
 
   test("no os warns and names the default", () => {
@@ -69,9 +69,20 @@ describe("egghunter from dx", () => {
     expect(printed()).toContain("0x1C9 (Windows 10 22H2)");
   });
 
-  test("bad characters in the syscall immediate are reported", () => {
-    expect(api.egghunter("W00T", "ntaccess", false, "C8", "win10-2004")).toBe(false);
-    expect(printed()).toContain("byte 0xC8 at offset 8");
+  test("the Windows 10 WOW64 stub passes a 00 0A 0D check", () => {
+    expect(api.egghunter("w00t", "ntaccess", true, "00 0A 0D", "win10")).toBe(true);
+    expect(printed()).toContain("Size: 49 bytes");
+    expect(printed()).not.toContain("Badchar:");
+  });
+
+  test("a bad character in the syscall number switches to mov eax, ~n ; not eax", () => {
+    expect(api.egghunter("W00T", "ntaccess", false, "C8", "win10-2004")).toBe(true);
+    expect(printed()).toContain("B837FEFFFFF7D0CD2E");
+  });
+
+  test("bad characters in the stub body are reported", () => {
+    expect(api.egghunter("W00T", "ntaccess", false, "0F", "win10-2004")).toBe(false);
+    expect(printed()).toContain("byte 0x0F at offset 4");
   });
 });
 

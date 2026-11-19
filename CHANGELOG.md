@@ -7,6 +7,11 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-19 - Null-free egghunters
+
+- `egghunter` stubs no longer contain null bytes. `ntaccess` loads the syscall number with the shortest form that avoids `00` and the given bad characters (`push imm8 ; pop eax`, `xor eax, eax ; mov al/ah/ax`, or `mov eax, ~n ; not eax`) instead of `mov eax, imm32`, and its jumps are computed from labels. The Windows 10 and 11 WOW64 stub drops from 51 to 49 bytes and passes a `00 0A 0D` check; it was rerun in a WOW64 process and found the egg. The native Windows 10 stub is 35 bytes.
+- The `seh` stub is 67 bytes and null-free: a backward `call` replaces `call $+5`, and the handler writes `CONTEXT.Eip` through a byte displacement.
+
 ### 2026-11-19 - dx argument fixes
 
 - `egghunter` now reads its `os` and `syscall` arguments from `dx`. `os` picks the `NtAccessCheckAndAuditAlarm` number from a per-build table taken from j00ru's syscall tables, and an unknown or missing `os` prints a warning that names the default. The WOW64 stub now calls the `fs:[0xC0]` gate with the 64-bit number, because `int 0x2e` raises `STATUS_ILLEGAL_INSTRUCTION` under WOW64. `ntdisplay` lost its WOW64 stub and rejects numbers that do not fit `push imm8`.
