@@ -26,7 +26,7 @@ dx @$osed().sc.iat_ptr("app.exe","VirtualAlloc")
 
 import { Command, CommandRegistry, CommandResult } from "./core/registry";
 import { createPatternCommands } from "./commands/pattern";
-import { createBadcharsCommand, createBadcharArrayCommand, createBadcharFindCommand } from "./commands/badchars";
+import { createBadcharsCommand, createBadcharArrayCommand, createBadcharFindCommand, createBadcharFunctionCommand } from "./commands/badchars";
 import { createEgghunterCommand } from "./commands/egghunter";
 import { createSehCommand } from "./commands/seh";
 import { createModulesCommand } from "./commands/modules";
@@ -418,6 +418,7 @@ function registerAll(): void {
     ...createPatternCommands(),
     createBadcharsCommand(),
     createBadcharArrayCommand(),
+    createBadcharFunctionCommand(),
     createBadcharFindCommand(),
     createEgghunterCommand(),
     createSehCommand(),
@@ -3378,6 +3379,7 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
     case "badchars":
       return { address: args[0], exclude: parseHexByteList(args[1]) };
     case "badchar_array":
+    case "badchar_function":
       return { exclude: parseHexByteList(args[0]) };
     case "badchar_find":
       return {
