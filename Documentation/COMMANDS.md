@@ -12,12 +12,13 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `reload` | `dx @$osed().reload()` | `dx @$osed().reload()` | Clears and re-registers the command registry. |
 | `pattern_create` | `dx @$osed().pattern_create(length, type?)` | `dx @$osed().pattern_create(300, "msf")` | Generates cyclic pattern text. |
 | `pattern_offset` | `dx @$osed().pattern_offset(value, type?)` | `dx @$osed().pattern_offset(0x39654138, "msf")` | Finds an offset in the selected pattern family. |
-| `badchars` | `dx @$osed().badchars(address, exclude?)` | `dx @$osed().badchars(0x00B8F900)` | Compares memory bytes against the expected byte sequence at a known address. |
+| `badchars` | `dx @$osed().badchars(address, exclude?)` | `dx @$osed().badchars(0x00B8F900)` | Compares memory bytes against the expected byte sequence at a known address. **[fork]** Ends with `Exploit line: BADCHARS = b"..."` and `Next command: dx @$osed().badchars(<addr>, "<list>")`, with any truncation byte already added. |
 | `badchar_array` | `dx @$osed().badchar_array(exclude?)` | `dx @$osed().badchar_array([0, 10, 13])` | Generates the test byte array (0x00-0xFF minus excludes) in Python, C, and hex paste-ready forms. |
-| `badchar_find` | `dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?)` | `dx @$osed().badchar_find()` | Auto-locates the sent test array near an address or the stack pointer, reports the landing address, the first corrupted byte, and the suggested next exclude set. |
+| `badchar_function` | `dx @$osed().badchar_function(badchars?)` | `dx @$osed().badchar_function("00")` | **[fork]** Prints a Python `BADCHARS = b"..."` line plus a `badchar_array()` helper that derives the test array from it, so each run only grows one list in the exploit. |
+| `badchar_find` | `dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?)` | `dx @$osed().badchar_find()` | Auto-locates the sent test array near an address or the stack pointer, reports the landing address, the first corrupted byte, and the suggested next exclude set. **[fork]** Names the likely terminator when the array was cut early (for example by a `ret N`), then ends with `Exploit line: BADCHARS = b"..."` and `Next command: dx @$osed().badchar_find(<addr>, "<list>")` with the terminator already added. `dx` evaluates arithmetic first, so `badchar_find(0x0019ed34+8, "00 0A 0D")` works. Pseudo-registers such as `@$t0` arrive as 64-bit `Int64` objects and are rejected; pass `(unsigned int)@$t0`. |
 | `egghunter` | `dx @$osed().egghunter(tag?, mode?, wow64?, badchars?, os?, syscall?)` | `dx @$osed().egghunter("W00T", "ntaccess", false, "", "win7")` | Generates egghunter shellcode (hex + Python). Mode `ntaccess` (34 bytes, INT 0x2E syscall) or `seh` (70 bytes, SEH-based — no syscall dependency, contains null bytes). `os` selects the syscall number preset: `"win10"` (default, 0x1C9) or `"win7"` (0x02). Optional `syscall` overrides the preset (get yours with `u ntdll!NtAccessCheckAndAuditAlarm L1`). Reports any stub byte that collides with the supplied bad-character list. |
 | `exploit` | `dx @$osed().exploit(mode, tag?, offset?, address?)` | `dx @$osed().exploit("offset")` | Emits deterministic exploit-workflow command strings. |
-| `seh.visualize` | `dx @$osed().seh.visualize()` | `dx @$osed().seh.visualize()` | Walks the current thread SEH chain. x86-only in v1. |
+| `seh.visualize` | `dx @$osed().seh.visualize()` | `dx @$osed().seh.visualize()` | Walks the current thread SEH chain. x86-only in v1. **[fork]** Works without symbols: the TEB comes from the engine's `$teb` (WOW64 32-bit TEB at native TEB + `0x2000`), accepted only when the self pointer at TEB + `0x18` matches. |
 | `triage` | `dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)` | `dx @$osed().triage(8000, "00 0A 0D", "essfunc", 2048)` | Fast crash triage for control, stack, and gadget context. Uses EIP/ESP on x86 and RIP/RSP on x64; SEH/PPR evidence is x86-only. |
 | `findmsp` | `dx @$osed().findmsp(patternLength?, stackBytes?, probeBytes?)` | `dx @$osed().findmsp(20000, 4096)` | Comprehensive cyclic-pattern offset scan across all registers, dword-aligned stack slots, SEH record fields, and pointer targets. Reports pattern offset and a confidence per hit (EXACT = unique offset, CONSERVATIVE = repeats). |
 | `memory` | `dx @$osed().memory(address)` | `dx @$osed().memory(0x0012F800)` | Returns normalized region evidence. Unknown semantic flags are `null`; raw numeric metadata is preserved. |
@@ -74,6 +75,8 @@ Expected fields:
 - `GitDirty`
 
 If `version()` reports `dev` / `unknown`, the loaded file is not a properly built `dist/osed.js`.
+
+**[fork]** On classic WinDbg 10.0.19041, whose JavaScript provider has no `BigInt`, load `dist/osed-legacy.js` instead. It exposes the same commands and throws on values above 2^53 by design.
 
 ## Byte Search Scope
 
