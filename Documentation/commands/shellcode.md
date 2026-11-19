@@ -19,17 +19,37 @@ egghunter(tag?, mode?, wow64?, badchars?, os?, syscall?)
 ```
 
 ```text
-dx @$osed().egghunter("W00T")
-dx @$osed().egghunter("W00T", "ntdisplay")
-dx @$osed().egghunter("W00T", "ntdisplay", false, "00 0A 0D")
+dx @$osed().egghunter("W00T", "ntaccess", true, "00 0A 0D", "win10")
+dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D", "win10-1909")
+dx @$osed().egghunter("W00T", "ntaccess", false, "", "19041")
+dx @$osed().egghunter("W00T", "ntaccess", false, "", "", 0x1C8)
+dx @$osed().egghunter("W00T", "ntdisplay", false, "00 0A 0D", "win7")
 dx @$osed().egghunter("B33F", "seh")
-dx @$osed().egghunter("W00T", "ntaccess", true)
-dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")
 ```
 
-Modes are `ntaccess` (default, 34 bytes, `NtAccessCheckAndAuditAlarm`), `ntdisplay` (`NtDisplayString`), and `seh` (70 bytes, no syscall, contains null bytes). Set `wow64` to `true` for a 32-bit process on 64-bit Windows. Put the tag twice in front of the payload, for example `b"W00TW00T"`.
+Modes are `ntaccess` (default, `NtAccessCheckAndAuditAlarm`), `ntdisplay` (32 bytes, `NtDisplayString`, Windows 7 and older), and `seh` (70 bytes, no syscall, contains null bytes). Put the tag twice in front of the payload, for example `b"W00TW00T"`.
 
-Limitation: from `dx`, the `os` and `syscall` arguments are ignored in this build, so the `ntaccess` stub always uses the Windows 10 syscall number `0x1C9`. For another Windows version, read the number with `u ntdll!NtAccessCheckAndAuditAlarm L1` and edit the `mov eax` bytes `B8 C9 01 00 00` in the stub.
+Set `wow64` to `true` for a 32-bit process on 64-bit Windows 10 or 11. The native stub (34 bytes) calls `int 0x2e`, and WOW64 stops that with `STATUS_ILLEGAL_INSTRUCTION` (`0xC000001D`). The WOW64 stub (51 bytes) calls the 64-bit service through the gate at `fs:[0xC0]`, the same way the 32-bit `ntdll` does. `ntdisplay` has no WOW64 stub.
+
+The syscall number depends on the Windows build, and a wrong number breaks the hunter. Pass `os` to take the number from the table below, or `syscall` to set it yourself. `syscall` wins over `os`. Without either, or with an `os` that the table does not list, the stub uses the Windows 10 22H2 number and prints a warning that names it. To read the number on the target, run `u ntdll!NtAccessCheckAndAuditAlarm L1` and take the `mov eax` value. In a WOW64 process that command shows the 64-bit number, which is the one the WOW64 stub needs.
+
+| `os` | Build (`winver`) | Native 32-bit | WOW64 |
+| --- | --- | --- | --- |
+| `xp`, `2003`, `vista`, `win7` | 2600 to 7601 | `0x02` | not supported |
+| `win8` | 9200 | `0x1AA` | not supported |
+| `win8.1` | 9600 | `0x1AF` | not supported |
+| `win10-1507` | 10240 | `0x1B7` | `0x29` |
+| `win10-1511` | 10586 | `0x1BA` | `0x29` |
+| `win10-1607` | 14393 | `0x1BC` | `0x29` |
+| `win10-1703` | 15063 | `0x1C2` | `0x29` |
+| `win10-1709` to `win10-1909` | 16299 to 18363 | `0x1C6` | `0x29` |
+| `win10-2004`, `win10-20h2`, `win10-21h1` | 19041 to 19043 | `0x1C8` | `0x29` |
+| `win10-21h2`, `win10-22h2`, `win10` | 19044, 19045 | `0x1C9` | `0x29` |
+| `win11` | 22000 to 26200 | none | `0x29` |
+
+`os` also takes the build number, such as `"19041"`. The numbers come from [j00ru's syscall tables](https://j00ru.vexillium.org/syscalls/nt/32/). On Windows 7 and 8 the WOW64 gate takes its arguments in other registers, so the WOW64 stub covers only Windows 10 and 11. `ntdisplay` takes its number from the same table: `0x43` for XP, `0x46` for Server 2003, and `0x6D` for Windows 7. Without `os` it uses the XP number and prints a warning. The Vista number (`0x80`) and every number from Windows 8 on do not fit the stub's `push imm8`, so for those builds the command stops with an error that tells you to use `ntaccess`.
+
+The bad-character check covers the syscall number too. The `mov eax` instruction stores it as four bytes, so `ntaccess` stubs always hold null bytes and always fail a `00` check. Put the hunter where null bytes are allowed, or run it through [`encode`](#encode).
 
 ### encode
 
