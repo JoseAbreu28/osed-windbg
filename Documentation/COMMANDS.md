@@ -167,10 +167,16 @@ This page lists every command that the script registers. Each name links to its 
 | [`sc.iat`](commands/pe-api.md#sciat) | [PE and API](commands/pe-api.md) | List the imports of a module, optionally filtered by DLL or API name. |
 | [`sc.module_pages`](commands/pe-api.md#scmodule_pages) | [PE and API](commands/pe-api.md) | Give the size of one module and its number of 4 KiB pages. |
 | [`sc.modules`](commands/pe-api.md#scmodules) | [PE and API](commands/pe-api.md) | List the loaded modules. |
+| [`sc.call_frame`](commands/shellcode.md#sccall_frame) | [Shellcode](commands/shellcode.md) | Print the pushes and calls for one stdcall API call through the `sc.template` resolver, with the ROR13 hash. |
 | [`sc.page_summary`](commands/pe-api.md#scpage_summary) | [PE and API](commands/pe-api.md) | Count the pages of one module by protection value. |
 | [`sc.pe`](commands/pe-api.md#scpe) | [PE and API](commands/pe-api.md) | Print the PE header fields of one module. |
 | [`sc.peb`](commands/pe-api.md#scpeb) | [PE and API](commands/pe-api.md) | Show the PEB address, `Ldr`, `ProcessParameters`, `BeingDebugged`, and `ImageBase`. |
+| [`sc.push_string`](commands/shellcode.md#scpush_string) | [Shellcode](commands/shellcode.md) | Print x86 pushes that build a NUL-terminated string on the stack with no `00` or bad byte. |
 | [`sc.resolve`](commands/pe-api.md#scresolve) | [PE and API](commands/pe-api.md) | Give the address of one exported function. |
+| [`sc.template`](commands/shellcode.md#sctemplate) | [Shellcode](commands/shellcode.md) | Print a complete `build_sc.py` that assembles custom shellcode with Keystone and reports every bad byte. |
+| `sc_call_frame` | [Shellcode](commands/shellcode.md) | Same as [`sc.call_frame`](commands/shellcode.md#sccall_frame). |
+| `sc_push_string` | [Shellcode](commands/shellcode.md) | Same as [`sc.push_string`](commands/shellcode.md#scpush_string). |
+| `sc_template` | [Shellcode](commands/shellcode.md) | Same as [`sc.template`](commands/shellcode.md#sctemplate). |
 | [`seh_ppr`](commands/seh.md#seh_ppr) | [SEH](commands/seh.md) | Find and rank `pop r32 ; pop r32 ; ret` gadgets for an SEH overwrite. |
 | [`seh.visualize`](commands/seh.md#sehvisualize) | [SEH](commands/seh.md) | Walk the SEH chain of the current thread and show each `Next` and `Handler` value. |
 | [`stackmap`](commands/crash.md#stackmap) | [Crash triage](commands/crash.md) | Classify each stack slot at the crash as pattern bytes, a return address, a saved EBP, a stale pointer, null, or data. |

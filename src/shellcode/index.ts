@@ -117,6 +117,10 @@ class MetasploitRor13Provider implements HashProvider {
   }
 }
 
+export function ror13Hash(name: string): number {
+  return new MetasploitRor13Provider().hash(name);
+}
+
 class HashResolver {
   private readonly providers: Map<string, HashProvider>;
   private readonly canonicalProviders: HashProvider[];

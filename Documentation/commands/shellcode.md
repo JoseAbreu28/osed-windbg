@@ -1,6 +1,6 @@
 # Shellcode commands
 
-Use these commands to build the egghunter, encode a payload around bad characters, and pad the landing zone.
+Use these commands to build the egghunter, write custom shellcode, encode a payload around bad characters, and pad the landing zone.
 
 Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../COMMANDS.md#conventions) explains byte lists, addresses, and optional arguments. `dx @$osed().help("<command>", "full")` prints the built-in help.
 
@@ -9,6 +9,9 @@ Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../CO
 | [`egghunter`](#egghunter) | Print an egghunter stub for a 4-byte tag, as hex and as Python bytes, and flag stub bytes that are bad characters. |
 | [`encode`](#encode) | XOR-encode a payload so that it contains none of the excluded bytes, and print the decoder stub with it. |
 | [`nop`](#nop) | Print a NOP sled of `length` bytes. |
+| [`sc.push_string`](#scpush_string) | Print x86 pushes that build a NUL-terminated string on the stack with no `00` or bad byte. |
+| [`sc.call_frame`](#sccall_frame) | Print the pushes and calls for one stdcall API call through the `sc.template` resolver, with the ROR13 hash. |
+| [`sc.template`](#sctemplate) | Print a complete `build_sc.py` that assembles custom shellcode with Keystone and reports every bad byte. |
 
 ### egghunter
 
@@ -89,3 +92,151 @@ dx @$osed().nop(16, 0x90)
 ```
 
 `byte` defaults to `0x90`.
+
+## Write custom shellcode
+
+`sc.push_string`, `sc.call_frame`, and `sc.template` print assembly text and read nothing from the target, so they work in any process. They write 32-bit code only. Write one shellcode by hand first, with the PEB walk, the export walk, and the hash loop, before you rely on the generator. You then know what to change when a fixed line holds a bad character.
+
+### sc.push_string
+
+Print x86 pushes that build a NUL-terminated string on the stack with no `00` or bad byte.
+
+```text
+sc.push_string(text, badchars?, register?)
+```
+
+```text
+dx @$osed().sc.push_string("calc.exe")
+dx @$osed().sc.push_string("cmd /c dir", "00 0A 0D 20", "ebx")
+```
+
+The text is split into little-endian dwords, and the last dword is pushed first, so ESP ends at the first character. When the length is a multiple of 4, the terminator is a separate zero dword built with `xor reg, reg ; push reg`. A partial last dword holds `00` bytes, so it is built through a scratch register. The command tries `push imm`, then `mov reg, ~v ; not reg`, `mov reg, -v ; neg reg`, `mov reg, v ^ key ; xor reg, key`, and `mov reg, v - k ; add reg, k`. It keeps the first form whose bytes, opcodes included, avoid `00` and every bad character. The scratch register is `eax`, then `ecx`, then `edx`. Pass `register` to copy ESP into it after the pushes, before later pushes move ESP away from the string.
+
+Each line shows its bytes and the 4 characters it pushes. The same lines then print as a Keystone `CODE` string:
+
+```text
+xor eax, eax     ; 31 C0
+push eax         ; 50              "\0\0\0\0"
+push 0x6578652e  ; 68 2E 65 78 65  ".exe"
+push 0x636c6163  ; 68 63 61 6C 63  "calc"
+
+CODE = (
+    "xor eax, eax;"
+    "push eax;"         # "\0\0\0\0"
+    "push 0x6578652e;"  # ".exe"
+    "push 0x636c6163;"  # "calc"
+)
+```
+
+With spaces as bad characters, every dword that holds a space goes through a register:
+
+```text
+mov eax, 0xffff8d96  ; B8 96 8D FF FF
+not eax              ; F7 D0
+push eax             ; 50              "ir\0\0"
+mov eax, 0x9bdf9cd0  ; B8 D0 9C DF 9B
+not eax              ; F7 D0
+push eax             ; 50              "/c d"
+mov eax, 0xdf9b929c  ; B8 9C 92 9B DF
+not eax              ; F7 D0
+push eax             ; 50              "cmd "
+mov ebx, esp         ; 89 E3           ebx -> "cmd /c dir"
+```
+
+`00` is always treated as bad. The command fails when the text is empty, when `register` is `esp`, or when no listed form avoids the bad characters.
+
+### sc.call_frame
+
+Print the pushes and calls for one stdcall API call through the `sc.template` resolver, with the ROR13 hash.
+
+```text
+sc.call_frame(api, args..., "bad=<list>"?)
+```
+
+```text
+dx @$osed().sc.call_frame("WinExec", "<ptr to cmd>", "1")
+dx @$osed().sc.call_frame("TerminateProcess", "-1", "0", "bad=00 0A 0D")
+```
+
+The arguments are pushed in reverse order, with one comment each. A number is pushed with the same null-free forms as `sc.push_string`, through a scratch register that no argument names. A register, an `[ebp±n]` slot, or any other expression is pushed as written. Text in angle brackets is marked as a placeholder to replace before you assemble. Then come the ROR13 hash of the export name, the module base, `call dword ptr [ebp-0x04]` to resolve the address, and `call eax`:
+
+```text
+push 0x1                   ; 6A 01           arg2 uCmdShow = 1
+push <ptr to cmd>          ; ??              arg1 lpCmdLine = <ptr to cmd> (placeholder)
+push 0xe8afe98             ; 68 98 FE 8A 0E  ROR13("WinExec") = 0x0e8afe98
+push dword ptr [ebp-0x08]  ; FF 75 F8        kernel32 base
+call dword ptr [ebp-0x04]  ; FF 55 FC        resolver: eax = WinExec
+call eax                   ; FF D0           WinExec pops its 2 argument(s)
+```
+
+The frame assumes the `sc.template` slots below EBP: the resolver at `[ebp-0x04]`, the kernel32 base at `[ebp-0x08]`, and the last `LoadLibraryA` base at `[ebp-0x0c]`. A known API outside kernel32, such as `WSAStartup` or `MessageBoxA`, takes its base from `[ebp-0x0c]`. The prototype table names the arguments of `WinExec`, `ExitProcess`, `TerminateProcess`, `ExitThread`, `LoadLibraryA`, `GetProcAddress`, `VirtualAlloc`, `VirtualProtect`, `CreateProcessA`, `WaitForSingleObject`, `WSAStartup`, `WSASocketA`, `connect`, and `MessageBoxA`, and warns when the argument count differs. A known name typed in another case is hashed with its export spelling. An unknown name prints a warning and is hashed exactly as typed, because export names are case-sensitive. A fixed line that holds a bad character, such as `FF` in `push dword ptr [ebp-0x08]`, prints a warning that names the line.
+
+### sc.template
+
+Print a complete `build_sc.py` that assembles custom shellcode with Keystone and reports every bad byte.
+
+```text
+sc.template(task..., "bad=<list>"?)
+```
+
+```text
+dx @$osed().sc.template("winexec=calc.exe", "exit")
+dx @$osed().sc.template("show=0", "winexec=cmd.exe /c whoami > C:\\out.txt", "terminate", "bad=00 0A 0D 20")
+dx @$osed().sc.template("loadlibrary=user32.dll", "getprocaddress=MessageBoxA")
+```
+
+Tasks run in the order you give them:
+
+| Task | Code it adds |
+| --- | --- |
+| `winexec=<command line>` | Push the command with `sc.push_string`, then call `WinExec(ebx, show)`. |
+| `loadlibrary=<dll>` | Call `LoadLibraryA(name)` and store the base at `[ebp-0x0c]`. |
+| `getprocaddress=<export>` | Call `GetProcAddress([ebp-0x0c], name)` and store the address at `[ebp-0x10]`. Before any `loadlibrary` task, `[ebp-0x0c]` holds the kernel32 base. |
+| `exit` | Call `ExitProcess(0)`. |
+| `terminate` | Call `TerminateProcess(-1, 0)`, where `-1` is the current process. |
+| `show=<n>` | Set `uCmdShow` for later `winexec` tasks. The default is 1. |
+| `bad=<list>` | Set the bad characters for the generated pushes and for the script check. |
+
+With no task you get `winexec=calc.exe` and `exit`. Without an exit task, the code returns to its caller, which suits a test loader that calls the shellcode.
+
+The assembly has five parts:
+
+1. `pushad ; mov ebp, esp ; add esp, 0xfffff810` saves the registers and reserves 0x7f0 bytes. An `add` of a negative number has no `00` byte, unlike `sub esp, 0x7f0`.
+2. The kernel32 lookup reads the PEB through `fs:[ecx+0x30]`, then `Ldr` and `InInitializationOrderModuleList`. It takes the first module whose `BaseDllName` is 24 bytes long (12 UTF-16 characters) and starts with `K` in either case.
+3. A short forward `jmp` reaches a backward `call`, which pushes the address of `resolve_hash` with a negative rel32 and no `00` byte. That address goes to `[ebp-0x04]`.
+4. Each task adds its call frames. `resolve_hash(module_base, hash)` walks the export name table, hashes each name, and maps a match through the ordinal table to the function address in EAX, or 0 when no name matches. It pops both arguments and keeps every register except EAX. The hash loop uses `rol edx, 0x13`, which equals `ror edx, 13` and keeps the common bad character `0D` out of the code.
+5. `mov esp, ebp ; popad ; ret` returns to the caller.
+
+The Python part assembles the whole `ASM` list with `Ks(KS_ARCH_X86, KS_MODE_32)`. It also assembles each line alone at its final offset and checks that the lines add up to the whole. It then prints the size and each bad byte with its offset and its line, writes `shellcode.bin`, and prints the bytes as a `shellcode += b"\x.."` literal. The script exits with code 1 when a bad byte is present. The first lines for `sc.template("winexec=calc.exe", "exit")`:
+
+```python
+#!/usr/bin/env python3
+# build_sc.py from osed-windbg sc.template("winexec=calc.exe", "exit")
+# Needs Python 3 and keystone-engine (pip install keystone-engine).
+import re
+import sys
+
+from keystone import Ks, KS_ARCH_X86, KS_MODE_32
+
+BADCHARS = bytes([0x00])
+
+ASM = [
+    # Entry: save the caller's registers, open a frame, and move esp 0x7f0 bytes down.
+    "pushad",
+    "mov ebp, esp",
+    "add esp, 0xfffff810",                # esp = ebp - 0x7f0; a sub of 0x7f0 would hold 00 bytes
+```
+
+The output of `python build_sc.py`:
+
+```text
+[+] 213 bytes
+[+] 0 bad bytes against 00
+[+] wrote shellcode.bin
+shellcode = b""
+shellcode += b"\x60\x89\xe5\x81\xc4\x10\xf8\xff\xff\x31\xc9\x64\x8b\x41\x30\x8b"
+```
+
+The default output holds no `00` byte, and the fixed routines also avoid `0A`, `0D`, and `20`. A bad character that you add can still hit a fixed line, for example `FF` in `call dword ptr [ebp-0x04]`. The script names that line, and you rewrite it by hand. The kernel32 match assumes that kernel32.dll is the first 12-character name that starts with `K` in initialization order. That held on Windows 10 build 19045 and Windows 11 build 26200, where a WinExec template ran in a 32-bit process.
+
+To run the result, build `tests/manual/sc_writer/loader.c`, a 32-bit loader that copies `shellcode.bin` into RWX memory and calls it. The loader exits with `0x600D` when the shellcode returns. `tests/manual/sc_writer/check.py` assembles every line the three commands print with Keystone and compares the bytes.

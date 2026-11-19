@@ -3,7 +3,10 @@ import * as out from "../core/output";
 import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES, HelpEntry } from "../core/help_catalog";
 import { HelpDocument, renderAll, renderCandidates, renderCompactDetail, renderFullDetail, renderNamespace, renderOverview, renderSearch } from "../core/help_render";
 
+const SHELLCODE_WRITERS = ["sc.push_string", "sc.call_frame", "sc.template"];
+
 const categoryForName = (name: string): string => {
+  if (SHELLCODE_WRITERS.includes(name)) return "shellcode";
   if (name.startsWith("rop") || name === "dep_function" || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
   if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
   if (name.startsWith("sc.")) return "pe-api";
@@ -96,6 +99,9 @@ const LISTING_SUMMARIES: Record<string, string> = {
   "sc.peb": "Dump PEB-oriented module evidence",
   "sc.module_pages": "Report module size and page count",
   "sc.page_summary": "Bucket module pages by protection",
+  "sc.push_string": "x86 pushes that build a string on the stack, null-free",
+  "sc.call_frame": "x86 push sequence and ROR13 hash for one API call",
+  "sc.template": "Print a Keystone build_sc.py for custom shellcode",
   "str.find": "Search process memory for strings",
   "str.read": "Read a string from memory",
   "str.refs": "Find executable pointers to a string",
@@ -137,7 +143,10 @@ function registryDocument(command: Command): HelpDocument {
 
 function groupedDocuments(registry: CommandRegistry): Map<string, HelpDocument[]> {
   const documents = new Map<string, HelpDocument>();
-  for (const command of registry.getAll()) documents.set(command.name, registryDocument(command));
+  for (const command of registry.getAll()) {
+    // sc_* registry commands back the sc.* writer helpers; only the dotted names are listed.
+    if (!command.name.startsWith("sc_")) documents.set(command.name, registryDocument(command));
+  }
   for (const entry of NAMESPACE_HELP_ENTRIES) documents.set(entry.name, toDocument(entry));
   documents.delete("rop");
   documents.delete("exploit");
@@ -155,7 +164,7 @@ const OVERVIEW_WORKFLOW: Array<[string, string[]]> = [
   ["payload", ["pattern_create", "pattern_offset", "badchars"]],
   ["rop", ["rop.scan_live", "rop.api_plan", "rop.api_build", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove"]],
   ["pe-api", ["sc.iat", "sc.resolve"]],
-  ["shellcode", ["encode", "egghunter"]],
+  ["shellcode", ["encode", "egghunter", "sc.template"]],
   ["seh", ["seh", "seh_ppr"]],
   ["strings", ["str.find"]],
   ["format", ["fmt_build"]],
@@ -187,6 +196,7 @@ function namespaceTask(name: string, entry: HelpDocument): string {
   }
   if (name === "sc") {
     if (entry.name.startsWith("sc.iat")) return "imports";
+    if (SHELLCODE_WRITERS.includes(entry.name)) return "shellcode writing";
     if (["sc.exports", "sc.export", "sc.exportat", "sc.exportdir", "sc.exportwalk", "sc.resolve", "sc.hash", "sc.hashes", "sc.hashresolve", "sc.algorithms"].includes(entry.name)) return "api resolution";
     return "pe and modules";
   }

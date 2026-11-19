@@ -43,6 +43,7 @@ import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
 import { createDepFunctionCommand } from "./commands/dep_function";
+import { createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
@@ -444,6 +445,9 @@ function registerAll(): void {
     createNopCommand(),
     createRopTemplateCommand(),
     createDepFunctionCommand(),
+    createScPushStringCommand(),
+    createScCallFrameCommand(),
+    createScTemplateCommand(),
     ...createFmtCommands(),
     createExploitCommand(),
     createHelpCommand(registry),
@@ -3248,7 +3252,14 @@ function bindApi(): OsedApi {
     return true;
   };
 
-  api.sc = sc;
+  const writer = (name: string, command: string) => (...args: unknown[]) =>
+    args.length === 1 && args[0] === "help" ? helperHelp(name) : invoke(command, args);
+  api.sc = {
+    ...sc,
+    push_string: writer("sc.push_string", "sc_push_string"),
+    call_frame: writer("sc.call_frame", "sc_call_frame"),
+    template: writer("sc.template", "sc_template"),
+  };
 
   const analysisAddress = (value: unknown): bigint => {
     if (typeof value === "bigint" && value >= BigInt(0)) return value;
@@ -3445,6 +3456,14 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
       return { api: args[0], module: args[1] };
     case "dep_function":
       return { method: args[0] };
+    case "sc_push_string":
+      return { text: args[0], badchars: args[1], register: args[2] };
+    case "sc_call_frame": {
+      const { rest, bad } = splitBadToken(args.slice(1));
+      return { api: args[0], args: rest, badchars: bad };
+    }
+    case "sc_template":
+      return { tasks: args.map(String) };
     case "fmt_build":
       // Positional single-write form for the dx REPL, which cannot pass object/array literals.
       // Multi-write callers use the object form (handled by the isPlainObject passthrough above).

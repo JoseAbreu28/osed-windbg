@@ -7,6 +7,12 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-19 - Custom shellcode writers
+
+- `sc.push_string(text, badchars?, register?)` prints the pushes that build a NUL-terminated string on the stack, last dword first, with the bytes and the 4 characters of each push, then the same lines as a Keystone `CODE` string. The terminator and partial dwords are built through a scratch register (`not`, `neg`, `xor` key, or `add` split), so no line holds `00` or a given bad character.
+- `sc.call_frame(api, args...)` prints one stdcall call through the template resolver: the arguments in reverse order with a comment each, the ROR13 hash, `call [ebp-0x04]`, and `call eax`. A prototype table names the arguments of common APIs, and an unknown name still gets its hash with a warning.
+- `sc.template(task...)` prints a complete `build_sc.py`: prologue, kernel32 lookup through the PEB loader list, a ROR13 export resolver stored with a backward call, call frames for `winexec`, `loadlibrary`, `getprocaddress`, `exit`, and `terminate` tasks, and the epilogue. The script assembles with Keystone, maps each bad byte to its offset and line, and writes `shellcode.bin`. The default output is 213 bytes with no `00`, and the fixed routines also avoid `0A 0D 20`. A WinExec template ran in a 32-bit loader on Windows 10 (19045) and Windows 11 (26200) and wrote its marker file, both returning to the loader and through ExitProcess.
+
 ### 2026-11-19 - Bad characters in blocks
 
 - `badchar_function(badchars?, space?)` adds a `SPACE` line and a `badchar_block(start, size, bad)` helper. A block starts at a byte value, so adding a bad char never shifts the blocks still to send.
