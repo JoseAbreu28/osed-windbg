@@ -3386,14 +3386,17 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
     case "badchars":
       return { address: args[0], exclude: parseHexByteList(args[1]) };
     case "badchar_array":
-    case "badchar_function":
       return { exclude: parseHexByteList(args[0]) };
+    case "badchar_function":
+      return { exclude: parseHexByteList(args[0]), space: args[1] };
     case "badchar_find":
       return {
         address: args[0],
         exclude: parseHexByteList(args[1]),
         windowBytes: args[2],
         minRun: args[3],
+        start: args[4],
+        size: args[5],
       };
     case "egghunter":
       return { tag: args[0], mode: args[1], wow64: args[2], badchars: parseHexByteList(args[3]), os: args[4], syscall: args[5] };

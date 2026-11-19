@@ -15,11 +15,15 @@ describe("badchars logic", () => {
   });
 
   test("writes a Python helper that builds the test array from BADCHARS", () => {
-    expect(pythonBadcharHelper([0x00, 0x0a])).toEqual([
+    expect(pythonBadcharHelper([0x00, 0x0a], 76)).toEqual([
       'BADCHARS = b"\\x00\\x0a"  # add each new bad char here',
+      "SPACE = 76  # contiguous bytes after EIP (0 = no limit)",
       "",
       "def badchar_array(bad=BADCHARS):",
       "    return bytes(b for b in range(256) if b not in bad)",
+      "",
+      "def badchar_block(start=0x01, size=SPACE, bad=BADCHARS):",
+      "    return bytes(b for b in range(start, 256) if b not in bad)[:size or None]",
     ]);
   });
 

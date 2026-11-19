@@ -83,6 +83,8 @@ dx @$osed().badchar_find()
 
 The output ends with the updated `BADCHARS` line and the exact command for the next run. Add the byte, send again, and repeat until it reports no corrupted byte. If you know where the array starts, run `dx @$osed().badchars(0x0012F800, "00 0A 0D")` instead.
 
+If the whole array does not fit after EIP, pass the space to the helper, for example `dx @$osed().badchar_function("00", 76)` for 76 bytes. Send `badchar_block(0x01)` and run the `First command` it prints. Each `badchar_find` run then ends with the `Payload line` and the `Next command` for the next block, until it reports that all bytes up to 0xFF were tested. [Test in blocks](Documentation/commands/payload.md#test-in-blocks-when-the-space-after-eip-is-small) shows a full run.
+
 ### 4. Pick a module
 
 ```text
@@ -229,6 +231,7 @@ Each file documents one category with a signature, examples, and the meaning of 
 - `seh.visualize()`, `triage()`, `findmsp()`, and `find_stack_bytes()` read the TEB from `$teb`, so they work without symbols.
 - `badchar_function` is a new command.
 - `badchars` and `badchar_find` end with the `Exploit line` and the `Next command` for the next run.
+- `badchar_function(badchars, space)` and `badchar_find(..., start, size)` test the array in blocks when only a few bytes fit after EIP.
 
 ## Build from source
 

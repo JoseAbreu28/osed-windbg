@@ -54,19 +54,61 @@ export function pythonBadcharsLine(badchars: number[]): string {
   return `BADCHARS = ${formatByteArray(sorted, "python")}`;
 }
 
-export function nextBadcharCommand(command: "badchars" | "badchar_find", addressArg: string, badchars: number[]): string {
+export function nextBadcharCommand(
+  command: "badchars" | "badchar_find",
+  addressArg: string,
+  badchars: number[],
+  trailingArgs: Array<string | number> = [],
+): string {
   const sorted = [...new Set(badchars.map((value) => value & 0xff))].sort((a, b) => a - b);
-  return `dx @$osed().${command}(${addressArg}, "${sorted.map((value) => hexByte(value).toUpperCase()).join(" ")}")`;
+  const list = `"${sorted.map((value) => hexByte(value).toUpperCase()).join(" ")}"`;
+  return `dx @$osed().${command}(${[addressArg, list, ...trailingArgs].join(", ")})`;
 }
 
 // One list to grow each run; the exploit derives the test array from it instead of pasting 255 bytes again.
-export function pythonBadcharHelper(badchars: number[]): string[] {
+// A block starts at a byte value rather than a slice index, so adding a bad char never shifts later blocks.
+export function pythonBadcharHelper(badchars: number[], space = 0): string[] {
   return [
     `${pythonBadcharsLine(badchars)}  # add each new bad char here`,
+    `SPACE = ${space}  # contiguous bytes after EIP (0 = no limit)`,
     "",
     "def badchar_array(bad=BADCHARS):",
     "    return bytes(b for b in range(256) if b not in bad)",
+    "",
+    "def badchar_block(start=0x01, size=SPACE, bad=BADCHARS):",
+    "    return bytes(b for b in range(start, 256) if b not in bad)[:size or None]",
   ];
+}
+
+export function pythonBlockLine(start: number): string {
+  return `payload += badchar_block(0x${hexByte(start).toUpperCase()})`;
+}
+
+// One send of the test array: the bytes from `start` up, minus the excludes, cut to `size` when the
+// space after EIP is too small for the whole array.
+export type BadcharBlock = { start: number; size?: number };
+
+export const FIRST_BLOCK_START = 0x01;
+
+export function blockBytes(exclude: number[], block: BadcharBlock): number[] {
+  const bytes = expectedBytes(exclude).filter((value) => value >= block.start);
+  return block.size === undefined ? bytes : bytes.slice(0, block.size);
+}
+
+export type BlockStep =
+  | { kind: "resend"; start: number }
+  | { kind: "next"; start: number }
+  | { kind: "done" };
+
+// A block with a bad char or a real cut goes again with the grown list. A block that arrived whole
+// moves on to the first byte after it; the stack past the block is outside the space, not a terminator.
+export function nextBlockStep(block: BadcharBlock, sent: number[], compared: BadcharComparison, nextExclude: number[]): BlockStep {
+  if (compared.badChars.length > 0 || compared.truncatedAt !== undefined) {
+    return { kind: "resend", start: block.start };
+  }
+  const last = sent[sent.length - 1];
+  const after = expectedBytes(nextExclude).find((value) => value > last);
+  return after === undefined ? { kind: "done" } : { kind: "next", start: after };
 }
 
 export function locateExpectedArray(window: Uint8Array, expected: number[], minRun = 8): ArrayLocation | undefined {

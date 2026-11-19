@@ -2,7 +2,21 @@ import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 import { getPointerSize, readMemory, tryReadMemory } from "../core/memory";
 import { normalizeAddress, normalizeByteArray } from "../core/validation";
-import { compareBadchars, expectedBytes, findReturnSlot, formatByteArray, locateExpectedArray, nextBadcharCommand, pythonBadcharHelper, pythonBadcharsLine } from "../logic/badchars_logic";
+import {
+  BadcharBlock,
+  FIRST_BLOCK_START,
+  blockBytes,
+  compareBadchars,
+  expectedBytes,
+  findReturnSlot,
+  formatByteArray,
+  locateExpectedArray,
+  nextBadcharCommand,
+  nextBlockStep,
+  pythonBadcharHelper,
+  pythonBadcharsLine,
+  pythonBlockLine,
+} from "../logic/badchars_logic";
 import { findModuleByAddress } from "./modules";
 import { readRegisters } from "./triage";
 
@@ -27,6 +41,17 @@ function readLargestWindow(start: bigint, maxLength: number): Uint8Array | undef
   }
 
   return best;
+}
+
+const DEFAULT_WINDOW_BYTES = 2048;
+const DEFAULT_MIN_RUN = 8;
+
+function hexArg(value: number): string {
+  return `0x${value.toString(16).toUpperCase().padStart(2, "0")}`;
+}
+
+function byteRange(bytes: number[]): string {
+  return `${out.formatHexByte(bytes[0])}..${out.formatHexByte(bytes[bytes.length - 1])}`;
 }
 
 // Covers `ret N` cleanup between the popped return address and the stack pointer.
@@ -171,23 +196,47 @@ export function createBadcharFunctionCommand(): Command {
   return {
     name: "badchar_function",
     description: "Print a Python BADCHARS list plus a badchar_array() helper for the exploit, so each run only grows the list.",
-    usage: "dx @$osed().badchar_function(badchars?)",
-    examples: ['dx @$osed().badchar_function("00")', 'dx @$osed().badchar_function("00 0A 0D")'],
+    usage: "dx @$osed().badchar_function(badchars?, space?)",
+    examples: [
+      'dx @$osed().badchar_function("00")',
+      'dx @$osed().badchar_function("00 0A 0D")',
+      'dx @$osed().badchar_function("00", 76)    // only 76 bytes fit after EIP: test in blocks',
+    ],
     schema: {
       exclude: { type: "array", elementType: "number", default: [] },
+      space: { type: "number", min: 0, max: 256, default: 0 },
     },
     execute(options: Record<string, unknown>): CommandResult {
       const normalizedExclude = normalizeByteArray((options.exclude as number[]) ?? []);
-      const lines = pythonBadcharHelper(normalizedExclude.values);
+      const space = options.space as number;
+      const lines = pythonBadcharHelper(normalizedExclude.values, space);
 
       out.section("Bad Character Python Helper");
       for (const line of lines) out.print(line);
       out.print("");
-      out.print("payload += badchar_array()  # where the test array goes");
-      out.whyItMatters("Each badchar_find run prints the updated BADCHARS line; paste it over this one and send again.");
+      if (space > 0) {
+        const firstCommand = nextBadcharCommand("badchar_find", "@esp", normalizedExclude.values, [
+          DEFAULT_WINDOW_BYTES,
+          DEFAULT_MIN_RUN,
+          hexArg(FIRST_BLOCK_START),
+          space,
+        ]);
+        out.print(`${pythonBlockLine(FIRST_BLOCK_START)}  # first block, right after EIP`);
+        out.print("");
+        out.print(`First command: ${firstCommand}`);
+        out.whyItMatters("Each badchar_find run prints the updated BADCHARS line, the next block, and the next command; paste them and send again.");
+      } else {
+        out.print("payload += badchar_array()  # where the test array goes");
+        out.whyItMatters("Each badchar_find run prints the updated BADCHARS line; paste it over this one and send again.");
+      }
 
       const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
-      return result("badchar_function", { ...options, exclude: normalizedExclude.values }, [{ exclude: normalizedExclude.values, lines }], warnings);
+      return result(
+        "badchar_function",
+        { ...options, exclude: normalizedExclude.values },
+        [{ exclude: normalizedExclude.values, space, lines }],
+        warnings,
+      );
     },
   };
 }
@@ -196,18 +245,29 @@ export function createBadcharFindCommand(): Command {
   return {
     name: "badchar_find",
     description: "Locate a sent bad-character array in memory (near an address or the stack pointer) and report the first corrupted byte.",
-    usage: "dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?)",
-    examples: ["dx @$osed().badchar_find()", 'dx @$osed().badchar_find("0012F800", "00 0A 0D")'],
+    usage: "dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?, start?, size?)",
+    examples: [
+      "dx @$osed().badchar_find()",
+      'dx @$osed().badchar_find("0012F800", "00 0A 0D")',
+      'dx @$osed().badchar_find(@esp, "00", 2048, 8, 0x4E, 76)    // 76-byte block that starts at 0x4E',
+    ],
     schema: {
       address: { type: ["number", "string"] },
       exclude: { type: "array", elementType: "number", default: [] },
-      windowBytes: { type: "number", min: 256, max: 16384, default: 2048 },
-      minRun: { type: "number", min: 4, max: 64, default: 8 },
+      windowBytes: { type: "number", min: 256, max: 16384, default: DEFAULT_WINDOW_BYTES },
+      minRun: { type: "number", min: 4, max: 64, default: DEFAULT_MIN_RUN },
+      start: { type: "number", min: 0, max: 0xff },
+      size: { type: "number", min: 0, max: 256 },
     },
     execute(options: Record<string, unknown>): CommandResult {
       const pointerSize = getPointerSize();
       const normalizedExclude = normalizeByteArray((options.exclude as number[]) ?? []);
-      const expected = expectedBytes(normalizedExclude.values);
+      const size = (options.size as number | undefined) || undefined;
+      const block: BadcharBlock | undefined =
+        options.start !== undefined || size !== undefined
+          ? { start: (options.start as number | undefined) ?? FIRST_BLOCK_START, size }
+          : undefined;
+      const expected = block ? blockBytes(normalizedExclude.values, block) : expectedBytes(normalizedExclude.values);
       const windowBytes = options.windowBytes as number;
       const minRun = options.minRun as number;
 
@@ -229,6 +289,13 @@ export function createBadcharFindCommand(): Command {
       }
       out.info(`Anchor: ${anchorLabel}`);
       out.info(`Window: ${windowBytes} bytes, expecting a ${expected.length}-byte array.`);
+      if (block) {
+        if (expected.length === 0) {
+          out.warn(`No bytes left to test from ${out.formatHexByte(block.start)} with this exclude list.`);
+          return result("badchar_find", options, [{ located: false }], ["No bytes left to test."]);
+        }
+        out.info(`Block: ${byteRange(expected)}, ${expected.length} bytes.`);
+      }
 
       let window = tryReadMemory(anchor, windowBytes);
       const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
@@ -246,7 +313,8 @@ export function createBadcharFindCommand(): Command {
         out.warn(`Anchor range was only partially readable; scanned ${window.length} byte(s).`);
       }
 
-      const located = locateExpectedArray(window, expected, minRun);
+      // A short last block can never reach the default run length.
+      const located = locateExpectedArray(window, expected, Math.max(4, Math.min(minRun, expected.length)));
       let landing: bigint;
       let observed: Uint8Array;
       let locatedBy: "content" | "return-slot";
@@ -296,8 +364,9 @@ export function createBadcharFindCommand(): Command {
       if (compared.expectedConsumed < expected.length) {
         const lastTested = expected[compared.expectedConsumed - 1];
         const firstUntested = expected[compared.expectedConsumed];
+        const lastSent = block ? out.formatHexByte(expected[expected.length - 1]) : "0xFF";
         out.warn(
-          `Array truncated after ${out.formatHexByte(lastTested)}; bytes ${out.formatHexByte(firstUntested)}-0xFF not tested.`,
+          `Array truncated after ${out.formatHexByte(lastTested)}; bytes ${out.formatHexByte(firstUntested)}-${lastSent} not tested.`,
         );
         if (compared.truncatedAt !== undefined) {
           out.warn(`Likely terminator: ${out.formatHexByte(compared.truncatedAt)} (first byte that never arrived).`);
@@ -315,7 +384,25 @@ export function createBadcharFindCommand(): Command {
       );
       const nextRun = compared.truncatedAt === undefined ? allExclude : [...allExclude, compared.truncatedAt].sort((a, b) => a - b);
       out.info(`Exploit line: ${pythonBadcharsLine(nextRun)}`);
-      out.info(`Next command: ${nextBadcharCommand("badchar_find", options.address === undefined ? "@esp" : out.formatAddress(anchor, pointerSize), nextRun)}`);
+      // Block runs pass the address to reach start and size; @esp keeps the command valid after a restart moves the stack.
+      const anchorIsSp = options.address === undefined || (block !== undefined && anchor === readRegisters(pointerSize).sp);
+      const addressArg = anchorIsSp ? "@esp" : out.formatAddress(anchor, pointerSize);
+      const step = block ? nextBlockStep(block, expected, compared, nextRun) : undefined;
+      if (!block || !step) {
+        out.info(`Next command: ${nextBadcharCommand("badchar_find", addressArg, nextRun)}`);
+      } else if (step.kind === "done") {
+        out.info(`All bytes 0x01..0xFF tested; this was the last block. Final list: ${nextRun.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`);
+      } else {
+        if (step.kind === "next") {
+          out.info(`Block clean: ${byteRange(expected)} arrived. Bytes past the block are outside the space, not bad chars.`);
+          out.info(`Next block: ${byteRange(blockBytes(nextRun, { start: step.start, size: block.size }))}`);
+        } else {
+          out.info("Send the same block again with the grown list.");
+        }
+        const blockArgs = [windowBytes, minRun, hexArg(step.start), ...(block.size !== undefined ? [block.size] : [])];
+        out.info(`Payload line: ${pythonBlockLine(step.start)}`);
+        out.info(`Next command: ${nextBadcharCommand("badchar_find", addressArg, nextRun, blockArgs)}`);
+      }
 
       return result(
         "badchar_find",
@@ -335,6 +422,7 @@ export function createBadcharFindCommand(): Command {
             truncatedAt: compared.truncatedAt,
             allExclude,
             exclude: normalizedExclude.values,
+            ...(block ? { block: { ...block, sent: expected.length, step } } : {}),
           },
         ],
         warnings,

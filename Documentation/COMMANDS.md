@@ -36,8 +36,8 @@ This page lists every command that the script registers. Each name links to its 
 | --- | --- | --- |
 | [`add_esp`](commands/rop.md#add_esp) | [ROP and DEP](commands/rop.md) | Find `add esp, N ; ret` gadgets, which skip stack slots. |
 | [`badchar_array`](commands/payload.md#badchar_array) | [Pattern and bad characters](commands/payload.md) | Print the bad-character test array, 0x00 to 0xFF minus the excluded bytes, as Python, C, and hex. |
-| [`badchar_find`](commands/payload.md#badchar_find) | [Pattern and bad characters](commands/payload.md) | Find the test array in memory near an address or ESP and report the first corrupted byte. |
-| [`badchar_function`](commands/payload.md#badchar_function) | [Pattern and bad characters](commands/payload.md) | Print a Python `BADCHARS` line and a `badchar_array()` helper to paste into the exploit once. |
+| [`badchar_find`](commands/payload.md#badchar_find) | [Pattern and bad characters](commands/payload.md) | Find the test array or one block of it in memory near an address or ESP and report the first corrupted byte. |
+| [`badchar_function`](commands/payload.md#badchar_function) | [Pattern and bad characters](commands/payload.md) | Print a Python `BADCHARS` line plus `badchar_array()` and `badchar_block()` helpers to paste into the exploit once. |
 | [`badchars`](commands/payload.md#badchars) | [Pattern and bad characters](commands/payload.md) | Compare the bytes at a known address with the expected test array and list the bytes that differ. |
 | [`can_execute`](commands/target.md#can_execute) | [Target and memory](commands/target.md) | Return `true`, `false`, or `null` for whether the memory at an address is executable. |
 | [`clear_last_result`](commands/tools.md#clear_last_result) | [Leak, math, and session](commands/tools.md) | Clear the stored last result. |

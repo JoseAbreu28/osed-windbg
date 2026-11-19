@@ -7,6 +7,11 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-19 - Bad characters in blocks
+
+- `badchar_function(badchars?, space?)` adds a `SPACE` line and a `badchar_block(start, size, bad)` helper. A block starts at a byte value, so adding a bad char never shifts the blocks still to send.
+- `badchar_find` takes `start` and `size` after `minRun`. It compares memory with that block only, so later blocks no longer report every byte before `start` as a bad char. A block that arrives whole moves on to the next start instead of naming the byte after it as a terminator. Each run ends with the `Payload line` and the `Next command` for the next block, and the last block ends with the final list. Without `start` and `size` the output is unchanged.
+
 ### 2026-11-19 - Null-free egghunters
 
 - `egghunter` stubs no longer contain null bytes. `ntaccess` loads the syscall number with the shortest form that avoids `00` and the given bad characters (`push imm8 ; pop eax`, `xor eax, eax ; mov al/ah/ax`, or `mov eax, ~n ; not eax`) instead of `mov eax, imm32`, and its jumps are computed from labels. The Windows 10 and 11 WOW64 stub drops from 51 to 49 bytes and passes a `00 0A 0D` check; it was rerun in a WOW64 process and found the egg. The native Windows 10 stub is 35 bytes.
