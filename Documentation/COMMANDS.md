@@ -1,385 +1,186 @@
-# Command Reference
+# Command index
 
-All user-facing entry points are invoked via `dx @$osed().<name>(...)`.
-Most command calls return `true`/`false` for concise `dx` output. `memory()` and `math()` return their structured evidence directly, `landing()` returns debugger-friendly observation rows, and `can_execute()` returns `true`, `false`, or `null`.
-Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
+This page lists every command that the script registers. Each name links to its entry in a category file. The [README](../README.md#exam-workflow) shows the commands in exam order.
 
-## Top-Level Commands
+## Conventions
 
-| Command | Syntax | Example | Notes |
-| --- | --- | --- | --- |
-| `help` | `dx @$osed().help(command?)` | `dx @$osed().help("badchars")` | Lists all commands or one schema. |
-| `reload` | `dx @$osed().reload()` | `dx @$osed().reload()` | Clears and re-registers the command registry. |
-| `pattern_create` | `dx @$osed().pattern_create(length, type?)` | `dx @$osed().pattern_create(300, "msf")` | Generates cyclic pattern text. |
-| `pattern_offset` | `dx @$osed().pattern_offset(value, type?)` | `dx @$osed().pattern_offset(0x39654138, "msf")` | Finds an offset in the selected pattern family. |
-| `badchars` | `dx @$osed().badchars(address, exclude?)` | `dx @$osed().badchars(0x00B8F900)` | Compares memory bytes against the expected byte sequence at a known address. **[fork]** Ends with `Exploit line: BADCHARS = b"..."` and `Next command: dx @$osed().badchars(<addr>, "<list>")`, with any truncation byte already added. |
-| `badchar_array` | `dx @$osed().badchar_array(exclude?)` | `dx @$osed().badchar_array([0, 10, 13])` | Generates the test byte array (0x00-0xFF minus excludes) in Python, C, and hex paste-ready forms. |
-| `badchar_function` | `dx @$osed().badchar_function(badchars?)` | `dx @$osed().badchar_function("00")` | **[fork]** Prints a Python `BADCHARS = b"..."` line plus a `badchar_array()` helper that derives the test array from it, so each run only grows one list in the exploit. |
-| `badchar_find` | `dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?)` | `dx @$osed().badchar_find()` | Auto-locates the sent test array near an address or the stack pointer, reports the landing address, the first corrupted byte, and the suggested next exclude set. **[fork]** Names the likely terminator when the array was cut early (for example by a `ret N`), then ends with `Exploit line: BADCHARS = b"..."` and `Next command: dx @$osed().badchar_find(<addr>, "<list>")` with the terminator already added. `dx` evaluates arithmetic first, so `badchar_find(0x0019ed34+8, "00 0A 0D")` works. Pseudo-registers such as `@$t0` arrive as 64-bit `Int64` objects and are rejected; pass `(unsigned int)@$t0`. |
-| `egghunter` | `dx @$osed().egghunter(tag?, mode?, wow64?, badchars?, os?, syscall?)` | `dx @$osed().egghunter("W00T", "ntaccess", false, "", "win7")` | Generates egghunter shellcode (hex + Python). Mode `ntaccess` (34 bytes, INT 0x2E syscall) or `seh` (70 bytes, SEH-based — no syscall dependency, contains null bytes). `os` selects the syscall number preset: `"win10"` (default, 0x1C9) or `"win7"` (0x02). Optional `syscall` overrides the preset (get yours with `u ntdll!NtAccessCheckAndAuditAlarm L1`). Reports any stub byte that collides with the supplied bad-character list. |
-| `exploit` | `dx @$osed().exploit(mode, tag?, offset?, address?)` | `dx @$osed().exploit("offset")` | Emits deterministic exploit-workflow command strings. |
-| `seh.visualize` | `dx @$osed().seh.visualize()` | `dx @$osed().seh.visualize()` | Walks the current thread SEH chain. x86-only in v1. **[fork]** Works without symbols: the TEB comes from the engine's `$teb` (WOW64 32-bit TEB at native TEB + `0x2000`), accepted only when the self pointer at TEB + `0x18` matches. |
-| `triage` | `dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)` | `dx @$osed().triage(8000, "00 0A 0D", "essfunc", 2048)` | Fast crash triage for control, stack, and gadget context. Uses EIP/ESP on x86 and RIP/RSP on x64; SEH/PPR evidence is x86-only. |
-| `findmsp` | `dx @$osed().findmsp(patternLength?, stackBytes?, probeBytes?)` | `dx @$osed().findmsp(20000, 4096)` | Comprehensive cyclic-pattern offset scan across all registers, dword-aligned stack slots, SEH record fields, and pointer targets. Reports pattern offset and a confidence per hit (EXACT = unique offset, CONSERVATIVE = repeats). |
-| `memory` | `dx @$osed().memory(address)` | `dx @$osed().memory(0x0012F800)` | Returns normalized region evidence. Unknown semantic flags are `null`; raw numeric metadata is preserved. |
-| `landing` | `dx @$osed().landing(address?)` | `dx @$osed().landing()` | Returns byte-range and memory observations at an explicit address or ESP/RSP. |
-| `math` | `dx @$osed().math(value, bits?)` | `dx @$osed().math(0xFFFFFFD6, 32)` | Formats integers as hex, signed, unsigned, little-endian bytes, and two's complement. |
-| `modules` | `dx @$osed().modules(filter?)` | `dx @$osed().modules("essfunc")` | Lists modules and mitigation state. |
-| `rop_find` | `dx @$osed().rop_find(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop_find("essfunc")` | Flat alias for legacy ROP exploration and module triage. |
-| `find_bytes` | `dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)` | `dx @$osed().find_bytes("vulnserver", "FF E4")` | Finds byte sequences in PE sections of the named loaded module. By default this searches executable sections only. |
-| `find_stack_bytes` | `dx @$osed().find_stack_bytes(bytes, maxResults?, stackBytes?)` | `dx @$osed().find_stack_bytes("43 43 43 43")` | Finds byte sequences in the current thread stack only, starting at `ESP`/`RSP`. Does not search heap or arbitrary process memory. |
-| `find_mem_bytes` | `dx @$osed().find_mem_bytes(address, length, bytes, maxResults?)` | `dx @$osed().find_mem_bytes(0x14800000, 0x16000, "43 43 43 43")` | Finds byte sequences in an explicit readable live-memory range. Use this for stack, heap, mapped regions, or module-backed memory when you already know the address window. |
-| `find_ptr` | `dx @$osed().find_ptr(instruction, module?, badchars?, maxResults?, executableOnly?)` | `dx @$osed().find_ptr("jmp esp", "essfunc", "00 0A 0D")` | Searches executable memory for an instruction and filters surviving pointers whose address contains no bad characters. Composable filter stack; the live-memory feed for the ROP layer. |
-| `rop_suggest` | `dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)` | `dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")` | Suggests validated gadget patterns. |
-| `retn` | `dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().retn("essfunc")` | Finds `retn N` gadgets for stdcall chain adjustment. |
-| `add_esp` | `dx @$osed().add_esp(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().add_esp("essfunc")` | Finds `add esp, N ; ret` gadgets. |
-| `pivots` | `dx @$osed().pivots(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().pivots("essfunc")` | Finds stack pivot candidates. Uses ESP patterns on x86 and RSP patterns on x64. |
-| `seh_ppr` | `dx @$osed().seh_ppr(module?, exclude?, maxResults?, executableOnly?, mode?)` | `dx @$osed().seh_ppr("libspp.dll", "00 0A 0D")` | Finds and ranks `pop ; pop ; ret` gadgets. |
-| `encode` | `dx @$osed().encode(shellcode, exclude?, key?)` | `dx @$osed().encode("FC E8 ...", "00 0A 0D")` | XOR-encodes shellcode to avoid bad characters. |
-| `nop` | `dx @$osed().nop(length, byte?)` | `dx @$osed().nop(16)` | Generates a NOP sled. |
-| `rop_template` | `dx @$osed().rop_template(api?, module?)` | `dx @$osed().rop_template("VirtualProtect", "essfunc")` | Prints a commented ROP chain skeleton. Supports VirtualProtect, WriteProcessMemory, LoadLibraryA, GetProcAddress. |
+- Run each command as `dx @$osed().<command>(arguments)`.
+- Arguments are positional. A `?` after a name in a signature marks an optional argument. To skip an optional string argument and set a later one, pass `""`, as in `code_caves("", 50, 25, "", "EXEC")`.
+- `dx` does not accept JavaScript object literals such as `{mode: "guided"}`. Use the positional form.
+- Pass byte lists, such as bad characters, as one string of hex bytes: `"00 0A 0D"`.
+- Pass addresses as numbers (`0x0012F800`), hex strings (`"0012F800"`), or arithmetic (`0x0019ed34+8`). `dx` evaluates the arithmetic before the call.
+- Pseudo-registers such as `@$t0` reach the script as 64-bit `Int64` objects, and address arguments reject them. Cast them first, as in `dx @$osed().badchar_find((unsigned int)@$t0, "00 0A 0D")`.
+- Use double quotes for strings.
+- Most commands print their output and return `true` or `false`. `dx @$osed().last_result()` returns the full structured result.
+- `dx @$osed().help("<command>", "full")` prints the built-in help for one command. Most commands also print it when you pass `"help"` as the only argument.
+- **[fork: new]** and **[fork: changed]** mark commands that this fork adds or changes.
 
-### Help Model
+## Categories
 
-`help()` lists both top-level commands and namespace helpers. Use a fully qualified helper name for namespace entries:
-
-```js
-dx @$osed().help()
-dx @$osed().help("badchars")
-dx @$osed().help("sc.iat")
-dx @$osed().help("rop.query")
-```
-
-Most callable helpers also accept `"help"` as their first argument and return usage without inspecting the target process:
-
-```js
-dx @$osed().math("help")
-dx @$osed().pattern.create("help")
-dx @$osed().sc.iat("help")
-dx @$osed().rop.query("help")
-```
-
-## Build Verification
-
-After `.scriptload`, the toolkit prints a load banner with embedded build metadata. Confirm the loaded bundle with:
-
-```js
-dx @$osed().version()
-```
-
-Expected fields:
-
-- `Version`
-- `BuildTime`
-- `GitCommit`
-- `GitDirty`
-
-If `version()` reports `dev` / `unknown`, the loaded file is not a properly built `dist/osed.js`.
-
-**[fork]** On classic WinDbg 10.0.19041, whose JavaScript provider has no `BigInt`, load `dist/osed-legacy.js` instead. It exposes the same commands and throws on values above 2^53 by design.
-
-## Byte Search Scope
-
-Use the byte-search helpers by memory scope:
-
-- `find_bytes(module, ...)`: loaded module PE sections, primarily for gadget and opcode discovery.
-- `find_stack_bytes(...)`: current-thread stack window only, primarily for confirming that live input landed near control data.
-- `find_mem_bytes(address, length, ...)`: explicit readable live-memory range, primarily for known stack, heap, or mapped-region windows.
-- `findmsp(...)`: cyclic-pattern correlation across registers, stack slots, pointer targets, and SEH fields.
-
-`find_bytes()` intentionally does not search stack or heap memory. On zero hits it prints a scope line to make that explicit.
-
-## Analysis Evidence Helpers
-
-### `memory(address)`
-
-The returned evidence contains the queried address, region boundaries when available, semantic access flags, region type, raw numeric values, source, and warnings.
-
-Semantic flags are tri-state:
-
-| Value | Meaning |
+| Category | Commands |
 | --- | --- |
-| `true` | WinDbg metadata confirms the property. |
-| `false` | WinDbg metadata confirms the property is absent. |
-| `null` | The property could not be established. |
+| [Pattern and bad characters](commands/payload.md) | 6 |
+| [Crash triage](commands/crash.md) | 4 |
+| [Target and memory](commands/target.md) | 8 |
+| [SEH](commands/seh.md) | 2 |
+| [ROP and DEP](commands/rop.md) | 36 |
+| [Format strings](commands/format.md) | 3 |
+| [Shellcode](commands/shellcode.md) | 3 |
+| [Strings](commands/strings.md) | 4 |
+| [PE and API](commands/pe-api.md) | 20 |
+| [Leak, math, and session](commands/tools.md) | 14 |
 
-`can_execute(address)` is exactly the `executable` projection of normalized memory evidence. It therefore returns `boolean | null`; unknown metadata is never converted to `false`.
+## All commands
 
-### `landing(address?)`
-
-With no address, `landing()` uses the current architecture's stack pointer (`ESP` or `RSP`). The evidence contains:
-
-- queried address and normalized memory evidence;
-- sampled bytes and requested byte count;
-- atomic observations with `kind`, `confidence`, optional address and length, and supporting details;
-- derived aggregate confidence;
-- the current compatibility recommendation field.
-
-Observation kinds currently include NOP and repeated-byte runs, marker bytes, cyclic-pattern matches, known payload prefixes, legacy low-printability windows, memory access and execution state, disassembly status, and inaccessible or truncated byte ranges. A debugger API failure remains unknown and is not reported as a confirmed negative result.
-
-Confidence is derived metadata used for presentation. It is bounded to `[0,1]`, deterministic across observation ordering, and excluded from observation identity.
-
-### `math(value, bits?)`
-
-`math()` formats integer values for debugger arithmetic and payload layout work. `bits` defaults to `32` and accepts `8`, `16`, `32`, or `64`.
-
-The returned evidence contains `hex`, `unsigned`, `signed`, `littleEndianBytes`, and `twosComplement`. Negative inputs are masked into the selected width, so `math(-42, 32)` reports `0xFFFFFFD6` and `D6 FF FF FF`.
-
-### Triage integration
-
-`triage()` uses `LandingEvidence` for stack bytes, landing candidates, read status, and bad-character sampling. It does not independently rescan stack bytes for landing signals. Existing control, SEH, module, and gadget analysis remains separate.
-
-## Format String Namespace
-
-The `fmt` namespace supports the format-string specifier modules: build `%n` write-what-where payloads and locate the controlled parameter index at a live `printf`-family call.
-
-| Helper | Syntax | Example | Notes |
-| --- | --- | --- | --- |
-| `fmt.build` | `dx @$osed().fmt.build(addr, value, argIndex, width?, exclude?)` | `dx @$osed().fmt.build(0x00402118, 0x625011AF, 6)` | Builds a `%n` write-what-where payload (address block + format string + Python). Positional form writes one dword; use the object form from JS for multiple writes: `fmt.build({ writes: [{addr,value},...], argIndex: 6, width: "word" })`. |
-| `fmt.offset` | `dx @$osed().fmt.offset(marker?, count?, firstArg?)` | `dx @$osed().fmt.offset(0x41414141, 40)` | At a breakpoint on the format call, reports which `%N$` index reaches your buffer and classifies leakable stack/module pointers. `firstArg` (default 8) is the byte offset from ESP to the first vararg. x86/cdecl. |
-| `fmt.inspect` | `dx @$osed().fmt.inspect(family?, formatArgOffset?, max?)` | `dx @$osed().fmt.inspect("printf")` | Read-only inspection at a paused x86 cdecl `printf`, `fprintf`, `sprintf`, or `snprintf` call. Reads the format argument, reports conversions, and flags `%n`; it does not establish reachability, control, or output observability. |
-
-## Leak Analysis Namespace
-
-| Command | Syntax | Notes |
+| Command | Category | What it does |
 | --- | --- | --- |
-| `leak.classify` | `dx @$osed().leak.classify(value)` | Classifies a debugger-observed pointer. |
-| `leak.scan` | `dx @$osed().leak.scan(address, length?)` | Read-only, pointer-aligned scan of an explicit range (maximum `0x10000` bytes). Candidates are debugger-observed, not demonstrated disclosures. |
-| `leak.analyze` | `dx @$osed().leak.analyze(text)` | Extracts hexadecimal pointer-shaped values from supplied output and classifies them as `leak_derived`. It does not prove the text reaches an attacker. |
-| `leak.base` | `dx @$osed().leak.base(pointer, rva)` | Derives a base and validates it against the current loaded-module mapping. An arithmetic result without a match is not validated. |
+| [`add_esp`](commands/rop.md#add_esp) | [ROP and DEP](commands/rop.md) | Find `add esp, N ; ret` gadgets, which skip stack slots. |
+| [`badchar_array`](commands/payload.md#badchar_array) | [Pattern and bad characters](commands/payload.md) | Print the bad-character test array, 0x00 to 0xFF minus the excluded bytes, as Python, C, and hex. |
+| [`badchar_find`](commands/payload.md#badchar_find) | [Pattern and bad characters](commands/payload.md) | Find the test array in memory near an address or ESP and report the first corrupted byte. |
+| [`badchar_function`](commands/payload.md#badchar_function) | [Pattern and bad characters](commands/payload.md) | Print a Python `BADCHARS` line and a `badchar_array()` helper to paste into the exploit once. |
+| [`badchars`](commands/payload.md#badchars) | [Pattern and bad characters](commands/payload.md) | Compare the bytes at a known address with the expected test array and list the bytes that differ. |
+| [`can_execute`](commands/target.md#can_execute) | [Target and memory](commands/target.md) | Return `true`, `false`, or `null` for whether the memory at an address is executable. |
+| [`clear_last_result`](commands/tools.md#clear_last_result) | [Leak, math, and session](commands/tools.md) | Clear the stored last result. |
+| [`code_caves`](commands/target.md#code_caves) | [Target and memory](commands/target.md) | Find runs of null, `int3`, or NOP padding inside PE sections that can hold a payload. |
+| [`egghunter`](commands/shellcode.md#egghunter) | [Shellcode](commands/shellcode.md) | Print an egghunter stub for a 4-byte tag, as hex and as Python bytes, and flag stub bytes that are bad characters. |
+| [`encode`](commands/shellcode.md#encode) | [Shellcode](commands/shellcode.md) | XOR-encode a payload so that it contains none of the excluded bytes, and print the decoder stub with it. |
+| [`exploit.clear`](commands/tools.md#exploitclear) | [Leak, math, and session](commands/tools.md) | Clear the cached exploit state. |
+| [`exploit.state`](commands/tools.md#exploitstate) | [Leak, math, and session](commands/tools.md) | Show the exploit state that `triage()` cached, such as the control mechanism, the stack pointer, and the bad characters, which `rop.synthesize` reads. |
+| [`exploit`](commands/tools.md#exploit) | [Leak, math, and session](commands/tools.md) | Print a fixed list of `dx` commands for one workflow, such as `offset`, `badchars`, or `egghunter`. |
+| [`find_bytes`](commands/target.md#find_bytes) | [Target and memory](commands/target.md) | Search the PE sections of one loaded module for a byte sequence. |
+| [`find_mem_bytes`](commands/target.md#find_mem_bytes) | [Target and memory](commands/target.md) | Search an address range that you give for a byte sequence. |
+| [`find_ptr`](commands/target.md#find_ptr) | [Target and memory](commands/target.md) | Find addresses of `jmp <reg>`, `call <reg>`, or `push <reg> ; ret` and drop the addresses that contain bad characters. |
+| [`find_stack_bytes`](commands/target.md#find_stack_bytes) | [Target and memory](commands/target.md) | Search the current thread stack, from ESP upward, for a byte sequence. |
+| [`findmsp`](commands/crash.md#findmsp) | [Crash triage](commands/crash.md) | Find cyclic-pattern offsets in every register, in the stack, in the SEH record, and in the memory that registers point to. |
+| `fmt_build` | [Format strings](commands/format.md) | Same as [`fmt.build`](commands/format.md#fmtbuild). |
+| `fmt_inspect` | [Format strings](commands/format.md) | Same as [`fmt.inspect`](commands/format.md#fmtinspect). |
+| `fmt_offset` | [Format strings](commands/format.md) | Same as [`fmt.offset`](commands/format.md#fmtoffset). |
+| [`fmt.build`](commands/format.md#fmtbuild) | [Format strings](commands/format.md) | Build a `%n` write-what-where payload that writes `value` to `addr`. |
+| [`fmt.inspect`](commands/format.md#fmtinspect) | [Format strings](commands/format.md) | Read the format-string argument of a paused `printf`, `fprintf`, `sprintf`, or `snprintf` call and list its conversions. |
+| [`fmt.offset`](commands/format.md#fmtoffset) | [Format strings](commands/format.md) | Find which `%N# Command index
 
-`width` is `"byte"` (`%hhn`), `"word"` (`%hn`, default), or `"dword"` (`%n`). The builder lays the target addresses in a front block, sorts writes by ascending value so `%c` padding stays non-negative, and accounts for the address-block bytes already printed — the off-by-block error students hit by hand.
+This page lists every command that the script registers. Each name links to its entry in a category file. The [README](../README.md#exam-workflow) shows the commands in exam order.
 
-### Worked example
+## Conventions
 
-Goal: overwrite a saved return address at `0x00402118` with the address of a `jmp esp` gadget, `0x625011AF`, via a `printf(user_buffer)` call.
+- Run each command as `dx @$osed().<command>(arguments)`.
+- Arguments are positional. A `?` after a name in a signature marks an optional argument. To skip an optional string argument and set a later one, pass `""`, as in `code_caves("", 50, 25, "", "EXEC")`.
+- `dx` does not accept JavaScript object literals such as `{mode: "guided"}`. Use the positional form.
+- Pass byte lists, such as bad characters, as one string of hex bytes: `"00 0A 0D"`.
+- Pass addresses as numbers (`0x0012F800`), hex strings (`"0012F800"`), or arithmetic (`0x0019ed34+8`). `dx` evaluates the arithmetic before the call.
+- Pseudo-registers such as `@$t0` reach the script as 64-bit `Int64` objects, and address arguments reject them. Cast them first, as in `dx @$osed().badchar_find((unsigned int)@$t0, "00 0A 0D")`.
+- Use double quotes for strings.
+- Most commands print their output and return `true` or `false`. `dx @$osed().last_result()` returns the full structured result.
+- `dx @$osed().help("<command>", "full")` prints the built-in help for one command. Most commands also print it when you pass `"help"` as the only argument.
+- **[fork: new]** and **[fork: changed]** mark commands that this fork adds or changes.
 
-**1. Break at the format call and locate your parameter index.** Send a buffer beginning with a marker (`AAAA` = `0x41414141`), break on the `printf`, then:
+## Categories
 
-```
-0:000> dx @$osed().fmt.offset(0x41414141, 40)
+| Category | Commands |
+| --- | --- |
+| [Pattern and bad characters](commands/payload.md) | 6 |
+| [Crash triage](commands/crash.md) | 4 |
+| [Target and memory](commands/target.md) | 8 |
+| [SEH](commands/seh.md) | 2 |
+| [ROP and DEP](commands/rop.md) | 36 |
+| [Format strings](commands/format.md) | 3 |
+| [Shellcode](commands/shellcode.md) | 3 |
+| [Strings](commands/strings.md) | 4 |
+| [PE and API](commands/pe-api.md) | 20 |
+| [Leak, math, and session](commands/tools.md) | 14 |
 
-=== Format String Parameter Map ===
-[+] ESP: 0x0019FE40  firstArg: +8  marker: 0x41414141
-[+] Controlled parameter index: %6$  (use argIndex 6 in fmt.build)
-Idx    StackAddr    Value        Meaning
-%6$    0x0019FE48   41414141     marker
-%7$    0x0019FE4C   77C12340     ptr->kernel32
-%8$    0x0019FE50   0019FEC0     ptr->stack
-%9$    0x0019FE54   00402000     ptr->KERNELBASE
-```
+## All commands
 
-Your buffer is reachable at `%6$`. (The `ptr->*` slots are candidate `%N$s` leaks for defeating ASLR in a separate step.)
-
-**2. Build the write with that index.**
-
-```
-0:000> dx @$osed().fmt.build(0x00402118, 0x625011AF, 6)
-
-=== Format String Builder ===
-[+] Writes:   1 (word-granularity, 2 chunks)
-[+] ArgIndex: 6  Prefix: 0
-
-=== Chunk breakdown ===
-Chunk  TargetAddr    Value    Arg   CumCount   Specifier
-0      0x00402118    0x11AF   6     4527       %4519c%6$hn
-1      0x0040211A    0x6250   7     25168      %20641c%7$hn
-
-=== Address block ===
-  18 21 40 00    ; slot 0 -> %6$  (0x00402118)
-  1A 21 40 00    ; slot 1 -> %7$  (0x0040211A)
-
-=== Format string ===
-%4519c%6$hn%20641c%7$hn
-
-=== Python ===
-def p32(v): return struct.pack('<I', v)
-payload = (
-    p32(0x00402118) +
-    p32(0x0040211A) +
-    b"%4519c%6$hn%20641c%7$hn"
-)
-```
-
-The two address dwords occupy `%6$`/`%7$`; the low word `0x11AF` is written first (smaller value → less padding), then the high word `0x6250`. Note the first pad is `4519`, not `4527` — the 8-byte address block is already printed before the first `%c`, which is exactly the accounting the builder does for you.
-
-If a target address contains a badchar (e.g. a null in `0x00402118`), pass `exclude` and the builder warns that the address itself cannot be delivered — that constraint is on the buffer, not something an encoder can fix.
-
-## String Namespace
-
-The `str` namespace provides small string helpers for exploit workflow evidence and payload layout.
-
-| Helper | Syntax | Example | Notes |
-| --- | --- | --- | --- |
-| `str.read` | `dx @$osed().str.read(address, max?, encoding?)` | `dx @$osed().str.read(0x0019F920)` | Reads a null-terminated ASCII or UTF-16LE string from memory. |
-| `str.find` | `dx @$osed().str.find(text, module?, encoding?, maxResults?)` | `dx @$osed().str.find("VirtualProtect", "target", "both", 25)` | Searches loaded module sections for ASCII and/or UTF-16LE bytes. |
-| `str.refs` | `dx @$osed().str.refs(target, module?, encoding?, maxResults?)` | `dx @$osed().str.refs("VirtualProtect", "target", "both", 25)` | Finds executable absolute-pointer references to a string address or literal. |
-| `str.bytes` | `dx @$osed().str.bytes(text, encoding?, terminator?, exclude?)` | `dx @$osed().str.bytes("cmd.exe", "ascii", true, "00 0A 0D")` | Converts text to payload bytes/Python bytes and reports excluded-byte hits. |
-
-`encoding` accepts `ascii` or `utf16le`; `str.find` also accepts `both`.
-`str.refs` scans absolute pointer bytes in executable sections and includes nearby bytes for context; it does not perform disassembly or x64 RIP-relative xref recovery.
-
-## Semantic ROP Namespace
-
-The `rop` runtime namespace includes semantic gadget queries, corpus-backed chain builders, and flat stdcall frame emitters. Load a corpus first with `rop.scan(...)` (pasted RP++ output) or `rop.scan_live(...)` (live target memory) before using `rop.query(...)`, `rop.capabilities()`, or `rop.chain*()` helpers. The `rop.frame_*()` helpers emit data-only stdcall frames and do not require a loaded corpus.
-
-### Calling conventions and option reference
-
-WinDbg `dx` does **not** accept JavaScript object literals such as `{target:"..."}`. Use the positional forms documented below. Object-shaped options are only for callers already executing JavaScript in the script host.
-
-| Command | Positional options | Notes |
+| Command | Category | What it does |
 | --- | --- | --- |
-| `rop.scan_live` | `module, badchars, append, maxPerPattern, maxInstructionsPerGadget, maxBackwardGadgets` | `append` is `true` to retain the active corpus; otherwise the scan replaces it. `maxPerPattern` limits retained hits for each pattern. The instruction limit defaults to 6, range 1–12. `maxBackwardGadgets` bounds raw backward candidates and defaults to 10,000. |
-| `rop.query` | `field, value, executableOnly, verbose` | `verbose=true` adds semantic reads, writes, memory effects, terminator, and all capabilities. Supported fields are `reads`, `writes`, `preserves`, `preservesThroughout`, `capability`, `terminator`, `stackDelta`, `memoryReads`, `memoryWrites`, and `executableOnly`. Exact addresses use `rop.corpus.lookup`, not `rop.query`. |
-| `rop.corpus.lookup` | `address` | Searches only the active corpus. `NOT_FOUND` means the address was not discovered/imported; it never triggers a scan. |
-| `rop.api_plan` | `target, badchars` | Discovery/evidence only; it does not choose gadgets or create a chain. |
-| `rop.api_build` | `target, badchars, continuation, preserve, maxGadgets, owner, anchor` | `continuation` is a concrete post-resolution destination. `preserve` is a space- or comma-separated register list. `owner` and `anchor` pin a Phase 1 candidate. |
-
-Typical live-discovery loop:
-
-```text
-dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D 23 25 26 2B 3D", false, 40, 6, 50000)
-dx @$osed().rop.corpus.lookup(0x10154112)
-dx @$osed().rop.query("capability", "STACK_POINTER_CAPTURE", false, true)
-dx @$osed().rop.query("terminator", "JUMP", false, true)
-dx @$osed().rop.query("terminator", "CALL", false, true)
-```
-
-| Helper | Syntax | Example | Notes |
-| --- | --- | --- | --- |
-| `rop.find` | `dx @$osed().rop.find(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop.find("essfunc")` | Runs the legacy ROP helper/module triage from the ROP namespace. |
-| `rop.scan` | `dx @$osed().rop.scan(text, options?)` | `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")` | Builds a capability index from pasted RP++ output. |
-| `rop.scan_live` | `dx @$osed().rop.scan_live(module?, badchars?, append?, maxPerPattern?, maxInstructionsPerGadget?, maxBackwardGadgets?)` | `dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", true, 40, 6, 50000)` | Discovers gadgets directly from live target memory. The final budget bounds raw backward candidates (default 10,000; max 100,000). The corpus summary reports whether backward discovery completed or reached this limit. |
-| `rop.corpus.lookup` | `dx @$osed().rop.corpus.lookup(address)` | `dx @$osed().rop.corpus.lookup(0x10154112)` | Read-only exact-address lookup in the active corpus. Returns `NOT_FOUND` without scanning memory. |
-| `rop.api_plan` | `dx @$osed().rop.api_plan("MODULE!Symbol", badchars?)` | `dx @$osed().rop.api_plan("KERNEL32!WriteProcessMemory", "00 0A 0D")` | Read-only Phase 1 API address-resolution analysis. Reports validated `direct-slot` and same-image `derived-address` candidates, including live IAT, export-RVA, module-identity, and byte-safety evidence. It does not select gadgets, construct chains, or claim dispatch feasibility. |
-| `rop.api_build` | `dx @$osed().rop.api_build(target, badchars?, continuation?, preserve?, maxGadgets?, owner?, anchor?)` | `dx @$osed().rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10064A0F, "", 12, "libspp.dll", "QueryDosDeviceA")` | Bounded Phase 2 construction into EAX. Revalidates live Phase 1 evidence, composes exact pop/dereference/add/RET chains, and checks gadget addresses, operands, `ret N` padding, and declared preservation. `continuation` is required; `preserve` is a space- or comma-separated register list. Optional `owner` and `anchor` select a specific Phase 1 candidate. It neither invokes the API nor claims debugger verification. |
-| `rop.corpus.export` | `dx @$osed().rop.corpus.export(path?)` | `dx @$osed().rop.corpus.export("C:\\labs\\rop-corpus.json")` | Writes compact gadget instructions, locations, and validation fingerprints as versioned JSON; semantic metadata is regenerated on import. The completion row reports bytes and elapsed time. With no path, prints JSON for inspection. |
-| `rop.corpus.import` | `dx @$osed().rop.corpus.import(path)` | `dx @$osed().rop.corpus.import("C:\\labs\\rop-corpus.json")` | Loads a version-compatible JSON corpus in an inactive, stale state. It cannot service queries or emit chains yet. |
-| `rop.corpus.validate` | `dx @$osed().rop.corpus.validate()` | `dx @$osed().rop.corpus.validate()` | Activates the imported corpus only when its saved module names, paths, bases, sizes, and sampled gadget bytes match the current target. |
-| `rop.query` | `dx @$osed().rop.query(field, value, executableOnly?, verbose?)` | `dx @$osed().rop.query("capability", "LOAD_REGISTER", false, true)` | Filters the loaded corpus by semantic fields and capabilities. Default output is compact; pass `true` as the fourth argument for detailed effects. |
-| `rop.capabilities` | `dx @$osed().rop.capabilities()` | `dx @$osed().rop.capabilities()` | Summarizes the capability inventory in the loaded corpus. |
-| `rop.construct` | `dx @$osed().rop.construct(register, value, badchars?)` | `dx @$osed().rop.construct("edx", 0x1000, [0x00])` | Finds a short gadget sequence to construct a 32-bit value in a register when the value contains badchar bytes. Tries seven recipes in order: direct pop, negate, bitwise complement, two-add decomposition, two-sub decomposition, zero-add, zero-sub-neg. Reports the recipe used, scratch register (if any), total stack bytes, and emits Python `pack()` lines. Requires a loaded corpus. |
-| `rop.chain` | `dx @$osed().rop.chain(register, value, register2?, value2?, ...)` | `dx @$osed().rop.chain("eax", 0xDEADBEEF, "ebx", 0x1000)` | Constructs a register-setup chain from the loaded corpus using real-address gadgets. It can zero value-0 targets with `xor reg, reg ; ret`, co-satisfy compatible registers with pure multi-pop gadgets, and fall back to single `pop reg ; ret`. Emits a paste-ready Python `pack()` layout; reports registers it cannot satisfy. Read-only — emits a chain, never writes target memory. |
-| `rop.chain_vp` | `dx @$osed().rop.chain_vp(virtualProtect?, retGadget?, returnAddress?, lpAddress?, dwSize?, writable?, flNewProtect?, mode?)` | `dx @$osed().rop.chain_vp(0x7C801AD0)` | VirtualProtect PUSHAD chain built from the loaded corpus. Default `mode` is `ret-slide`: `EDI = ret`, `ESI = VirtualProtect`, saved ESP becomes `lpAddress`, `EBX = dwSize` (default `0x201`), `EDX = 0x40`, and `ECX = WRITABLE`. `mode: "direct"` is available but warns that saved ESP becomes `dwSize`. Read-only. |
-| `rop.chain_wpm` | `dx @$osed().rop.chain_wpm(writeProcessMemory?, returnAddress?, lpBuffer?, nSize?, writable?)` | `dx @$osed().rop.chain_wpm(0x7C802213)` | Constrained WriteProcessMemory PUSHAD chain. Hard-codes `hProcess = 0xFFFFFFFF`; leaves `WRITEPROCESSMEMORY`, `RETURN_ADDR`, `LP_BUFFER`, `NSIZE`, `WRITABLE` as placeholders when not supplied. Warns that direct PUSHAD uses saved ESP as `lpBaseAddress`, so the chain is only a DEP bypass if that saved ESP is already an executable destination. Read-only. |
-| `rop.chain_va` | `dx @$osed().rop.chain_va(virtualAlloc?, returnAddress?, lpAddress?, flAllocationType?, flProtect?)` | `dx @$osed().rop.chain_va(0x7C809AE1)` | Constrained VirtualAlloc PUSHAD chain. Defaults `flAllocationType = 0x1000` and `flProtect = 0x40`; warns that direct PUSHAD uses saved ESP as `dwSize`, which must be verified or replaced with a different chain shape. Read-only. |
-| `rop.frame_vp` | `dx @$osed().rop.frame_vp(virtualProtect?, returnAddress?, lpAddress?, dwSize?, flNewProtect?, writable?, badchars?)` | `dx @$osed().rop.frame_vp(0x7C801AD0)` | Flat VirtualProtect stdcall frame: `[VirtualProtect][return][lpAddress][dwSize][flNewProtect][lpflOldProtect]`. Requires no loaded ROP corpus and no gadgets. Defaults `dwSize = 0x201`, `flNewProtect = 0x40`; checks every concrete dword against `badchars` and warns that placeholders must be validated after resolution. |
-| `rop.frame_wpm` | `dx @$osed().rop.frame_wpm(writeProcessMemory?, returnAddress?, hProcess?, lpBaseAddress?, lpBuffer?, nSize?, writable?, badchars?)` | `dx @$osed().rop.frame_wpm(0x7C802213)` | Flat WriteProcessMemory stdcall frame. Requires no loaded ROP corpus. Defaults `hProcess = 0xFFFFFFFF`; all other runtime values may be placeholders. Concrete values are checked against `badchars`. |
-| `rop.frame_va` | `dx @$osed().rop.frame_va(virtualAlloc?, returnAddress?, lpAddress?, dwSize?, flAllocationType?, flProtect?, badchars?)` | `dx @$osed().rop.frame_va(0x7C809AE1)` | Flat VirtualAlloc stdcall frame. Requires no loaded ROP corpus. Defaults `dwSize = 0x201`, `flAllocationType = 0x1000`, and `flProtect = 0x40`; concrete values are checked against `badchars`. |
-| `rop.generate` | `dx @$osed().rop.generate({api, shellcode?, badchars?, module?, offset?, iatSlot?, buf?, retAddr?, writable?, entrySkew?})` | `dx @$osed().rop.generate({api: "auto", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})` | One-command exploit generator. `api: "auto"` enumerates all DEP-bypass APIs, scores by IAT availability and badchars, and selects the best. Auto-discovers IAT slot, writable buffer, and return gadget. Builds a `slot_call` chain, XOR-encodes shellcode, and emits a complete Python exploit. All auto-discovery is overridable. Requires a loaded corpus. |
-| `rop.verify` | `dx @$osed().rop.verify({chain?, badchars?, api?})` | `dx @$osed().rop.verify({badchars: "00 0A 0D"})` | Chain verifier. Inspects a generated or manually supplied ROP chain for bad characters (byte-level LE serialization), unresolved placeholders, stack consumption, and register side effects. Produces a DWORD-by-DWORD trace with ESP movement and register state. Read-only — never modifies the chain. |
-
-Capability inventory counts are unique semantic gadgets, not the number of
-address aliases. An RP++ export without module provenance validates only saved
-bytes at its gadget addresses; use `rop.scan_live` when restart validation must
-also establish module identity.
-
-`rop.query` supports net register-transform predicates:
-
-```js
-dx @$osed().rop.query("preserves", "eax")
-dx @$osed().rop.query("preservesThroughout", "eax")
-dx @$osed().rop.query("writes", "esi")
-dx @$osed().rop.query("memoryReads", true)
-```
-
-`preserves` means the register is unchanged at gadget exit. `preservesThroughout` means no instruction writes the register. Transform queries match derived facts such as `esi = esi + 4`, `esi = eax`, fixed constants, and memory-loaded values; unknown net transforms do not satisfy positive predicates.
-
-`rop.query("capability", ...)` supports an `ARITHMETIC` alias that expands to all arithmetic capability kinds: `REGISTER_ADD`, `REGISTER_SUB`, `REGISTER_XOR`, `REGISTER_ADC`, `REGISTER_SBB`, `REGISTER_OR`, `REGISTER_AND`, `REGISTER_NOT`, `REGISTER_NEGATE`, `REGISTER_INCREMENT`, `REGISTER_DECREMENT`. This is useful for surveying the full set of value-construction gadgets available for DEP bypass chains.
-
-```js
-dx @$osed().rop.query("capability", "ARITHMETIC")
-dx @$osed().rop.query("capability", "REGISTER_ADD")
-```
-
-### Automatic value construction
-
-`rop.construct(register, value, badchars?)` solves the common DEP-bypass problem of loading a register with a value whose raw bytes contain badchars (e.g. `0x00001000` has three null bytes). It searches the loaded capability index for a short arithmetic gadget sequence that produces the target value with all stack-placed data badchar-free.
-
-Seven recipes are tried in preference order (shortest chain first):
-
-| # | Recipe | Gadgets | Stack data | How it works |
-|---|--------|---------|-----------|--------------|
-| 1 | direct | `pop dst` | V | V itself is badchar-free |
-| 2 | negate | `pop dst` + `neg dst` | −V | Two's complement negation avoids the bad bytes |
-| 3 | complement | `pop dst` + `not dst` | ~V | Bitwise complement avoids the bad bytes |
-| 4 | two-add | `pop dst` + `pop scratch` + `add dst, scratch` | A, B | A + B = V, both A and B badchar-free |
-| 5 | two-sub | `pop dst` + `pop scratch` + `sub dst, scratch` | A, B | A − B = V, both badchar-free |
-| 6 | zero-add | `xor dst, dst` + `pop scratch` + `add dst, scratch` | V | When `pop dst` is unavailable but `xor` + `add` works |
-| 7 | zero-sub-neg | `xor dst, dst` + `pop scratch` + `sub dst, scratch` + `neg dst` | V | 0 − V = −V, then neg(−V) = V |
-
-For two-value decomposition (recipes 4–5), the solver tries ~25 candidate A values with uniform byte patterns (0x01010101, 0x11111111, etc.), then falls back to a single-byte exhaustive sweep. Each candidate is O(1) to check, so the search is instant.
-
-The solver handles `ret N` padding and side-effect pops from multi-instruction gadgets automatically — junk values are emitted for clobbered registers and padding words compensate for stack adjustments.
-
-```js
-// Construct 0x1000 in edx avoiding null bytes
-dx @$osed().rop.construct("edx", 0x1000, [0x00])
-
-// Construct 0x40 in ecx avoiding nulls and newlines
-dx @$osed().rop.construct("ecx", 0x40, [0x00, 0x0A, 0x0D])
-
-// Direct construction when value is already clean
-dx @$osed().rop.construct("eax", 0xDEADBEEF, [0x00])
-```
-
-`planRegisterSetup` also accepts an optional `badchars` array and solver callback, enabling automatic arithmetic fallback when a register value contains badchar bytes — instead of reporting the register as unsatisfied, it tries the solver recipes.
-
-## Command Shortcuts
-
-These are aliases backed by top-level commands.
-
-| Shortcut | Underlying command | Example |
-| --- | --- | --- |
-| `pattern.create` | `pattern_create` | `dx @$osed().pattern.create(300, "msf")` |
-| `pattern.offset` | `pattern_offset` | `dx @$osed().pattern.offset(0x39654138, "msf")` |
-| `seh.visualize` | `seh` | `dx @$osed().seh.visualize()` |
-
-## Shellcode Helpers
-
-The `sc` namespace exposes module, PE, export, hash, and IAT helpers.
-
-### Module and PE helpers
-
-| Helper | Syntax | Example | Notes |
-| --- | --- | --- | --- |
-| `sc.peb` | `dx @$osed().sc.peb()` | `dx @$osed().sc.peb()` | Dumps the current PEB. |
-| `sc.modules` | `dx @$osed().sc.modules()` | `dx @$osed().sc.modules()` | Lists loaded modules. |
-| `sc.module_pages` | `dx @$osed().sc.module_pages(name)` | `dx @$osed().sc.module_pages("kernel32")` | Reports size and estimated 4 KiB page count. |
-| `sc.page_summary` | `dx @$osed().sc.page_summary(name)` | `dx @$osed().sc.page_summary("kernel32")` | Buckets pages by `!vprot` protection value. |
-| `sc.base` | `dx @$osed().sc.base(name)` | `dx @$osed().sc.base("kernel32")` | Resolves the module base address. |
-| `sc.pe` | `dx @$osed().sc.pe(name)` | `dx @$osed().sc.pe("kernel32")` | Prints PE header fields for the module. |
-
-### Export and hash helpers
-
-| Helper | Syntax | Example | Notes |
-| --- | --- | --- | --- |
-| `sc.exports` | `dx @$osed().sc.exports(name, filter?)` | `dx @$osed().sc.exports("kernel32", "Virtual")` | Enumerates exported symbols. |
-| `sc.resolve` | `dx @$osed().sc.resolve(module, symbol)` | `dx @$osed().sc.resolve("kernel32", "WinExec")` | Resolves one export to an address. |
-| `sc.hashes` | `dx @$osed().sc.hashes(module, algorithm?)` | `dx @$osed().sc.hashes("kernel32", "crc32")` | Hashes named exports. |
-| `sc.hash` | `dx @$osed().sc.hash(name, algorithm?)` | `dx @$osed().sc.hash("WinExec", "ROR13")` | Hashes one string. |
-| `sc.hashresolve` | `dx @$osed().sc.hashresolve(module, hashValue, algorithm?)` | `dx @$osed().sc.hashresolve("kernel32", 0x7c0dfcaa, "ROR13")` | Resolves a hash back to a symbol. |
-| `sc.algorithms` | `dx @$osed().sc.algorithms()` | `dx @$osed().sc.algorithms()` | Lists supported hash algorithms. |
-| `sc.exportdir` | `dx @$osed().sc.exportdir(module)` | `dx @$osed().sc.exportdir("kernel32")` | Shows the export directory location and metadata. |
-| `sc.export` | `dx @$osed().sc.export(module, symbol)` | `dx @$osed().sc.export("kernel32", "GetProcAddress")` | Shows export address and forwarder data. |
-| `sc.exportat` | `dx @$osed().sc.exportat(module, ordinalIndex)` | `dx @$osed().sc.exportat("kernel32", 842)` | Resolves an export by ordinal index. |
-| `sc.exportwalk` | `dx @$osed().sc.exportwalk(module, symbol?, verbose?)` | `dx @$osed().sc.exportwalk("kernel32", "GetProcAddress", true)` | Walks the export tables step by step. |
-
-### IAT helpers
-
-| Helper | Syntax | Example | Notes |
-| --- | --- | --- | --- |
-| `sc.iat` | `dx @$osed().sc.iat(module?, filter?)` | `dx @$osed().sc.iat("app.exe", "Virtual")` | Enumerates imported addresses for a module, optionally filtering by DLL or symbol substring. |
-| `sc.iat_find` | `dx @$osed().sc.iat_find(symbol)` | `dx @$osed().sc.iat_find("VirtualAlloc")` | Searches all loaded modules for matching IAT entries. |
-| `sc.iat_ptr` | `dx @$osed().sc.iat_ptr(module, symbol)` | `dx @$osed().sc.iat_ptr("app.exe", "VirtualAlloc")` | Resolves an IAT slot and target pointer for one symbol. |
-
-## Runtime Helpers
-
-These are exposed on `osed` for inspection and cleanup, but they are not part of the command registry.
-
-| Helper | Syntax | Example | Notes |
-| --- | --- | --- | --- |
-| `last_result` | `dx @$osed().last_result()` | `dx @$osed().last_result()` | Returns the full structured result from the last command. |
-| `last_summary` | `dx @$osed().last_summary()` | `dx @$osed().last_summary()` | Returns a compact summary of the last command result. |
-| `clear_last_result` | `dx @$osed().clear_last_result()` | `dx @$osed().clear_last_result()` | Clears the stored result snapshot. |
-| `can_execute` | `dx @$osed().can_execute(address)` | `dx @$osed().can_execute(0x0012F800)` | Returns the executable field from normalized memory evidence without a separate analysis path. |
+ parameter reaches your buffer and which stack slots hold pointers worth leaking. |
+| [`help`](commands/tools.md#help) | [Leak, math, and session](commands/tools.md) | List the commands, or print the help for one command. |
+| [`landing`](commands/crash.md#landing) | [Crash triage](commands/crash.md) | Show what sits at ESP, or at an address, and whether the memory there is executable. |
+| [`last_result`](commands/tools.md#last_result) | [Leak, math, and session](commands/tools.md) | Return the full structured result of the last command. |
+| [`last_summary`](commands/tools.md#last_summary) | [Leak, math, and session](commands/tools.md) | Return the command name and the counts of findings, warnings, and errors from the last command. |
+| `leak_analyze` | [Leak, math, and session](commands/tools.md) | Same as [`leak.analyze`](commands/tools.md#leakanalyze). |
+| `leak_base` | [Leak, math, and session](commands/tools.md) | Same as [`leak.base`](commands/tools.md#leakbase). |
+| `leak_classify` | [Leak, math, and session](commands/tools.md) | Same as [`leak.classify`](commands/tools.md#leakclassify). |
+| `leak_scan` | [Leak, math, and session](commands/tools.md) | Same as [`leak.scan`](commands/tools.md#leakscan). |
+| [`leak.analyze`](commands/tools.md#leakanalyze) | [Leak, math, and session](commands/tools.md) | Pull hex pointer values out of text that the application printed and classify each one. |
+| [`leak.base`](commands/tools.md#leakbase) | [Leak, math, and session](commands/tools.md) | Compute a module base from a leaked pointer and its RVA, and check it against the loaded modules. |
+| [`leak.classify`](commands/tools.md#leakclassify) | [Leak, math, and session](commands/tools.md) | Say which module or memory region a pointer value falls in, without reading memory at it. |
+| [`leak.scan`](commands/tools.md#leakscan) | [Leak, math, and session](commands/tools.md) | Scan an address range, up to `0x10000` bytes, for pointer-sized values and classify each one. |
+| [`math`](commands/tools.md#math) | [Leak, math, and session](commands/tools.md) | Print a number as hex, unsigned, signed, little-endian bytes, and two's complement. |
+| [`memory`](commands/target.md#memory) | [Target and memory](commands/target.md) | Show the memory region that holds an address and its protection flags. |
+| [`modules`](commands/target.md#modules) | [Target and memory](commands/target.md) | List the loaded modules with their base, size, and the ASLR, SafeSEH, and DEP state of each. |
+| [`nop`](commands/shellcode.md#nop) | [Shellcode](commands/shellcode.md) | Print a NOP sled of `length` bytes. |
+| `pattern_create` | [Pattern and bad characters](commands/payload.md) | Same as [`pattern.create`](commands/payload.md#patterncreate). |
+| `pattern_offset` | [Pattern and bad characters](commands/payload.md) | Same as [`pattern.offset`](commands/payload.md#patternoffset). |
+| [`pattern.create`](commands/payload.md#patterncreate) | [Pattern and bad characters](commands/payload.md) | Print a cyclic pattern of `length` characters to send instead of your buffer. |
+| [`pattern.offset`](commands/payload.md#patternoffset) | [Pattern and bad characters](commands/payload.md) | Print the offset of a 4-byte value inside the pattern. |
+| [`pivots`](commands/rop.md#pivots) | [ROP and DEP](commands/rop.md) | Find stack pivot gadgets, which move ESP to a register or an offset. |
+| [`reload`](commands/tools.md#reload) | [Leak, math, and session](commands/tools.md) | Clear the command registry and register every command again, without reloading the script file. |
+| [`retn`](commands/rop.md#retn) | [ROP and DEP](commands/rop.md) | Find `retn N` gadgets, which return and then drop N bytes from the stack. |
+| `rop_find` | [ROP and DEP](commands/rop.md) | Same as [`rop.find`](commands/rop.md#ropfind). |
+| [`rop_suggest`](commands/rop.md#rop_suggest) | [ROP and DEP](commands/rop.md) | Scan a module and print common exploit gadgets grouped by what they do. |
+| [`rop_template`](commands/rop.md#rop_template) | [ROP and DEP](commands/rop.md) | Print a commented chain skeleton for one API, with the `dx` commands that find each address it needs. |
+| [`rop.api_build`](commands/rop.md#ropapi_build) | [ROP and DEP](commands/rop.md) | Build a short chain that loads an API address into EAX from one `rop.api_plan` candidate. |
+| [`rop.api_plan`](commands/rop.md#ropapi_plan) | [ROP and DEP](commands/rop.md) | List the ways to get an API address into a register: a direct IAT slot, or an export of the same module. |
+| [`rop.capabilities`](commands/rop.md#ropcapabilities) | [ROP and DEP](commands/rop.md) | Count the gadgets in the corpus by capability, such as `LOAD_REGISTER`, `MEMORY_WRITE`, or `STACK_PIVOT`. |
+| [`rop.chain_va`](commands/rop.md#ropchain_va) | [ROP and DEP](commands/rop.md) | Build a VirtualAlloc PUSHAD chain from the corpus. |
+| [`rop.chain_vp`](commands/rop.md#ropchain_vp) | [ROP and DEP](commands/rop.md) | Build a VirtualProtect PUSHAD chain from the corpus. |
+| [`rop.chain_wpm`](commands/rop.md#ropchain_wpm) | [ROP and DEP](commands/rop.md) | Build a WriteProcessMemory PUSHAD chain from the corpus. |
+| [`rop.chain`](commands/rop.md#ropchain) | [ROP and DEP](commands/rop.md) | Build a chain that sets one or more registers from the corpus. |
+| [`rop.construct`](commands/rop.md#ropconstruct) | [ROP and DEP](commands/rop.md) | Build a short gadget sequence that loads a value into a register when the raw value contains bad characters. |
+| [`rop.corpus.export`](commands/rop.md#ropcorpusexport) | [ROP and DEP](commands/rop.md) | Save the corpus and a fingerprint of the modules to a JSON file, or print it. |
+| [`rop.corpus.import`](commands/rop.md#ropcorpusimport) | [ROP and DEP](commands/rop.md) | Load a saved corpus. It stays inactive until `rop.corpus.validate()` succeeds. |
+| [`rop.corpus.lookup`](commands/rop.md#ropcorpuslookup) | [ROP and DEP](commands/rop.md) | Look up one address in the corpus. |
+| [`rop.corpus.report`](commands/rop.md#ropcorpusreport) | [ROP and DEP](commands/rop.md) | Print the corpus as one line per gadget, or write it to a text file. |
+| [`rop.corpus.validate`](commands/rop.md#ropcorpusvalidate) | [ROP and DEP](commands/rop.md) | Check the imported corpus against the current modules and gadget bytes, then activate it. |
+| [`rop.emit`](commands/rop.md#ropemit) | [ROP and DEP](commands/rop.md) | Pick concrete gadgets for a plan from `rop.plan`. |
+| [`rop.export`](commands/rop.md#ropexport) | [ROP and DEP](commands/rop.md) | Write the emitted gadgets and stack layout as a Python stub, to the console or to a file. |
+| [`rop.find`](commands/rop.md#ropfind) | [ROP and DEP](commands/rop.md) | Run the older ROP helper that scans one module and prints a module summary. |
+| [`rop.frame_va`](commands/rop.md#ropframe_va) | [ROP and DEP](commands/rop.md) | Print a flat VirtualAlloc stdcall frame without gadgets. |
+| [`rop.frame_vp`](commands/rop.md#ropframe_vp) | [ROP and DEP](commands/rop.md) | Print a flat VirtualProtect stdcall frame without gadgets. |
+| [`rop.frame_wpm`](commands/rop.md#ropframe_wpm) | [ROP and DEP](commands/rop.md) | Print a flat WriteProcessMemory stdcall frame without gadgets. |
+| [`rop.frame_write`](commands/rop.md#ropframe_write) | [ROP and DEP](commands/rop.md) | Build a stdcall frame in a writable buffer one word at a time, then pivot ESP onto it, without PUSHAD. |
+| [`rop.generate`](commands/rop.md#ropgenerate) | [ROP and DEP](commands/rop.md) | Build a complete Python exploit for one DEP bypass API from the corpus in one command. |
+| [`rop.pivots`](commands/rop.md#roppivots) | [ROP and DEP](commands/rop.md) | Rank the stack pivot gadgets in the corpus, optionally for one source register or a minimum ESP change. |
+| [`rop.plan`](commands/rop.md#ropplan) | [ROP and DEP](commands/rop.md) | List the strategies that the corpus can support for one API, without picking gadget addresses. |
+| [`rop.prove`](commands/rop.md#ropprove) | [ROP and DEP](commands/rop.md) | Step through a chain in the debugger, one predicted checkpoint at a time. |
+| [`rop.query`](commands/rop.md#ropquery) | [ROP and DEP](commands/rop.md) | Filter the corpus by capability or by a semantic field. |
+| [`rop.scan_live`](commands/rop.md#ropscan_live) | [ROP and DEP](commands/rop.md) | Find gadgets in one or more loaded modules and load them into the corpus that the other `rop.*` commands use. |
+| [`rop.scan`](commands/rop.md#ropscan) | [ROP and DEP](commands/rop.md) | Load gadget text from RP++ output into the corpus. |
+| [`rop.setup`](commands/rop.md#ropsetup) | [ROP and DEP](commands/rop.md) | Load several registers at once in an order where no gadget overwrites a register that is already set. |
+| [`rop.slot_call`](commands/rop.md#ropslot_call) | [ROP and DEP](commands/rop.md) | Call an API through a fixed IAT slot, so the API's ASLR address never appears in the payload. |
+| [`rop.synthesize`](commands/rop.md#ropsynthesize) | [ROP and DEP](commands/rop.md) | Lay out the stack for a plan, using the state that `triage()` cached. |
+| [`rop.verify`](commands/rop.md#ropverify) | [ROP and DEP](commands/rop.md) | Check a chain for bad characters, unresolved placeholders, stack use, and register side effects. |
+| [`sc.algorithms`](commands/pe-api.md#scalgorithms) | [PE and API](commands/pe-api.md) | List the supported hash algorithms: `crc32`, `metasploit_ror13` (alias `ror13`), and `rol7_add`. |
+| [`sc.api_plan`](commands/pe-api.md#scapi_plan) | [PE and API](commands/pe-api.md) | Return the raw snapshot that `rop.api_plan` reads. It is internal and prints nothing, so use `rop.api_plan` instead. |
+| [`sc.base`](commands/pe-api.md#scbase) | [PE and API](commands/pe-api.md) | Give the base address of one module. |
+| [`sc.export`](commands/pe-api.md#scexport) | [PE and API](commands/pe-api.md) | Give the ordinal, RVA, address, and forwarder of one export. |
+| [`sc.exportat`](commands/pe-api.md#scexportat) | [PE and API](commands/pe-api.md) | Resolve an export by its ordinal index. |
+| [`sc.exportdir`](commands/pe-api.md#scexportdir) | [PE and API](commands/pe-api.md) | Show the addresses and sizes of the export directory tables. |
+| [`sc.exports`](commands/pe-api.md#scexports) | [PE and API](commands/pe-api.md) | List the exports of a module, optionally filtered by name. |
+| [`sc.exportwalk`](commands/pe-api.md#scexportwalk) | [PE and API](commands/pe-api.md) | Walk the export tables step by step for one name. |
+| [`sc.hash`](commands/pe-api.md#schash) | [PE and API](commands/pe-api.md) | Hash one API name with an API-hash algorithm. |
+| [`sc.hashes`](commands/pe-api.md#schashes) | [PE and API](commands/pe-api.md) | Hash every export of a module. |
+| [`sc.hashresolve`](commands/pe-api.md#schashresolve) | [PE and API](commands/pe-api.md) | Find the export whose name matches a hash. |
+| [`sc.iat_find`](commands/pe-api.md#sciat_find) | [PE and API](commands/pe-api.md) | Search the import tables of every loaded module for an API name. |
+| [`sc.iat_ptr`](commands/pe-api.md#sciat_ptr) | [PE and API](commands/pe-api.md) | Give the IAT slot address of one import and the API address stored in it. |
+| [`sc.iat`](commands/pe-api.md#sciat) | [PE and API](commands/pe-api.md) | List the imports of a module, optionally filtered by DLL or API name. |
+| [`sc.module_pages`](commands/pe-api.md#scmodule_pages) | [PE and API](commands/pe-api.md) | Give the size of one module and its number of 4 KiB pages. |
+| [`sc.modules`](commands/pe-api.md#scmodules) | [PE and API](commands/pe-api.md) | List the loaded modules. |
+| [`sc.page_summary`](commands/pe-api.md#scpage_summary) | [PE and API](commands/pe-api.md) | Count the pages of one module by protection value. |
+| [`sc.pe`](commands/pe-api.md#scpe) | [PE and API](commands/pe-api.md) | Print the PE header fields of one module. |
+| [`sc.peb`](commands/pe-api.md#scpeb) | [PE and API](commands/pe-api.md) | Show the PEB address, `Ldr`, `ProcessParameters`, `BeingDebugged`, and `ImageBase`. |
+| [`sc.resolve`](commands/pe-api.md#scresolve) | [PE and API](commands/pe-api.md) | Give the address of one exported function. |
+| [`seh_ppr`](commands/seh.md#seh_ppr) | [SEH](commands/seh.md) | Find and rank `pop r32 ; pop r32 ; ret` gadgets for an SEH overwrite. |
+| [`seh.visualize`](commands/seh.md#sehvisualize) | [SEH](commands/seh.md) | Walk the SEH chain of the current thread and show each `Next` and `Handler` value. |
+| [`stackmap`](commands/crash.md#stackmap) | [Crash triage](commands/crash.md) | Classify each stack slot at the crash as pattern bytes, a return address, a saved EBP, a stale pointer, null, or data. |
+| `str_bytes` | [Strings](commands/strings.md) | Same as [`str.bytes`](commands/strings.md#strbytes). |
+| `str_find` | [Strings](commands/strings.md) | Same as [`str.find`](commands/strings.md#strfind). |
+| `str_read` | [Strings](commands/strings.md) | Same as [`str.read`](commands/strings.md#strread). |
+| `str_refs` | [Strings](commands/strings.md) | Same as [`str.refs`](commands/strings.md#strrefs). |
+| [`str.bytes`](commands/strings.md#strbytes) | [Strings](commands/strings.md) | Turn text into payload bytes and report any bad characters in it. |
+| [`str.find`](commands/strings.md#strfind) | [Strings](commands/strings.md) | Find a string in the sections of the loaded modules, as ASCII, UTF-16LE, or both. |
+| [`str.read`](commands/strings.md#strread) | [Strings](commands/strings.md) | Read a null-terminated ASCII or UTF-16LE string at an address. |
+| [`str.refs`](commands/strings.md#strrefs) | [Strings](commands/strings.md) | Find code that holds the absolute address of a string, like a cross reference in a disassembler. |
+| [`triage`](commands/crash.md#triage) | [Crash triage](commands/crash.md) | Print a one-screen crash summary with control of EIP, the SEH chain, the stack, gadgets, and a module score table. |
+| [`version`](commands/tools.md#version) | [Leak, math, and session](commands/tools.md) | Print the version, build time, and git commit of the loaded bundle. |
