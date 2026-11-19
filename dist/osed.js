@@ -618,17 +618,38 @@ var osed_bundle = (() => {
     const sorted = [...new Set(badchars.map((value) => value & 255))].sort((a, b) => a - b);
     return `BADCHARS = ${formatByteArray(sorted, "python")}`;
   }
-  function nextBadcharCommand(command2, addressArg, badchars) {
+  function nextBadcharCommand(command2, addressArg, badchars, trailingArgs = []) {
     const sorted = [...new Set(badchars.map((value) => value & 255))].sort((a, b) => a - b);
-    return `dx @$osed().${command2}(${addressArg}, "${sorted.map((value) => hexByte(value).toUpperCase()).join(" ")}")`;
+    const list = `"${sorted.map((value) => hexByte(value).toUpperCase()).join(" ")}"`;
+    return `dx @$osed().${command2}(${[addressArg, list, ...trailingArgs].join(", ")})`;
   }
-  function pythonBadcharHelper(badchars) {
+  function pythonBadcharHelper(badchars, space = 0) {
     return [
       `${pythonBadcharsLine(badchars)}  # add each new bad char here`,
+      `SPACE = ${space}  # contiguous bytes after EIP (0 = no limit)`,
       "",
       "def badchar_array(bad=BADCHARS):",
-      "    return bytes(b for b in range(256) if b not in bad)"
+      "    return bytes(b for b in range(256) if b not in bad)",
+      "",
+      "def badchar_block(start=0x01, size=SPACE, bad=BADCHARS):",
+      "    return bytes(b for b in range(start, 256) if b not in bad)[:size or None]"
     ];
+  }
+  function pythonBlockLine(start) {
+    return `payload += badchar_block(0x${hexByte(start).toUpperCase()})`;
+  }
+  var FIRST_BLOCK_START = 1;
+  function blockBytes(exclude, block) {
+    const bytes = expectedBytes(exclude).filter((value) => value >= block.start);
+    return block.size === void 0 ? bytes : bytes.slice(0, block.size);
+  }
+  function nextBlockStep(block, sent, compared, nextExclude) {
+    if (compared.badChars.length > 0 || compared.truncatedAt !== void 0) {
+      return { kind: "resend", start: block.start };
+    }
+    const last = sent[sent.length - 1];
+    const after = expectedBytes(nextExclude).find((value) => value > last);
+    return after === void 0 ? { kind: "done" } : { kind: "next", start: after };
   }
   function locateExpectedArray(window, expected, minRun = 8) {
     const expectedIndex = /* @__PURE__ */ new Map();
@@ -2254,6 +2275,14 @@ var osed_bundle = (() => {
     }
     return best;
   }
+  var DEFAULT_WINDOW_BYTES = 2048;
+  var DEFAULT_MIN_RUN = 8;
+  function hexArg(value) {
+    return `0x${value.toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+  function byteRange(bytes) {
+    return `${formatHexByte(bytes[0])}..${formatHexByte(bytes[bytes.length - 1])}`;
+  }
   var RETURN_SLOT_REACH = 64;
   var CONTENT_BACKTRACK = 8;
   function readAfterReturnSlot(anchor, pointerSize, length) {
@@ -2381,22 +2410,46 @@ var osed_bundle = (() => {
     return {
       name: "badchar_function",
       description: "Print a Python BADCHARS list plus a badchar_array() helper for the exploit, so each run only grows the list.",
-      usage: "dx @$osed().badchar_function(badchars?)",
-      examples: ['dx @$osed().badchar_function("00")', 'dx @$osed().badchar_function("00 0A 0D")'],
+      usage: "dx @$osed().badchar_function(badchars?, space?)",
+      examples: [
+        'dx @$osed().badchar_function("00")',
+        'dx @$osed().badchar_function("00 0A 0D")',
+        'dx @$osed().badchar_function("00", 76)    // only 76 bytes fit after EIP: test in blocks'
+      ],
       schema: {
-        exclude: { type: "array", elementType: "number", default: [] }
+        exclude: { type: "array", elementType: "number", default: [] },
+        space: { type: "number", min: 0, max: 256, default: 0 }
       },
       execute(options) {
         var _a;
         const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
-        const lines = pythonBadcharHelper(normalizedExclude.values);
+        const space = options.space;
+        const lines = pythonBadcharHelper(normalizedExclude.values, space);
         section("Bad Character Python Helper");
         for (const line of lines) print(line);
         print("");
-        print("payload += badchar_array()  # where the test array goes");
-        whyItMatters("Each badchar_find run prints the updated BADCHARS line; paste it over this one and send again.");
+        if (space > 0) {
+          const firstCommand = nextBadcharCommand("badchar_find", "@esp", normalizedExclude.values, [
+            DEFAULT_WINDOW_BYTES,
+            DEFAULT_MIN_RUN,
+            hexArg(FIRST_BLOCK_START),
+            space
+          ]);
+          print(`${pythonBlockLine(FIRST_BLOCK_START)}  # first block, right after EIP`);
+          print("");
+          print(`First command: ${firstCommand}`);
+          whyItMatters("Each badchar_find run prints the updated BADCHARS line, the next block, and the next command; paste them and send again.");
+        } else {
+          print("payload += badchar_array()  # where the test array goes");
+          whyItMatters("Each badchar_find run prints the updated BADCHARS line; paste it over this one and send again.");
+        }
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
-        return result("badchar_function", __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }), [{ exclude: normalizedExclude.values, lines }], warnings);
+        return result(
+          "badchar_function",
+          __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
+          [{ exclude: normalizedExclude.values, space, lines }],
+          warnings
+        );
       }
     };
   }
@@ -2404,19 +2457,27 @@ var osed_bundle = (() => {
     return {
       name: "badchar_find",
       description: "Locate a sent bad-character array in memory (near an address or the stack pointer) and report the first corrupted byte.",
-      usage: "dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?)",
-      examples: ["dx @$osed().badchar_find()", 'dx @$osed().badchar_find("0012F800", "00 0A 0D")'],
+      usage: "dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?, start?, size?)",
+      examples: [
+        "dx @$osed().badchar_find()",
+        'dx @$osed().badchar_find("0012F800", "00 0A 0D")',
+        'dx @$osed().badchar_find(@esp, "00", 2048, 8, 0x4E, 76)    // 76-byte block that starts at 0x4E'
+      ],
       schema: {
         address: { type: ["number", "string"] },
         exclude: { type: "array", elementType: "number", default: [] },
-        windowBytes: { type: "number", min: 256, max: 16384, default: 2048 },
-        minRun: { type: "number", min: 4, max: 64, default: 8 }
+        windowBytes: { type: "number", min: 256, max: 16384, default: DEFAULT_WINDOW_BYTES },
+        minRun: { type: "number", min: 4, max: 64, default: DEFAULT_MIN_RUN },
+        start: { type: "number", min: 0, max: 255 },
+        size: { type: "number", min: 0, max: 256 }
       },
       execute(options) {
-        var _a, _b;
+        var _a, _b, _c;
         const pointerSize = getPointerSize();
         const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
-        const expected = expectedBytes(normalizedExclude.values);
+        const size = options.size || void 0;
+        const block = options.start !== void 0 || size !== void 0 ? { start: (_b = options.start) != null ? _b : FIRST_BLOCK_START, size } : void 0;
+        const expected = block ? blockBytes(normalizedExclude.values, block) : expectedBytes(normalizedExclude.values);
         const windowBytes = options.windowBytes;
         const minRun = options.minRun;
         let anchor;
@@ -2427,7 +2488,7 @@ var osed_bundle = (() => {
         } else {
           const regs = readRegisters(pointerSize);
           anchor = regs.sp;
-          anchorLabel = regs.sp !== void 0 ? `${(_b = regs.spName) != null ? _b : "sp"} ${formatAddress(regs.sp, pointerSize)}` : "n/a";
+          anchorLabel = regs.sp !== void 0 ? `${(_c = regs.spName) != null ? _c : "sp"} ${formatAddress(regs.sp, pointerSize)}` : "n/a";
         }
         section("Bad Character Locate");
         if (anchor === void 0) {
@@ -2436,6 +2497,13 @@ var osed_bundle = (() => {
         }
         info(`Anchor: ${anchorLabel}`);
         info(`Window: ${windowBytes} bytes, expecting a ${expected.length}-byte array.`);
+        if (block) {
+          if (expected.length === 0) {
+            warn(`No bytes left to test from ${formatHexByte(block.start)} with this exclude list.`);
+            return result("badchar_find", options, [{ located: false }], ["No bytes left to test."]);
+          }
+          info(`Block: ${byteRange(expected)}, ${expected.length} bytes.`);
+        }
         let window = tryReadMemory(anchor, windowBytes);
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
         if (!window) {
@@ -2451,7 +2519,7 @@ var osed_bundle = (() => {
         if (window.length < windowBytes) {
           warn(`Anchor range was only partially readable; scanned ${window.length} byte(s).`);
         }
-        const located = locateExpectedArray(window, expected, minRun);
+        const located = locateExpectedArray(window, expected, Math.max(4, Math.min(minRun, expected.length)));
         let landing2;
         let observed;
         let locatedBy;
@@ -2495,8 +2563,9 @@ var osed_bundle = (() => {
         if (compared.expectedConsumed < expected.length) {
           const lastTested = expected[compared.expectedConsumed - 1];
           const firstUntested = expected[compared.expectedConsumed];
+          const lastSent = block ? formatHexByte(expected[expected.length - 1]) : "0xFF";
           warn(
-            `Array truncated after ${formatHexByte(lastTested)}; bytes ${formatHexByte(firstUntested)}-0xFF not tested.`
+            `Array truncated after ${formatHexByte(lastTested)}; bytes ${formatHexByte(firstUntested)}-${lastSent} not tested.`
           );
           if (compared.truncatedAt !== void 0) {
             warn(`Likely terminator: ${formatHexByte(compared.truncatedAt)} (first byte that never arrived).`);
@@ -2513,12 +2582,29 @@ var osed_bundle = (() => {
         );
         const nextRun = compared.truncatedAt === void 0 ? allExclude : [...allExclude, compared.truncatedAt].sort((a, b) => a - b);
         info(`Exploit line: ${pythonBadcharsLine(nextRun)}`);
-        info(`Next command: ${nextBadcharCommand("badchar_find", options.address === void 0 ? "@esp" : formatAddress(anchor, pointerSize), nextRun)}`);
+        const anchorIsSp = options.address === void 0 || block !== void 0 && anchor === readRegisters(pointerSize).sp;
+        const addressArg = anchorIsSp ? "@esp" : formatAddress(anchor, pointerSize);
+        const step = block ? nextBlockStep(block, expected, compared, nextRun) : void 0;
+        if (!block || !step) {
+          info(`Next command: ${nextBadcharCommand("badchar_find", addressArg, nextRun)}`);
+        } else if (step.kind === "done") {
+          info(`All bytes 0x01..0xFF tested; this was the last block. Final list: ${nextRun.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`);
+        } else {
+          if (step.kind === "next") {
+            info(`Block clean: ${byteRange(expected)} arrived. Bytes past the block are outside the space, not bad chars.`);
+            info(`Next block: ${byteRange(blockBytes(nextRun, { start: step.start, size: block.size }))}`);
+          } else {
+            info("Send the same block again with the grown list.");
+          }
+          const blockArgs = [windowBytes, minRun, hexArg(step.start), ...block.size !== void 0 ? [block.size] : []];
+          info(`Payload line: ${pythonBlockLine(step.start)}`);
+          info(`Next command: ${nextBadcharCommand("badchar_find", addressArg, nextRun, blockArgs)}`);
+        }
         return result(
           "badchar_find",
           __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
           [
-            {
+            __spreadValues({
               located: true,
               locatedBy,
               landingAddress: landing2,
@@ -2532,7 +2618,7 @@ var osed_bundle = (() => {
               truncatedAt: compared.truncatedAt,
               allExclude,
               exclude: normalizedExclude.values
-            }
+            }, block ? { block: __spreadProps(__spreadValues({}, block), { sent: expected.length, step }) } : {})
           ],
           warnings
         );
@@ -11287,10 +11373,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-19T11:01:43.708Z" : globalThis[key2];
+        value = true ? "2026-11-19T15:41:53.688Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "1f020e500cc2" : globalThis[key2];
+        value = true ? "7ddc9eccc55c" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -11512,8 +11598,8 @@ var osed_bundle = (() => {
     pattern_offset: "Resolve a cyclic offset",
     badchars: "Compare candidate bytes with memory",
     badchar_array: "Generate a bad-character test array",
-    badchar_function: "Python BADCHARS list and array helper for the exploit",
-    badchar_find: "Locate a sent bad-character array in memory",
+    badchar_function: "Python BADCHARS list plus array and block helpers for the exploit",
+    badchar_find: "Locate a sent bad-character array or block in memory",
     find_bytes: "Find byte sequence in PE sections",
     find_mem_bytes: "Find byte sequence in a memory range",
     find_stack_bytes: "Find byte sequence on the stack",
@@ -20502,14 +20588,17 @@ var osed_bundle = (() => {
       case "badchars":
         return { address: args[0], exclude: parseHexByteList(args[1]) };
       case "badchar_array":
-      case "badchar_function":
         return { exclude: parseHexByteList(args[0]) };
+      case "badchar_function":
+        return { exclude: parseHexByteList(args[0]), space: args[1] };
       case "badchar_find":
         return {
           address: args[0],
           exclude: parseHexByteList(args[1]),
           windowBytes: args[2],
-          minRun: args[3]
+          minRun: args[3],
+          start: args[4],
+          size: args[5]
         };
       case "egghunter":
         return { tag: args[0], mode: args[1], wow64: args[2], badchars: parseHexByteList(args[3]), os: args[4], syscall: args[5] };
