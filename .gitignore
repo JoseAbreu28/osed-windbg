@@ -5,6 +5,7 @@ build/
 dist/
 !dist/
 !dist/osed.js
+!dist/osed-legacy.js
 wheels/
 *.egg-info
 
