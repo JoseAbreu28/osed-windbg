@@ -118,7 +118,7 @@ dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D", "win10-1909")
 dx @$osed().egghunter("W00T", "seh")
 ```
 
-You get the stub as hex and as Python bytes, with a warning for each stub byte that is a bad character. Put `W00TW00T` in front of the payload. Use `true` as the third argument for a 32-bit process on 64-bit Windows. The fifth argument names the Windows build, which sets the syscall number. Without it you get the Windows 10 22H2 number and a warning. The [shellcode reference](Documentation/commands/shellcode.md#egghunter) lists the builds and shows how to pass the number yourself.
+You get the stub as hex and as Python bytes, with a warning for each stub byte that is a bad character. Put `W00TW00T` in front of the payload. Use `true` as the third argument for a 32-bit process on 64-bit Windows. The stubs hold no null bytes, so the first line passes a `00 0A 0D` check with a 49-byte stub. The fifth argument names the Windows build, which sets the syscall number. Without it you get the Windows 10 22H2 number and a warning. The [shellcode reference](Documentation/commands/shellcode.md#egghunter) lists the builds and shows how to pass the number yourself.
 
 ### 8. Bypass DEP with ROP
 

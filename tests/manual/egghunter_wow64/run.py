@@ -10,6 +10,8 @@ Then pass the hex line that egghunter() prints (tag W00T):
 
 On 64-bit Windows the harness runs under WOW64. Exit 1337 means the stub found the egg.
 0xC000001D means the stub executed int 0x2e, which WOW64 rejects.
+For the seh stub, link with -Wl,/nxcompat:no: with DEP on, Windows rejects an
+exception handler outside a loaded image and the run ends in 0xC0000005.
 """
 
 import pathlib

