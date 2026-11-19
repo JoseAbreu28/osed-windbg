@@ -31,16 +31,19 @@ Sections are `CONTROL`, `SEH`, `STACK`, `GADGETS`, `CONTEXT`, `MODULE SCORE`, `B
 Find cyclic-pattern offsets in every register, in the stack, in the SEH record, and in the memory that registers point to.
 
 ```text
-findmsp()
+findmsp(patternLength?, stackBytes?, probeBytes?)
 ```
 
 ```text
 dx @$osed().findmsp()
+dx @$osed().findmsp(20000)
+dx @$osed().findmsp(20000, 4096)
+dx @$osed().findmsp(20000, 4096, 64)
 ```
 
 Sections are `INSTRUCTION POINTER` and `PATTERN MATCHES`. Each hit has an offset and a confidence. `EXACT` means a unique offset and `CONSERVATIVE` means the pattern repeats.
 
-Limitation: in this build, `findmsp` accepts no arguments from `dx`. A call such as `findmsp(20000, 4096)` fails with `value: Unknown option key.` It always uses a 10000-byte pattern, 2048 stack bytes, and 32 probe bytes. For a longer pattern, use `pattern_offset` on the register value.
+`patternLength` is the length of the pattern you sent (256 to 100000, default 10000). `stackBytes` is how far up the stack to scan (128 to 8192, default 2048). `probeBytes` is how many bytes to read at each address that a register holds (8 to 256, default 32).
 
 ### stackmap
 
