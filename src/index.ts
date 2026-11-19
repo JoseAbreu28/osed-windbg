@@ -3166,7 +3166,14 @@ function bindApi(): OsedApi {
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 
+  // exploit.state and exploit.clear make exploit an object, which shadows the
+  // registry command of the same name. The workflow command sits beside them so
+  // every exploit call uses the object-method path dx already resolves.
   api.exploit = {
+    workflow: (...args: unknown[]) => {
+      if (args.length === 1 && args[0] === "help") return helperHelp("exploit.workflow");
+      return invoke("exploit", args);
+    },
     state: executeExploitState,
     clear: executeExploitClear,
   };

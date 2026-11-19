@@ -46,7 +46,7 @@ This page lists every command that the script registers. Each name links to its 
 | [`encode`](commands/shellcode.md#encode) | [Shellcode](commands/shellcode.md) | XOR-encode a payload so that it contains none of the excluded bytes, and print the decoder stub with it. |
 | [`exploit.clear`](commands/tools.md#exploitclear) | [Leak, math, and session](commands/tools.md) | Clear the cached exploit state. |
 | [`exploit.state`](commands/tools.md#exploitstate) | [Leak, math, and session](commands/tools.md) | Show the exploit state that `triage()` cached, such as the control mechanism, the stack pointer, and the bad characters, which `rop.synthesize` reads. |
-| [`exploit`](commands/tools.md#exploit) | [Leak, math, and session](commands/tools.md) | Print a fixed list of `dx` commands for one workflow, such as `offset`, `badchars`, or `egghunter`. |
+| [`exploit.workflow`](commands/tools.md#exploitworkflow) | [Leak, math, and session](commands/tools.md) | Print a fixed list of `dx` commands for one workflow: `offset`, `badchars`, or `egghunter`. |
 | [`find_bytes`](commands/target.md#find_bytes) | [Target and memory](commands/target.md) | Search the PE sections of one loaded module for a byte sequence. |
 | [`find_mem_bytes`](commands/target.md#find_mem_bytes) | [Target and memory](commands/target.md) | Search an address range that you give for a byte sequence. |
 | [`find_ptr`](commands/target.md#find_ptr) | [Target and memory](commands/target.md) | Find addresses of `jmp <reg>`, `call <reg>`, or `push <reg> ; ret` and drop the addresses that contain bad characters. |

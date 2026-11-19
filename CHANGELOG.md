@@ -11,6 +11,7 @@ first appeared or materially changed; they are not package release dates.
 
 - `egghunter` now reads its `os` and `syscall` arguments from `dx`. `os` picks the `NtAccessCheckAndAuditAlarm` number from a per-build table taken from j00ru's syscall tables, and an unknown or missing `os` prints a warning that names the default. The WOW64 stub now calls the `fs:[0xC0]` gate with the 64-bit number, because `int 0x2e` raises `STATUS_ILLEGAL_INSTRUCTION` under WOW64. `ntdisplay` lost its WOW64 stub and rejects numbers that do not fit `push imm8`.
 - `findmsp(patternLength?, stackBytes?, probeBytes?)` accepts its arguments from `dx`. Before, any argument failed with `value: Unknown option key.`
+- The workflow command is now `exploit.workflow(mode, tag?, offset?, address?)`. The old name `exploit(...)` could not be called from `dx`, because `exploit` is the object that holds `exploit.state` and `exploit.clear`.
 
 ### 2026-10-19 - Guided ROP proof workflow
 
