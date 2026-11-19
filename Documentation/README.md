@@ -1,111 +1,41 @@
-# OSED WinDbg Toolkit
+# Documentation
 
-TypeScript-based WinDbg Preview data-model script for exploit-development helpers.
+The [project README](../README.md) explains how to load the script and walks through the exam workflow.
 
-## Try It
+## Command reference
 
-If you only want to see the built JavaScript do something useful, use this path:
+[COMMANDS.md](COMMANDS.md) lists every command from A to Z and explains the argument conventions. Each category has its own file:
 
-1. Load the bundle in WinDbg Preview:
-   - `.scriptload <full path>\\osed-windbg\\dist\\osed.js`
-   - confirm the load banner prints a real version, commit, and build time
-2. Confirm the command surface:
-   - `dx @$osed().help()`
-   - `dx @$osed().version()`
-3. Pick a loaded module and inspect its mitigation state:
-   - `dx @$osed().modules("kernel32")`
-4. Find a classic import target:
-   - `dx @$osed().sc.iat_find("VirtualProtect")`
-5. Print a ready-made exploit skeleton:
-   - `dx @$osed().rop_template("VirtualProtect", "essfunc")`
-6. Load RP++ output into the semantic ROP index:
-   - `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")`
-7. Inspect the semantic capability catalog:
-   - `dx @$osed().rop.capabilities()`
-8. Query the loaded corpus:
-   - `dx @$osed().rop.query("capability", "LOAD_REGISTER")`
-9. Prove a generated chain one debugger stop at a time:
-   - `dx @$osed().rop.generate(...)`
-   - `dx @$osed().rop.prove({mode:"guided"})`
-   - issue `g` manually, then run bare `dx @$osed().rop.prove()` at each stop
+- [Pattern and bad characters](commands/payload.md)
+- [Crash triage](commands/crash.md)
+- [Target and memory](commands/target.md)
+- [SEH](commands/seh.md)
+- [ROP and DEP](commands/rop.md)
+- [Format strings](commands/format.md)
+- [Shellcode](commands/shellcode.md)
+- [Strings](commands/strings.md)
+- [PE and API](commands/pe-api.md)
+- [Leak, math, and session](commands/tools.md)
 
-That sequence shows the script’s value without requiring any prior setup beyond a live debug target.
+## Design notes
 
-## Prerequisites
+These upstream documents explain how the toolkit works inside:
 
-- WinDbg Preview (modern JavaScript provider)
-- Node.js 20+
-- x86 for the full classic OSED workflow; x64 for memory, landing, PE/import/export, math, triage context, and RSP gadget evidence.
-
-## Install and Build
-
-1. Clone this repository.
-2. Change into the project directory:
-   - `cd osed-windbg`
-3. Install dev dependencies:
-   - `npm install`
-4. Build bundle:
-   - `npm run build`
-5. In WinDbg Preview:
-   - `.scriptload <full path>\\osed-windbg\\dist\\osed.js`
-
-## Quickstart
-
-- `dx @$osed().help()`
-- `dx @$osed().pattern_create(300, "msf")`
-- `dx @$osed().pattern.create(300, "msf")`
-- `dx @$osed().exploit("offset")`
-- `dx @$osed().seh.visualize()`
-- `dx @$osed().triage()`
-- `dx @$osed().memory(0x0012F800)`
-- `dx @$osed().can_execute(0x0012F800)`
-- `dx @$osed().landing()`
-- `dx @$osed().math(0xFFFFFFD6, 32)`
-- `dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")`
-- `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")`
-- `dx @$osed().rop.query("capability", "STACK_PIVOT", true)`
-- `dx @$osed().rop.capabilities()`
-- `dx @$osed().rop.prove({mode:"guided"})`
-- `dx @$osed().rop.prove({action:"status"})`
-- `dx @$osed().sc.peb()`
-- `dx @$osed().sc.modules()`
-- `dx @$osed().sc.module_pages("kernel32")`
-- `dx @$osed().sc.page_summary("kernel32")`
-- `dx @$osed().sc.base("kernel")`
-- `dx @$osed().sc.pe("kernel32")`
-- `dx @$osed().sc.hashes("kernel32", "crc32")`
-- `dx @$osed().sc.hash("WinExec", "ROR13")`
-- `dx @$osed().sc.hashresolve("kernel32", 0x7c0dfcaa, "ROR13")`
-- `dx @$osed().sc.algorithms()`
-- `dx @$osed().sc.exportdir("kernel32")`
-- `dx @$osed().sc.export("kernel32", "GetProcAddress")`
-- `dx @$osed().sc.exportat("kernel32", 842)`
-- `dx @$osed().sc.exportwalk("kernel32", "GetProcAddress")`
-- `dx @$osed().sc.iat()`
-- `dx @$osed().sc.iat("app.exe")`
-- `dx @$osed().sc.iat("app.exe", "Virtual")`
-- `dx @$osed().sc.iat_find("VirtualAlloc")`
-- `dx @$osed().sc.iat_ptr("app.exe", "VirtualAlloc")`
-
-For the full command matrix, see `Documentation/COMMANDS.md`.
-
-For the normative dependency and evidence rules governing `src/analysis/`, see `Documentation/ANALYSIS_ARCHITECTURE.md`.
-
-For the replay/live evidence boundary and required Windows x86 gates, see `Documentation/ROP_PROVE_WINDOWS_VALIDATION.md`. Automated tests do not substitute for those live gates.
+- [ANALYSIS_ARCHITECTURE.md](ANALYSIS_ARCHITECTURE.md) sets the dependency and evidence rules for `src/analysis/`.
+- [SEMANTIC_ROP_DESIGN.md](SEMANTIC_ROP_DESIGN.md) describes how gadget parsing, semantics, and ROP policy are separated.
+- [GADGET_DISCOVERY.md](GADGET_DISCOVERY.md) explains how to find a specific gadget in the corpus and how to spot one that breaks the stack layout.
+- [ROP_WORKFLOW.md](ROP_WORKFLOW.md) walks through the semantic ROP pipeline.
+- [CHAIN_COMMANDS.md](CHAIN_COMMANDS.md) compares the chain builders for each API.
+- [ROP_API_REFERENCE.md](ROP_API_REFERENCE.md) documents the ROP API and its register conventions.
+- [ROP_PROVE_IMPLEMENTATION_SPEC.md](ROP_PROVE_IMPLEMENTATION_SPEC.md), [ROP_PROVE_IMPLEMENTATION_PLAN.md](ROP_PROVE_IMPLEMENTATION_PLAN.md), and [ROP_PROVE_WINDOWS_VALIDATION.md](ROP_PROVE_WINDOWS_VALIDATION.md) cover `rop.prove`.
+- [ROP_CORPUS_PERSISTENCE_DESIGN.md](ROP_CORPUS_PERSISTENCE_DESIGN.md) and [ROP_CORPUS_PERSISTENCE_IMPLEMENTATION_PLAN.md](ROP_CORPUS_PERSISTENCE_IMPLEMENTATION_PLAN.md) cover `rop.corpus.*`.
+- [HELP_SYSTEM.md](HELP_SYSTEM.md) describes the `help` command.
+- [DEVELOPMENT.md](DEVELOPMENT.md) explains how to add a command.
 
 ## Troubleshooting
 
-- Script fails to load:
-  - Confirm `dist/osed.js` exists and path is correct.
-- `@$osed` is missing:
-  - Re-run `.scriptload` and confirm `initializeScript()` executed.
-  - If the script reports `functionAlias` registration failure, use the fallback global object directly: `dx osed.help()` or `dx osed.reload()`.
-- Load banner or `version()` shows `dev` / `unknown`:
-  - You are not loading a properly built `dist/osed.js`.
-  - Re-run `npm run build`, then reload the exact built file.
-- Command returns validation errors:
-  - Use `dx @$osed().help("<name>")` and match schema exactly.
-- Memory read failures:
-  - Ensure target process is active and addresses are valid in current context.
-- `dx` result output is noisy:
-  - Command calls return `true/false`; inspect full structured output with `dx @$osed().last_result()`.
+- If `.scriptload` fails on classic WinDbg, load `dist/osed-legacy.js` instead of `dist/osed.js`.
+- If `@$osed` is missing after the load, run `.scriptload` again. If the load reports that `functionAlias` registration failed, call the global object directly, as in `dx osed.help()`.
+- If the load banner or `version()` shows `dev` or `unknown`, you loaded a file that is not a built bundle. Load the file from `dist/`.
+- If a command reports a validation error, run `dx @$osed().help("<command>")` and match its signature.
+- If memory reads fail, check that the target is stopped and that the address is valid in the current context.

@@ -19,7 +19,7 @@
 7. Return structured `CommandResult`.
 8. Add deterministic output table/section text.
 9. Register command in `src/index.ts`.
-10. Document it in `Documentation/COMMANDS.md`.
+10. Document it in the matching category file under `Documentation/commands/` and add it to `Documentation/COMMANDS.md`.
 
 ## Analysis Layer
 
