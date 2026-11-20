@@ -602,35 +602,36 @@ const pyText = (text: string): string => `"${[...text].map((char) => {
   return code <= 0xff ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u${code.toString(16).padStart(4, "0")}`;
 }).join("")}"`;
 
+const hmod = (n: number): string => (n === 1 ? "hmod" : `hmod${n}`);
+
 /** The CONFIG block of sc_builder.py for the sc.template task grammar. */
 export function builderConfig(plan: BuilderPlan): string[] {
   const calls: string[] = [];
-  let lastLoad: number | undefined;
+  let loads = 0;
   let exit = "ret";
   for (const task of plan.tasks) {
     if (task.kind === "winexec") {
-      calls.push(`("kernel32.dll", "WinExec", [s(${pyText(task.command)}), ${task.show}]),`);
+      calls.push(`k32.WinExec(s(${pyText(task.command)}), ${task.show})`);
     } else if (task.kind === "loadlibrary") {
-      calls.push(`("kernel32.dll", "LoadLibraryA", [s(${pyText(task.dll)})]),`);
-      lastLoad = calls.length;
+      loads += 1;
+      calls.push(`${hmod(loads)} = k32.LoadLibraryA(s(${pyText(task.dll)}))`);
     } else if (task.kind === "getprocaddress") {
-      calls.push(`("kernel32.dll", "GetProcAddress", [${lastLoad ? `ref(${lastLoad})` : 'base("kernel32.dll")'}, s(${pyText(task.name)})]),`);
+      calls.push(`k32.GetProcAddress(${loads ? hmod(loads) : 'base("kernel32.dll")'}, s(${pyText(task.name)}))`);
     } else {
       exit = task.kind === "exitprocess" ? "exit" : "terminate";
     }
   }
   const direct = plan.tasks.some((task) => task.kind === "loadlibrary" || task.kind === "getprocaddress")
-    ? ['    # The builder loads DLLs and resolves exports itself: ("user32.dll", "MessageBoxA", [0, s("text"), s("caption"), 0]) needs neither call.']
+    ? ['# The builder loads DLLs and resolves exports itself: dll("user32.dll").MessageBoxA(NULL, s("text"), s("caption"), MB_OK) needs neither call.']
     : [];
   return [
     `BADCHARS = b"${plan.badchars.map((byte) => `\\x${byte.toString(16).padStart(2, "0")}`).join("")}"`,
     `MAX_SIZE = ${plan.maxSize ?? "None"}`,
-    "CALLS = [",
-    ...direct,
-    ...calls.map((call) => `    ${call}`),
-    "]",
     `EXIT = "${exit}"`,
     `XOR_ENCODER = ${plan.xor ? "True" : "False"}`,
+    "",
+    ...direct,
+    ...calls,
   ];
 }
 

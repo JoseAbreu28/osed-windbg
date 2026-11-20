@@ -227,11 +227,10 @@ describe("sc.builder", () => {
     expect(config(script()).split("\n")).toEqual([
       'BADCHARS = b"\\x00\\x0a\\x0d\\x20\\x2f"',
       "MAX_SIZE = 512",
-      "CALLS = [",
-      '    ("kernel32.dll", "WinExec", [s("cmd.exe /c echo \\"ok\\" > C:\\\\o.txt"), 0]),',
-      "]",
       'EXIT = "terminate"',
       "XOR_ENCODER = True",
+      "",
+      'k32.WinExec(s("cmd.exe /c echo \\"ok\\" > C:\\\\o.txt"), 0)',
       "",
     ]);
   });
@@ -239,12 +238,21 @@ describe("sc.builder", () => {
   test("maps loadlibrary and getprocaddress to calls, and no exit task to ret", () => {
     expect(api.sc.builder("loadlibrary=user32.dll", "getprocaddress=MessageBoxA").success).toBe(true);
     const block = config(script());
-    expect(block).toContain('("kernel32.dll", "LoadLibraryA", [s("user32.dll")]),');
-    expect(block).toContain('("kernel32.dll", "GetProcAddress", [ref(1), s("MessageBoxA")]),');
+    expect(block).toContain('hmod = k32.LoadLibraryA(s("user32.dll"))');
+    expect(block).toContain('k32.GetProcAddress(hmod, s("MessageBoxA"))');
     expect(block).toContain('EXIT = "ret"');
     expect(api.sc.builder("getprocaddress=WinExec", "exit").success).toBe(true);
-    expect(config(script())).toContain('[base("kernel32.dll"), s("WinExec")]');
+    expect(config(script())).toContain('k32.GetProcAddress(base("kernel32.dll"), s("WinExec"))');
     expect(config(script())).toContain('EXIT = "exit"');
+  });
+
+  test("gives each loadlibrary its own name, and resolves against the most recent one", () => {
+    expect(api.sc.builder("loadlibrary=user32.dll", "getprocaddress=MessageBoxA", "loadlibrary=ws2_32.dll", "getprocaddress=WSASocketA").success).toBe(true);
+    const block = config(script());
+    expect(block).toContain('hmod = k32.LoadLibraryA(s("user32.dll"))');
+    expect(block).toContain('k32.GetProcAddress(hmod, s("MessageBoxA"))');
+    expect(block).toContain('hmod2 = k32.LoadLibraryA(s("ws2_32.dll"))');
+    expect(block).toContain('k32.GetProcAddress(hmod2, s("WSASocketA"))');
   });
 
   test("names the valid tasks on a typo and rejects a bad max", () => {
