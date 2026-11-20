@@ -11886,10 +11886,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-20T14:20:33.063Z" : globalThis[key2];
+        value = true ? "2026-11-20T14:22:28.712Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "3c757727e942" : globalThis[key2];
+        value = true ? "5a18cf8f5ae5" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15257,7 +15257,28 @@ def base(dll):
 
 
 _RECORDED = []
+_MARKED_CDECL = set()
 CALLS = _RECORDED
+
+
+class _Export:
+    """One export of one DLL.
+
+    Calling it records a stdcall call, the Win32 default, where the API drops its own
+    arguments. Calling .cdecl records one the caller cleans up after instead.
+    """
+
+    def __init__(self, dll, api):
+        self._dll = dll
+        self._api = api
+
+    def __call__(self, *args):
+        _RECORDED.append((self._dll, self._api, list(args)))
+        return Arg("ref", len(_RECORDED))
+
+    def cdecl(self, *args):
+        _MARKED_CDECL.add(self._api)
+        return self(*args)
 
 
 class _Dll:
@@ -15269,11 +15290,7 @@ class _Dll:
     def __getattr__(self, api):
         if api.startswith("_"):
             raise AttributeError(api)
-
-        def call(*args):
-            _RECORDED.append((self._name, api, list(args)))
-            return Arg("ref", len(_RECORDED))
-        return call
+        return _Export(self._name, api)
 
 
 def dll(name):
@@ -15364,6 +15381,9 @@ k32.WinExec(s("calc.exe"), SW_SHOWNORMAL)
 # <<< CONFIG
 # Nothing below needs editing.
 
+# A CONFIG block written before these knobs existed still builds.
+CDECL = globals().get("CDECL", ())
+
 try:
     from keystone import Ks, KS_ARCH_X86, KS_MODE_32
 except ImportError:
@@ -15374,6 +15394,18 @@ KS = Ks(KS_ARCH_X86, KS_MODE_32)
 BAD = frozenset(BADCHARS) | {0}
 KERNEL32 = "kernel32.dll"
 EXIT_APIS = {"terminate": "TerminateProcess", "exit": "ExitProcess"}
+
+# Exports the caller cleans up after. Win32 is stdcall, so these are the exceptions:
+# the varargs formatters, which cannot know their own argument count, and the C runtime
+# in msvcrt.dll and ntdll.dll, which is cdecl throughout. CDECL in CONFIG adds to this.
+CDECL_EXPORTS = frozenset({
+    "wsprintfA", "wsprintfW",
+    "sprintf", "swprintf", "_snprintf", "_snwprintf", "_vsnprintf", "_vsnwprintf",
+    "printf", "sscanf", "swscanf",
+    "memcpy", "memmove", "memset", "strcpy", "strcat", "strlen", "strcmp",
+    "wcscpy", "wcscat", "wcslen",
+    "malloc", "free", "atoi", "_itoa", "system", "exit",
+})
 LABEL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):$")
 
 
@@ -15504,6 +15536,23 @@ def push_const(value, note, reg="eax"):
     form = shortest_clean(forms) or next((f + [pushed] for f in split_forms(v, reg) if clean(f + [pushed])), None)
     if form is None:
         raise BuildError(f"no clean way to push {hex(v)} ({note})")
+    return noted(form, note)
+
+
+def drop_args(count, note):
+    """Caller-side cleanup after a cdecl call: the shortest clean way off those pushes.
+
+    ECX and EDX are free here. The resolver preserves them, but a called API may not,
+    so nothing in the generated code reads them across a call.
+    """
+    total = 4 * count
+    forms = [[Op(f"add esp, {hex(total)}")],
+             [Op(f"sub esp, {hex(-total & M32)}")],
+             [Op(f"lea esp, [esp+{hex(total)}]")]]
+    forms += [[Op(f"pop {register}")] * count for register in ("ecx", "edx")]
+    form = shortest_clean(forms)
+    if form is None:
+        raise BuildError(f"no clean way to drop {total} bytes of cdecl arguments ({note})")
     return noted(form, note)
 
 
@@ -15713,7 +15762,7 @@ def choose_roles():
 
 # ---------------------------------------------------------------- the plan
 
-Call = collections.namedtuple("Call", "number dll api args")
+Call = collections.namedtuple("Call", "number dll api args cdecl")
 
 
 def dll_key(dll):
@@ -15729,6 +15778,9 @@ def parse_config():
         raise BuildError(f'EXIT must be "terminate", "exit" or "ret", not {EXIT!r}')
     if MAX_SIZE is not None and (not isinstance(MAX_SIZE, int) or MAX_SIZE <= 0):
         raise BuildError("MAX_SIZE must be None or a positive int")
+    if isinstance(CDECL, str):
+        raise BuildError('CDECL takes export names, as in CDECL = ("MyPrintf",), not one string')
+    cdecl = CDECL_EXPORTS | _MARKED_CDECL | {str(name) for name in CDECL}
     calls = []
     for number, entry in enumerate(CALLS, 1):
         if not (isinstance(entry, tuple) and len(entry) == 3 and isinstance(entry[2], (list, tuple))):
@@ -15752,7 +15804,7 @@ def parse_config():
                     str(arg.value).encode("latin-1")
                 except UnicodeEncodeError:
                     raise BuildError(f"call {number} {api}: s() takes single-byte text, use w() for {arg.value!r}")
-        calls.append(Call(number, dll_key(dll), str(api), list(args)))
+        calls.append(Call(number, dll_key(dll), str(api), list(args), str(api) in cdecl))
     return calls
 
 
@@ -15839,7 +15891,11 @@ def build_body(calls):
                 lea = [Op(f"lea eax, [ebp-{hex(offset)}]"), Op("push eax")]
                 body += noted(lea if clean(lea) else load_const(-offset, "eax", "") + [Op("add eax, ebp"), Op("push eax")],
                               f"{label}, scratch at ebp-{hex(offset)}")
-        body.append(Op(f"call {frame.slot(call.dll + '!' + call.api)}", f"{call.api} pops its own arguments"))
+        body.append(Op(f"call {frame.slot(call.dll + '!' + call.api)}",
+                       f"{call.api} is cdecl, so the caller drops the arguments" if call.cdecl
+                       else f"{call.api} pops its own arguments"))
+        if call.cdecl and call.args:
+            body += drop_args(len(call.args), f"drop {len(call.args)} argument(s) of {call.api}")
         if call.number in referenced:
             body.append(Op(f"mov {frame.slot(f'ref{call.number}')}, eax", f"ref({call.number}) = {call.api} result"))
 

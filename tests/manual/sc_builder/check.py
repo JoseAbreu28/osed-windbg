@@ -118,6 +118,25 @@ XOR_ENCODER = True
 
 k32.WinExec(s("cmd.exe /c echo ok > C:\\Users\\Public\\sc_builder_d.txt"), SW_HIDE)
 ''', ["[!] XOR_ENCODER:", "page must be writable"]),
+    "cdecl": Case(rf'''BADCHARS = {BAD_LAB}
+MAX_SIZE = None
+EXIT = "exit"
+XOR_ENCODER = False
+CDECL = ("OnlyInConfig",)
+
+text = buf(64)
+pid = k32.GetCurrentProcessId()
+dll("user32.dll").wsprintfA(text, s("sc_builder pid=%u"), pid)
+dll("user32.dll").OnlyInConfig(text, 1)
+dll("user32.dll").OnlyAtCallSite.cdecl(text, 2)
+k32.Sleep(100)
+k32.lstrlenA(text)
+''', ["wsprintfA is cdecl, so the caller drops the arguments",
+      "drop 3 argument(s) of wsprintfA",
+      "OnlyInConfig is cdecl", "OnlyAtCallSite is cdecl",
+      "Sleep pops its own arguments", "lstrlenA pops its own arguments"],
+        ["drop 1 argument(s) of Sleep", "drop 1 argument(s) of lstrlenA"],
+        {r"drop \d+ argument\(s\) of (\w+)": 3}),
     "xor_needed": Case(rf'''BADCHARS = {BAD_EBP}
 MAX_SIZE = None
 EXIT = "terminate"
