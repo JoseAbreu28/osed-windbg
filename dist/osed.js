@@ -150,8 +150,8 @@ var osed_bundle = (() => {
       if (/^[0-9]+$/.test(trimmed)) {
         throw new Error("Decimal address strings are not allowed.");
       }
-      const hex6 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-      return BigInt(hex6);
+      const hex7 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+      return BigInt(hex7);
     }
     throw new Error("Address must be a number or hex string.");
   }
@@ -254,9 +254,18 @@ var osed_bundle = (() => {
   };
 
   // src/core/output.ts
+  var quietDepth = 0;
   function write(line = "") {
-    host.diagnostics.debugLog(`${line}
+    if (quietDepth === 0) host.diagnostics.debugLog(`${line}
 `);
+  }
+  function quietly(fn) {
+    quietDepth += 1;
+    try {
+      return fn();
+    } finally {
+      quietDepth -= 1;
+    }
   }
   function pad(value, width) {
     return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`;
@@ -304,21 +313,21 @@ var osed_bundle = (() => {
       return;
     }
     const widths = columns.map((column) => {
-      var _a;
+      var _a2;
       const maxValueWidth = rows.reduce((max, row) => {
-        var _a2;
-        const value = (_a2 = row[column.key]) != null ? _a2 : "";
+        var _a3;
+        const value = (_a3 = row[column.key]) != null ? _a3 : "";
         return Math.max(max, visibleLength(value));
       }, 0);
-      return Math.max((_a = column.width) != null ? _a : 0, column.header.length, maxValueWidth);
+      return Math.max((_a2 = column.width) != null ? _a2 : 0, column.header.length, maxValueWidth);
     });
     const render = (values) => values.map((value, i) => pad(stripDml(value), widths[i])).join("  ");
     write(render(columns.map((column) => column.header)));
     write(render(widths.map((width) => "-".repeat(width))));
     for (const row of rows) {
       write(render(columns.map((column) => {
-        var _a;
-        return (_a = row[column.key]) != null ? _a : "";
+        var _a2;
+        return (_a2 = row[column.key]) != null ? _a2 : "";
       })));
     }
   }
@@ -388,13 +397,13 @@ var osed_bundle = (() => {
     if (!/^(0x)?[0-9a-fA-F]+$/.test(value)) {
       throw new Error("String pattern_offset value must be raw hex only.");
     }
-    const hex6 = value.startsWith("0x") ? value.slice(2) : value;
-    if (hex6.length % 2 !== 0) {
+    const hex7 = value.startsWith("0x") ? value.slice(2) : value;
+    if (hex7.length % 2 !== 0) {
       throw new Error("Hex string length must be even.");
     }
     const chars = [];
-    for (let i = 0; i < hex6.length; i += 2) {
-      chars.push(parseInt(hex6.slice(i, i + 2), 16));
+    for (let i = 0; i < hex7.length; i += 2) {
+      chars.push(parseInt(hex7.slice(i, i + 2), 16));
     }
     return String.fromCharCode(...chars.reverse());
   }
@@ -512,9 +521,9 @@ var osed_bundle = (() => {
     return pointerSize === 8 ? readUint64LE(address) : BigInt(readUint32LE(address));
   }
   function executeDebuggerCommand(command2) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a2, _b, _c, _d, _e, _f, _g;
     const hostAny = host;
-    const exec = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control) == null ? void 0 : _d.ExecuteCommand;
+    const exec = (_d = (_c = (_b = (_a2 = hostAny.namespace) == null ? void 0 : _a2.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control) == null ? void 0 : _d.ExecuteCommand;
     if (typeof exec !== "function") {
       throw new Error("WinDbg command execution is unavailable in this host.");
     }
@@ -580,9 +589,9 @@ var osed_bundle = (() => {
     }
   }
   function getPointerSize() {
-    var _a;
+    var _a2;
     const process = host.currentProcess;
-    const machine = ((_a = process == null ? void 0 : process.Machine) != null ? _a : "").toLowerCase();
+    const machine = ((_a2 = process == null ? void 0 : process.Machine) != null ? _a2 : "").toLowerCase();
     if ((process == null ? void 0 : process.Is64Bit) || machine.includes("x64") || machine.includes("amd64")) {
       return 8;
     }
@@ -709,7 +718,7 @@ var osed_bundle = (() => {
   }
   var EXPANSION_SLACK = 32;
   function compareBadchars(observed, expected, leadingSlack = 0) {
-    var _a;
+    var _a2;
     const n = expected.length;
     const m = Math.min(observed.length, n + EXPANSION_SLACK);
     const width = m + 1;
@@ -780,7 +789,7 @@ var osed_bundle = (() => {
         continue;
       }
       badChars.push(expected[k]);
-      const value = fate[k] === "dropped" ? -1 : fate[k] === "kept" ? (_a = expanded.get(k)) != null ? _a : -1 : seen[k];
+      const value = fate[k] === "dropped" ? -1 : fate[k] === "kept" ? (_a2 = expanded.get(k)) != null ? _a2 : -1 : seen[k];
       mismatches.push({ offset: k, expected: expected[k], observed: value });
     }
     return __spreadValues({
@@ -876,9 +885,9 @@ var osed_bundle = (() => {
     const process = host.currentProcess;
     const modules = asArray(process == null ? void 0 : process.Modules);
     const listed = modules.map((entry) => {
-      var _a, _b, _c, _d, _e;
+      var _a2, _b, _c, _d, _e;
       const module = entry;
-      const name = (_a = module.Name) != null ? _a : "<unknown>";
+      const name = (_a2 = module.Name) != null ? _a2 : "<unknown>";
       const path = (_b = module.Path) != null ? _b : name;
       const base = toBigInt((_d = (_c = module.BaseAddress) != null ? _c : module.Base) != null ? _d : module.Address);
       let size = toBigInt((_e = module.Size) != null ? _e : module.Length);
@@ -1058,9 +1067,9 @@ var osed_bundle = (() => {
     const process = host.currentProcess;
     const modules = asArray2(process == null ? void 0 : process.Modules);
     return modules.map((entry) => {
-      var _a, _b, _c, _d, _e, _f;
+      var _a2, _b, _c, _d, _e, _f;
       const module = entry;
-      const base = toBigInt2((_b = (_a = module.BaseAddress) != null ? _a : module.Base) != null ? _b : module.Address);
+      const base = toBigInt2((_b = (_a2 = module.BaseAddress) != null ? _a2 : module.Base) != null ? _b : module.Address);
       let size = toBigInt2((_c = module.Size) != null ? _c : module.Length);
       const end = toBigInt2(module.EndAddress);
       if (size === BigInt(0) && end > base) {
@@ -1075,7 +1084,7 @@ var osed_bundle = (() => {
     }).filter((module) => module.size > BigInt(0)).sort((a, b) => a.base < b.base ? -1 : 1);
   }
   function parseSections(module) {
-    var _a;
+    var _a2;
     const sections = [];
     try {
       const mz = readUint16LE(module.base);
@@ -1093,7 +1102,7 @@ var osed_bundle = (() => {
       const sectionTable = pe + BigInt(24) + BigInt(optionalHeaderSize);
       for (let i = 0; i < sectionCount; i += 1) {
         const entry = sectionTable + BigInt(i * 40);
-        const nameBytes = (_a = tryReadMemory(entry, 8)) != null ? _a : new Uint8Array();
+        const nameBytes = (_a2 = tryReadMemory(entry, 8)) != null ? _a2 : new Uint8Array();
         const name = decodeAscii(nameBytes).replace(/\0+$/, "") || `.sec${i}`;
         const virtualSize = readUint32LE(entry + BigInt(8));
         const virtualAddress = readUint32LE(entry + BigInt(12));
@@ -1370,10 +1379,10 @@ var osed_bundle = (() => {
     };
   }
   function memoryRegion(address) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     try {
       const hostAny = host;
-      const control = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
+      const control = (_c = (_b = (_a2 = hostAny.namespace) == null ? void 0 : _a2.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
       const execute = control == null ? void 0 : control.ExecuteCommand;
       if (typeof execute !== "function") throw new Error("WinDbg command execution is unavailable.");
       const result3 = execute.call(control, `!vprot 0x${address.toString(16)}`);
@@ -1493,9 +1502,9 @@ var osed_bundle = (() => {
     return { address, memory, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation, patternEvidence };
   }
   function stackPointer() {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     const thread = host.currentThread;
-    const registers = (_b = (_a = thread == null ? void 0 : thread.Registers) == null ? void 0 : _a.User) != null ? _b : thread == null ? void 0 : thread.Registers;
+    const registers = (_b = (_a2 = thread == null ? void 0 : thread.Registers) == null ? void 0 : _a2.User) != null ? _b : thread == null ? void 0 : thread.Registers;
     const names = getPointerSize() === 8 ? ["rsp", "esp"] : ["esp", "rsp"];
     for (const name of names) {
       const value = (_c = registers == null ? void 0 : registers[name]) != null ? _c : registers == null ? void 0 : registers[name.toUpperCase()];
@@ -1535,10 +1544,10 @@ var osed_bundle = (() => {
     return available;
   }
   function canDisassemble(address) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     try {
       const hostAny = host;
-      const control = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
+      const control = (_c = (_b = (_a2 = hostAny.namespace) == null ? void 0 : _a2.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
       if (typeof (control == null ? void 0 : control.ExecuteCommand) !== "function") return null;
       const lines = Array.from(control.ExecuteCommand.call(control, `u 0x${address.toString(16)} L1`)).map(String);
       return lines.some((line) => /\b[0-9a-f`]+\s+[0-9a-f]{2}/i.test(line)) && !lines.some((line) => /memory access error|could not be read|unable to/i.test(line));
@@ -1718,7 +1727,7 @@ var osed_bundle = (() => {
 
   // src/core/exploit_strategy_advisor.ts
   function adviseExploitStrategy(evidence) {
-    var _a;
+    var _a2;
     const recommendations = [];
     const stale = [evidence.instructionPointerControlled, evidence.stackControlled, evidence.landingRegionExecutable, evidence.depEnabled, evidence.aslrEnabled].some((item) => item.targetId !== void 0 && evidence.currentTargetId !== void 0 && item.targetId !== evidence.currentTargetId);
     if (stale) {
@@ -1746,7 +1755,7 @@ var osed_bundle = (() => {
         nextCommands: ["landing", "badchars", "find_ptr"]
       });
     } else if (evidence.landingRegionExecutable.value === false) {
-      if (((_a = evidence.executableAlternativeAvailable) == null ? void 0 : _a.value) === true) {
+      if (((_a2 = evidence.executableAlternativeAvailable) == null ? void 0 : _a2.value) === true) {
         recommendations.push({
           strategy: "Evaluate an executable landing alternative",
           rationale: "The current landing region is observed non-executable, while an executable alternative was observed.",
@@ -1869,10 +1878,10 @@ var osed_bundle = (() => {
     return void 0;
   }
   function readRegisters(pointerSize) {
-    var _a;
+    var _a2;
     const thread = host.currentThread;
     const regsRoot = safeGet2(thread, "Registers");
-    const userRegs = (_a = safeGet2(regsRoot, "User")) != null ? _a : regsRoot;
+    const userRegs = (_a2 = safeGet2(regsRoot, "User")) != null ? _a2 : regsRoot;
     const all = [];
     for (const key2 of safeKeys2(userRegs)) {
       const parsed = toBigInt3(safeGet2(userRegs, key2));
@@ -1945,8 +1954,8 @@ var osed_bundle = (() => {
     return score;
   }
   function moduleLabel(name) {
-    var _a;
-    return (_a = name.split(/[\\/]/).filter(Boolean).pop()) != null ? _a : name;
+    var _a2;
+    return (_a2 = name.split(/[\\/]/).filter(Boolean).pop()) != null ? _a2 : name;
   }
   var TRIAGE_ASLR_TAIL_LIMIT = 6;
   function selectTriageModules(scored) {
@@ -1998,8 +2007,8 @@ var osed_bundle = (() => {
     }
     const uniq = (values) => [...new Set(values.map((v) => v.toString()))].map((v) => BigInt(v)).sort((left, right) => {
       const rank = (address) => {
-        var _a;
-        return ((_a = findModuleByAddress(address)) == null ? void 0 : _a.aslr) === "disabled" ? 0 : 1;
+        var _a2;
+        return ((_a2 = findModuleByAddress(address)) == null ? void 0 : _a2.aslr) === "disabled" ? 0 : 1;
       };
       return rank(left) - rank(right) || (left < right ? -1 : left > right ? 1 : 0);
     });
@@ -2054,11 +2063,11 @@ var osed_bundle = (() => {
     return { value, source, observedAt: Date.now() };
   }
   function renderStrategyAssessment(pointerSize, ipControlled, landingEvidence, stackExecutable, depEnforced, modules, patternOffset) {
-    var _a;
+    var _a2;
     const evidence = {
       instructionPointerControlled: strategyEvidence(ipControlled, ipControlled ? "pattern match or crash state" : "crash state"),
       stackControlled: strategyEvidence(landingEvidence.observations.some((item) => item.kind === "cyclic_pattern_match"), "landing analysis"),
-      landingRegionExecutable: strategyEvidence(stackExecutable, ((_a = landingEvidence.memory) == null ? void 0 : _a.source) === "vprot" ? "VirtualQuery" : "memory protection unavailable"),
+      landingRegionExecutable: strategyEvidence(stackExecutable, ((_a2 = landingEvidence.memory) == null ? void 0 : _a2.source) === "vprot" ? "VirtualQuery" : "memory protection unavailable"),
       depEnabled: strategyEvidence(depEnforced, depEnforced === null ? "unknown" : "stack protection observation"),
       aslrEnabled: strategyEvidence(null, "not assessed by triage strategy snapshot"),
       executableAlternativeAvailable: strategyEvidence(null, "not scanned by triage"),
@@ -2100,12 +2109,12 @@ var osed_bundle = (() => {
         stackBytes: { type: "number", min: 128, max: 4096, default: 1024 }
       },
       execute(options) {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
+        var _a2, _b, _c, _d, _e, _f, _g, _h;
         const pointerSize = getPointerSize();
         const regs = readRegisters(pointerSize);
         const patternLength = options.patternLength;
         const stackBytesToRead = options.stackBytes;
-        const badchars = ((_a = options.badchars) != null ? _a : [0, 10, 13]).map((v) => v & 255);
+        const badchars = ((_a2 = options.badchars) != null ? _a2 : [0, 10, 13]).map((v) => v & 255);
         const moduleFilter = options.module;
         const patternOffset = findOffset(regs.ip, patternLength);
         const seh = readSehPreview(pointerSize);
@@ -2286,7 +2295,7 @@ var osed_bundle = (() => {
   var RETURN_SLOT_REACH = 64;
   var CONTENT_BACKTRACK = 8;
   function readAfterReturnSlot(anchor, pointerSize, length) {
-    var _a;
+    var _a2;
     const ip = readRegisters(pointerSize).ip;
     if (ip === void 0 || findModuleByAddress(ip) !== void 0) return void 0;
     const reach = RETURN_SLOT_REACH + pointerSize;
@@ -2297,7 +2306,7 @@ var osed_bundle = (() => {
     if (offset === void 0) return void 0;
     const slot = start + BigInt(offset);
     const landing2 = slot + BigInt(pointerSize);
-    const observed = (_a = tryReadMemory(landing2, length)) != null ? _a : readLargestWindow(landing2, length);
+    const observed = (_a2 = tryReadMemory(landing2, length)) != null ? _a2 : readLargestWindow(landing2, length);
     return observed ? { slot, landing: landing2, observed } : void 0;
   }
   function createBadcharsCommand() {
@@ -2314,9 +2323,9 @@ var osed_bundle = (() => {
         exclude: { type: "array", elementType: "number", default: [] }
       },
       execute(options) {
-        var _a;
+        var _a2;
         const address = normalizeAddress(options.address);
-        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const normalizedExclude = normalizeByteArray((_a2 = options.exclude) != null ? _a2 : []);
         const expected = expectedBytes(normalizedExclude.values);
         const observed = readMemory(address, expected.length + 64);
         const compared = compareBadchars(observed, expected);
@@ -2384,23 +2393,23 @@ var osed_bundle = (() => {
         exclude: { type: "array", elementType: "number", default: [] }
       },
       execute(options) {
-        var _a;
-        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        var _a2;
+        const normalizedExclude = normalizeByteArray((_a2 = options.exclude) != null ? _a2 : []);
         const expected = expectedBytes(normalizedExclude.values);
         const python = formatByteArray(expected, "python");
         const c = formatByteArray(expected, "c");
-        const hex6 = formatByteArray(expected, "hex");
+        const hex7 = formatByteArray(expected, "hex");
         section("Bad Character Test Array");
         info(`Bytes: ${expected.length} (excluded ${normalizedExclude.values.length})`);
         print(`Python: ${python}`);
         print(`C:      ${c}`);
-        print(`Hex:    ${hex6}`);
+        print(`Hex:    ${hex7}`);
         whyItMatters("Send this array to the target, then use badchar_find to locate it in memory and see which bytes were mangled.");
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
         return result(
           "badchar_array",
           __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
-          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex6 } }],
+          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex7 } }],
           warnings
         );
       }
@@ -2421,8 +2430,8 @@ var osed_bundle = (() => {
         space: { type: "number", min: 0, max: 256, default: 0 }
       },
       execute(options) {
-        var _a;
-        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        var _a2;
+        const normalizedExclude = normalizeByteArray((_a2 = options.exclude) != null ? _a2 : []);
         const space = options.space;
         const lines = pythonBadcharHelper(normalizedExclude.values, space);
         section("Bad Character Python Helper");
@@ -2472,9 +2481,9 @@ var osed_bundle = (() => {
         size: { type: "number", min: 0, max: 256 }
       },
       execute(options) {
-        var _a, _b, _c;
+        var _a2, _b, _c;
         const pointerSize = getPointerSize();
-        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const normalizedExclude = normalizeByteArray((_a2 = options.exclude) != null ? _a2 : []);
         const size = options.size || void 0;
         const block = options.start !== void 0 || size !== void 0 ? { start: (_b = options.start) != null ? _b : FIRST_BLOCK_START, size } : void 0;
         const expected = block ? blockBytes(normalizedExclude.values, block) : expectedBytes(normalizedExclude.values);
@@ -2739,9 +2748,9 @@ var osed_bundle = (() => {
     return candidates2;
   }
   function movEax(value, badSet) {
-    var _a;
+    var _a2;
     const candidates2 = movEaxCandidates(value);
-    return (_a = candidates2.find((c) => c.every((b) => b !== 0 && !badSet.has(b)))) != null ? _a : candidates2[0];
+    return (_a2 = candidates2.find((c) => c.every((b) => b !== 0 && !badSet.has(b)))) != null ? _a2 : candidates2[0];
   }
   function ntaccessX86(tag, mov) {
     return [
@@ -2947,7 +2956,7 @@ var osed_bundle = (() => {
     return [val & 255, val >> 8 & 255, val >> 16 & 255, val >> 24 & 255];
   }
   function buildEgghunter(options) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     const tag = tagBytes(options.tag);
     const badSet = new Set(uniqueBytes(options.badchars));
     let items;
@@ -2981,7 +2990,7 @@ var osed_bundle = (() => {
       bytes,
       size: bytes.length,
       badcharHits: badcharHits3,
-      syscallUsed: (_a = resolved == null ? void 0 : resolved.number) != null ? _a : null,
+      syscallUsed: (_a2 = resolved == null ? void 0 : resolved.number) != null ? _a2 : null,
       syscallSource: (_b = resolved == null ? void 0 : resolved.source) != null ? _b : null,
       osWarning: (_c = resolved == null ? void 0 : resolved.warning) != null ? _c : null
     };
@@ -3013,9 +3022,9 @@ var osed_bundle = (() => {
         syscall: { type: "number", min: 0, max: 4294967295 }
       },
       execute(options) {
-        var _a, _b, _c, _d, _e;
+        var _a2, _b, _c, _d, _e;
         const opts = {
-          tag: (_a = options.tag) != null ? _a : "W00T",
+          tag: (_a2 = options.tag) != null ? _a2 : "W00T",
           mode: (_b = options.mode) != null ? _b : "ntaccess",
           wow64: (_c = options.wow64) != null ? _c : false,
           badchars: (_d = options.badchars) != null ? _d : [],
@@ -3050,8 +3059,8 @@ var osed_bundle = (() => {
 
   // src/commands/seh.ts
   function shortModuleName(name) {
-    var _a;
-    return (_a = name.replace(/\//g, "\\").split("\\").pop()) != null ? _a : name;
+    var _a2;
+    return (_a2 = name.replace(/\//g, "\\").split("\\").pop()) != null ? _a2 : name;
   }
   function formatEspDelta(node, esp) {
     if (esp === void 0) return "unknown";
@@ -3071,7 +3080,7 @@ var osed_bundle = (() => {
       examples: ["dx @$osed().seh.visualize()"],
       schema: {},
       execute(options) {
-        var _a, _b;
+        var _a2, _b;
         const pointerSize = getPointerSize();
         if (pointerSize !== 4) {
           return {
@@ -3126,7 +3135,7 @@ var osed_bundle = (() => {
             moduleOffset: module ? handler - module.base : void 0,
             espDelta: esp === void 0 ? void 0 : node - esp,
             executable,
-            aslr: (_a = module == null ? void 0 : module.aslr) != null ? _a : "unknown",
+            aslr: (_a2 = module == null ? void 0 : module.aslr) != null ? _a2 : "unknown",
             safeSeh: (_b = module == null ? void 0 : module.safeseh) != null ? _b : "unknown",
             end,
             brokenNext,
@@ -3616,9 +3625,9 @@ var osed_bundle = (() => {
     return void 0;
   }
   function adjustsStackExplicitly(step) {
-    var _a;
+    var _a2;
     const ins = step.instruction;
-    const destination = (_a = ins.operands[0]) == null ? void 0 : _a.trim().toLowerCase();
+    const destination = (_a2 = ins.operands[0]) == null ? void 0 : _a2.trim().toLowerCase();
     if ((ins.mnemonic === "add" || ins.mnemonic === "sub") && destination === "esp") {
       return true;
     }
@@ -3887,10 +3896,10 @@ var osed_bundle = (() => {
     return registers.every((register2) => isIdentityTransform(register2, transforms[register2]));
   }
   function normalizeTransformQuery(query) {
-    var _a, _b;
+    var _a2, _b;
     return {
       register: query.register.trim().toLowerCase(),
-      base: (_a = query.base) == null ? void 0 : _a.trim().toLowerCase(),
+      base: (_a2 = query.base) == null ? void 0 : _a2.trim().toLowerCase(),
       offset: query.offset,
       offsetRegister: (_b = query.offsetRegister) == null ? void 0 : _b.trim().toLowerCase(),
       constant: query.constant,
@@ -3934,12 +3943,12 @@ var osed_bundle = (() => {
     return queries.every((query) => matchesTransform(transforms[query.register], query));
   }
   function queryRopGadgets(gadgets, query) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     const reads = normalizeRegisters(query.reads);
     const writes2 = normalizeRegisters(query.writes);
     const preserves = normalizeRegisters(query.preserves);
     const preservesThroughout = normalizeRegisters(query.preservesThroughout);
-    const transforms = ((_a = query.transforms) != null ? _a : []).map(normalizeTransformQuery);
+    const transforms = ((_a2 = query.transforms) != null ? _a2 : []).map(normalizeTransformQuery);
     const stackDelta = normalizeKinds(query.stackDelta);
     const capabilities = normalizeKinds(query.capability);
     const terminators = normalizeKinds(query.terminator);
@@ -3989,11 +3998,11 @@ var osed_bundle = (() => {
     });
   }
   function summarizeCapabilities(index) {
-    var _a, _b, _c, _d, _e;
+    var _a2, _b, _c, _d, _e;
     const counts = /* @__PURE__ */ new Map();
     for (const gadget of index.gadgets) {
       for (const capability2 of gadget.capabilities) {
-        const key2 = [capability2.kind, (_a = capability2.register) != null ? _a : "", (_b = capability2.targetRegister) != null ? _b : ""].join(":");
+        const key2 = [capability2.kind, (_a2 = capability2.register) != null ? _a2 : "", (_b = capability2.targetRegister) != null ? _b : ""].join(":");
         const existing = (_e = counts.get(key2)) != null ? _e : {
           kind: capability2.kind,
           register: (_c = capability2.register) != null ? _c : "",
@@ -4025,9 +4034,9 @@ var osed_bundle = (() => {
     return [kind, register2 != null ? register2 : "", targetRegister != null ? targetRegister : ""].join(":");
   }
   function push(map, capability2, gadget) {
-    var _a;
+    var _a2;
     const k = key(capability2.kind, capability2.register, capability2.targetRegister);
-    const existing = (_a = map.get(k)) != null ? _a : [];
+    const existing = (_a2 = map.get(k)) != null ? _a2 : [];
     existing.push(gadget);
     map.set(k, existing);
   }
@@ -4056,32 +4065,32 @@ var osed_bundle = (() => {
       gadgets,
       capabilityMap,
       loadRegister(register2) {
-        var _a;
-        return (_a = capabilityMap.get(key("LOAD_REGISTER", register2))) != null ? _a : [];
+        var _a2;
+        return (_a2 = capabilityMap.get(key("LOAD_REGISTER", register2))) != null ? _a2 : [];
       },
       zeroRegister(register2) {
-        var _a;
-        return (_a = capabilityMap.get(key("ZERO_REGISTER", register2))) != null ? _a : [];
+        var _a2;
+        return (_a2 = capabilityMap.get(key("ZERO_REGISTER", register2))) != null ? _a2 : [];
       },
       moveIntoRegister(register2) {
-        var _a;
-        return (_a = capabilityMap.get(key("MOVE_REGISTER", void 0, register2))) != null ? _a : [];
+        var _a2;
+        return (_a2 = capabilityMap.get(key("MOVE_REGISTER", void 0, register2))) != null ? _a2 : [];
       },
       exchangeWithRegister(register2) {
-        var _a;
-        return (_a = capabilityMap.get(key("EXCHANGE_REGISTER", register2))) != null ? _a : [];
+        var _a2;
+        return (_a2 = capabilityMap.get(key("EXCHANGE_REGISTER", register2))) != null ? _a2 : [];
       },
       stackPivotCandidates() {
-        var _a;
-        return (_a = capabilityMap.get(key("STACK_PIVOT"))) != null ? _a : [];
+        var _a2;
+        return (_a2 = capabilityMap.get(key("STACK_PIVOT"))) != null ? _a2 : [];
       },
       memoryReadCandidates() {
-        var _a;
-        return (_a = capabilityMap.get(key("MEMORY_READ"))) != null ? _a : [];
+        var _a2;
+        return (_a2 = capabilityMap.get(key("MEMORY_READ"))) != null ? _a2 : [];
       },
       memoryWriteCandidates() {
-        var _a;
-        return (_a = capabilityMap.get(key("MEMORY_WRITE"))) != null ? _a : [];
+        var _a2;
+        return (_a2 = capabilityMap.get(key("MEMORY_WRITE"))) != null ? _a2 : [];
       },
       query(query) {
         return queryRopGadgets(gadgets, query);
@@ -4424,10 +4433,10 @@ var osed_bundle = (() => {
     return `0x${asBig.toString(16).toUpperCase().padStart(8, "0")}`;
   }
   function formatChainPython(plan) {
-    var _a;
+    var _a2;
     const lines = ["from struct import pack", 'rop = b""'];
     for (const step of plan.steps) {
-      const word = step.kind === "gadget" ? hex32(step.address) : (_a = step.placeholder) != null ? _a : hex32(step.value);
+      const word = step.kind === "gadget" ? hex32(step.address) : (_a2 = step.placeholder) != null ? _a2 : hex32(step.value);
       lines.push(`rop += pack("<I", ${word})  # ${step.comment}`);
     }
     return lines;
@@ -4448,7 +4457,7 @@ var osed_bundle = (() => {
     return lines;
   }
   function formatSynthesisPython(synth) {
-    var _a;
+    var _a2;
     const lines = [
       `# Stack layout for plan ${synth.planId}: ${synth.strategy} / ${synth.shape}`,
       `# Entry path: ${synth.entryPath}`,
@@ -4464,7 +4473,7 @@ var osed_bundle = (() => {
     lines.push("from struct import pack");
     lines.push('payload = b""');
     for (const slot of synth.slots) {
-      const word = slot.step.kind === "gadget" ? hex32(slot.step.address) : (_a = slot.step.placeholder) != null ? _a : hex32(slot.step.value);
+      const word = slot.step.kind === "gadget" ? hex32(slot.step.address) : (_a2 = slot.step.placeholder) != null ? _a2 : hex32(slot.step.value);
       const offsetLabel = slot.offset < 0 ? `${slot.offset}` : `+${slot.offset}`;
       lines.push(`payload += pack("<I", ${word})  # [${offsetLabel}] ${slot.role}: ${slot.step.comment}`);
     }
@@ -4541,22 +4550,22 @@ var osed_bundle = (() => {
     };
   }
   function planVirtualProtectFrame(params = {}) {
-    var _a, _b;
+    var _a2, _b;
     return planFlatStdcallFrame([
       { value: params.virtualProtect, placeholder: "VIRTUALPROTECT", comment: "ret target: VirtualProtect" },
       { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after VirtualProtect" },
       { value: params.lpAddress, placeholder: "LP_ADDRESS", comment: "lpAddress" },
-      { value: (_a = params.dwSize) != null ? _a : 513, placeholder: "DW_SIZE", comment: "dwSize" },
+      { value: (_a2 = params.dwSize) != null ? _a2 : 513, placeholder: "DW_SIZE", comment: "dwSize" },
       { value: (_b = params.flNewProtect) != null ? _b : 64, placeholder: "FL_NEW_PROTECT", comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
       { value: params.writable, placeholder: "WRITABLE", comment: "lpflOldProtect (writable dummy)" }
     ], params.badchars);
   }
   function planWriteProcessMemoryFrame(params = {}) {
-    var _a;
+    var _a2;
     return planFlatStdcallFrame([
       { value: params.writeProcessMemory, placeholder: "WRITEPROCESSMEMORY", comment: "ret target: WriteProcessMemory" },
       { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after WriteProcessMemory" },
-      { value: (_a = params.hProcess) != null ? _a : 4294967295, placeholder: "HPROCESS", comment: "hProcess = GetCurrentProcess() pseudo-handle" },
+      { value: (_a2 = params.hProcess) != null ? _a2 : 4294967295, placeholder: "HPROCESS", comment: "hProcess = GetCurrentProcess() pseudo-handle" },
       { value: params.lpBaseAddress, placeholder: "LP_BASE_ADDRESS", comment: "lpBaseAddress (executable destination)" },
       { value: params.lpBuffer, placeholder: "LP_BUFFER", comment: "lpBuffer (source shellcode)" },
       { value: params.nSize, placeholder: "NSIZE", comment: "nSize" },
@@ -4564,12 +4573,12 @@ var osed_bundle = (() => {
     ], params.badchars);
   }
   function planVirtualAllocFrame(params = {}) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     return planFlatStdcallFrame([
       { value: params.virtualAlloc, placeholder: "VIRTUALALLOC", comment: "ret target: VirtualAlloc" },
       { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after VirtualAlloc" },
       { value: params.lpAddress, placeholder: "LP_ADDRESS", comment: "lpAddress" },
-      { value: (_a = params.dwSize) != null ? _a : 513, placeholder: "DW_SIZE", comment: "dwSize" },
+      { value: (_a2 = params.dwSize) != null ? _a2 : 513, placeholder: "DW_SIZE", comment: "dwSize" },
       { value: (_b = params.flAllocationType) != null ? _b : 4096, placeholder: "FL_ALLOCATION_TYPE", comment: "flAllocationType = MEM_COMMIT" },
       { value: (_c = params.flProtect) != null ? _c : 64, placeholder: "FL_PROTECT", comment: "flProtect = PAGE_EXECUTE_READWRITE" }
     ], params.badchars);
@@ -4666,8 +4675,8 @@ var osed_bundle = (() => {
     };
   }
   function virtualProtectDirectSpecs(params) {
-    var _a;
-    const flNewProtect = ((_a = params.flNewProtect) != null ? _a : 64) >>> 0;
+    var _a2;
+    const flNewProtect = ((_a2 = params.flNewProtect) != null ? _a2 : 64) >>> 0;
     return [
       __spreadProps(__spreadValues({ register: "edi" }, named(params.virtualProtect, "VIRTUALPROTECT")), { meaning: "VirtualProtect (RET dispatches here)" }),
       __spreadProps(__spreadValues({ register: "esi" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after VirtualProtect (e.g. jmp esp)" }),
@@ -4679,9 +4688,9 @@ var osed_bundle = (() => {
     ];
   }
   function virtualProtectRetSlideSpecs(params, retGadget) {
-    var _a, _b;
+    var _a2, _b;
     const retAddress = params.retGadget !== void 0 ? params.retGadget >>> 0 : retGadget ? Number(firstKnownAddress(retGadget)) : void 0;
-    const dwSize = ((_a = params.dwSize) != null ? _a : 513) >>> 0;
+    const dwSize = ((_a2 = params.dwSize) != null ? _a2 : 513) >>> 0;
     const flNewProtect = ((_b = params.flNewProtect) != null ? _b : 64) >>> 0;
     return [
       __spreadProps(__spreadValues({
@@ -4699,8 +4708,8 @@ var osed_bundle = (() => {
     ];
   }
   function planVirtualProtect(index, params = {}, setupSolver, preferStable) {
-    var _a, _b;
-    const mode = (_a = params.mode) != null ? _a : "ret-slide";
+    var _a2, _b;
+    const mode = (_a2 = params.mode) != null ? _a2 : "ret-slide";
     const badchars = (_b = params.badchars) != null ? _b : [];
     const prevHint = getStableAddressHint();
     setStableAddressHint(preferStable != null ? preferStable : prevHint);
@@ -4729,20 +4738,20 @@ var osed_bundle = (() => {
     ];
   }
   function planWriteProcessMemory(index, params = {}, setupSolver, preferStable) {
-    var _a;
+    var _a2;
     const prevHint = getStableAddressHint();
     setStableAddressHint(preferStable != null ? preferStable : prevHint);
     try {
       return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory", "direct", [
         "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination."
-      ], (_a = params.badchars) != null ? _a : [], setupSolver, preferStable);
+      ], (_a2 = params.badchars) != null ? _a2 : [], setupSolver, preferStable);
     } finally {
       setStableAddressHint(prevHint);
     }
   }
   function virtualAllocSpecs(params) {
-    var _a, _b;
-    const flAllocationType = ((_a = params.flAllocationType) != null ? _a : 4096) >>> 0;
+    var _a2, _b;
+    const flAllocationType = ((_a2 = params.flAllocationType) != null ? _a2 : 4096) >>> 0;
     const flProtect = ((_b = params.flProtect) != null ? _b : 64) >>> 0;
     return [
       __spreadProps(__spreadValues({ register: "edi" }, named(params.virtualAlloc, "VIRTUALALLOC")), { meaning: "VirtualAlloc (RET dispatches here)" }),
@@ -4755,13 +4764,13 @@ var osed_bundle = (() => {
     ];
   }
   function planVirtualAlloc(index, params = {}, setupSolver, preferStable) {
-    var _a;
+    var _a2;
     const prevHint = getStableAddressHint();
     setStableAddressHint(preferStable != null ? preferStable : prevHint);
     try {
       return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
         "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape."
-      ], (_a = params.badchars) != null ? _a : [], setupSolver, preferStable);
+      ], (_a2 = params.badchars) != null ? _a2 : [], setupSolver, preferStable);
     } finally {
       setStableAddressHint(prevHint);
     }
@@ -4830,10 +4839,10 @@ var osed_bundle = (() => {
   ]);
   var STACK_UNSAFE_MNEMONICS = /* @__PURE__ */ new Set(["push", "pusha", "pushad", "leave", "enter", "call", "jmp", "int", "iret"]);
   function normalizeRegister(operand) {
-    var _a;
+    var _a2;
     const reg = operand == null ? void 0 : operand.trim().toLowerCase();
     if (!reg || !X86_REGISTERS.has(reg)) return void 0;
-    return (_a = SUBREGISTER_PARENT[reg]) != null ? _a : reg;
+    return (_a2 = SUBREGISTER_PARENT[reg]) != null ? _a2 : reg;
   }
   function parseImmediate(operand) {
     if (operand === void 0) return void 0;
@@ -4844,7 +4853,7 @@ var osed_bundle = (() => {
     return void 0;
   }
   function gadgetEffects(gadget) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     const insns = gadget.instructions;
     const clobbers = /* @__PURE__ */ new Set();
     const fillers = [];
@@ -4860,7 +4869,7 @@ var osed_bundle = (() => {
       const insn = insns[i];
       const mnemonic = insn.mnemonic.trim().toLowerCase();
       if (mnemonic === "ret" || mnemonic === "retn") break;
-      const rawDst = (_a = insn.operands[0]) == null ? void 0 : _a.trim().toLowerCase();
+      const rawDst = (_a2 = insn.operands[0]) == null ? void 0 : _a2.trim().toLowerCase();
       const dst = normalizeRegister(insn.operands[0]);
       if (mnemonic === "pop") {
         clobbers.add((_b = dst != null ? dst : rawDst) != null ? _b : "?");
@@ -4909,9 +4918,9 @@ var osed_bundle = (() => {
     return { clobbers: [...clobbers], fillers, safe, reason };
   }
   function poppedRegisterSurvives(gadget, reg) {
-    var _a;
+    var _a2;
     const insns = gadget.instructions;
-    const target = (_a = SUBREGISTER_PARENT[reg]) != null ? _a : reg;
+    const target = (_a2 = SUBREGISTER_PARENT[reg]) != null ? _a2 : reg;
     for (let i = 1; i < insns.length; i++) {
       const insn = insns[i];
       const mnemonic = insn.mnemonic.trim().toLowerCase();
@@ -4929,8 +4938,8 @@ var osed_bundle = (() => {
     return true;
   }
   function registerFinalWriteMnemonic(gadget, reg) {
-    var _a;
-    const target = (_a = SUBREGISTER_PARENT[reg]) != null ? _a : reg;
+    var _a2;
+    const target = (_a2 = SUBREGISTER_PARENT[reg]) != null ? _a2 : reg;
     let last;
     const insns = gadget.instructions;
     for (let i = 0; i < insns.length; i++) {
@@ -5007,31 +5016,31 @@ var osed_bundle = (() => {
     return [kind, register2 != null ? register2 : "", targetRegister != null ? targetRegister : ""].join(":");
   }
   function findPopGadget(index, reg, preserve) {
-    var _a;
-    const candidates2 = (_a = index.capabilityMap.get(capKey("LOAD_REGISTER", reg))) != null ? _a : [];
+    var _a2;
+    const candidates2 = (_a2 = index.capabilityMap.get(capKey("LOAD_REGISTER", reg))) != null ? _a2 : [];
     const purePopRet = candidates2.filter((g) => {
-      var _a2;
+      var _a3;
       if (g.instructions.length < 2) return false;
       const last = g.instructions[g.instructions.length - 1];
       if (last.mnemonic !== "ret") return false;
-      return g.instructions[0].mnemonic === "pop" && ((_a2 = g.instructions[0].operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) === reg && poppedRegisterSurvives(g, reg);
+      return g.instructions[0].mnemonic === "pop" && ((_a3 = g.instructions[0].operands[0]) == null ? void 0 : _a3.trim().toLowerCase()) === reg && poppedRegisterSurvives(g, reg);
     });
     return selectBest(purePopRet, preserve);
   }
   function findZeroGadget(index, reg, preserve) {
-    var _a;
-    const candidates2 = (_a = index.capabilityMap.get(capKey("ZERO_REGISTER", reg))) != null ? _a : [];
+    var _a2;
+    const candidates2 = (_a2 = index.capabilityMap.get(capKey("ZERO_REGISTER", reg))) != null ? _a2 : [];
     const pureXorRet = candidates2.filter((g) => {
-      var _a2, _b;
+      var _a3, _b;
       if (g.instructions.length !== 2) return false;
       const [xor, ret] = g.instructions;
-      return xor.mnemonic === "xor" && ((_a2 = xor.operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) === reg && ((_b = xor.operands[1]) == null ? void 0 : _b.trim().toLowerCase()) === reg && ret.mnemonic === "ret";
+      return xor.mnemonic === "xor" && ((_a3 = xor.operands[0]) == null ? void 0 : _a3.trim().toLowerCase()) === reg && ((_b = xor.operands[1]) == null ? void 0 : _b.trim().toLowerCase()) === reg && ret.mnemonic === "ret";
     });
     return selectBest(pureXorRet, preserve);
   }
   function findUnaryGadget(index, kind, reg, preserve) {
-    var _a;
-    const candidates2 = (_a = index.capabilityMap.get(capKey(kind, reg))) != null ? _a : [];
+    var _a2;
+    const candidates2 = (_a2 = index.capabilityMap.get(capKey(kind, reg))) != null ? _a2 : [];
     const expected = OPERATION_MNEMONIC[kind];
     const valid = candidates2.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
@@ -5041,8 +5050,8 @@ var osed_bundle = (() => {
     return selectBest(valid, preserve);
   }
   function findBinaryGadget(index, kind, dst, src, preserve) {
-    var _a;
-    const candidates2 = (_a = index.capabilityMap.get(capKey(kind, dst, src))) != null ? _a : [];
+    var _a2;
+    const candidates2 = (_a2 = index.capabilityMap.get(capKey(kind, dst, src))) != null ? _a2 : [];
     const expected = OPERATION_MNEMONIC[kind];
     const valid = candidates2.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
@@ -5226,7 +5235,7 @@ var osed_bundle = (() => {
     return void 0;
   }
   function solveValue(index, register2, value, badchars, preserveRegisters = [], preferStable) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a2, _b, _c, _d, _e, _f;
     const reg = register2.trim().toLowerCase();
     const v = value >>> 0;
     const bc = new Set(badchars.map((b) => b & 255));
@@ -5235,7 +5244,7 @@ var osed_bundle = (() => {
     const prevHint = getStableAddressHint();
     setStableAddressHint(preferStable != null ? preferStable : prevHint);
     try {
-      return (_f = (_e = (_d = (_c = (_b = (_a = tryDirect(index, reg, v, bc, preserve)) != null ? _a : tryNegate(index, reg, v, bc, preserve)) != null ? _b : tryComplement(index, reg, v, bc, preserve)) != null ? _c : tryTwoOp(index, reg, v, bc, preserve, "add")) != null ? _d : tryTwoOp(index, reg, v, bc, preserve, "sub")) != null ? _e : tryZeroAdd(index, reg, v, bc, preserve)) != null ? _f : tryZeroSubNeg(index, reg, v, bc, preserve);
+      return (_f = (_e = (_d = (_c = (_b = (_a2 = tryDirect(index, reg, v, bc, preserve)) != null ? _a2 : tryNegate(index, reg, v, bc, preserve)) != null ? _b : tryComplement(index, reg, v, bc, preserve)) != null ? _c : tryTwoOp(index, reg, v, bc, preserve, "add")) != null ? _d : tryTwoOp(index, reg, v, bc, preserve, "sub")) != null ? _e : tryZeroAdd(index, reg, v, bc, preserve)) != null ? _f : tryZeroSubNeg(index, reg, v, bc, preserve);
     } finally {
       setStableAddressHint(prevHint);
     }
@@ -5273,8 +5282,8 @@ var osed_bundle = (() => {
   ]);
   var STACK_UNSAFE_MNEMONICS2 = /* @__PURE__ */ new Set(["push", "pusha", "pushad", "leave", "enter", "call", "jmp", "int", "iret"]);
   function parent(reg) {
-    var _a;
-    return (_a = SUBREGISTER_PARENT2[reg]) != null ? _a : reg;
+    var _a2;
+    return (_a2 = SUBREGISTER_PARENT2[reg]) != null ? _a2 : reg;
   }
   function normalizeRegister2(operand) {
     const reg = operand == null ? void 0 : operand.trim().toLowerCase();
@@ -5290,7 +5299,7 @@ var osed_bundle = (() => {
     return void 0;
   }
   function analyzeGadget(gadget) {
-    var _a, _b;
+    var _a2, _b;
     const popRegs = [];
     const writes2 = /* @__PURE__ */ new Set();
     const espFillers = [];
@@ -5301,7 +5310,7 @@ var osed_bundle = (() => {
       const insn = insns[i];
       const mnemonic = insn.mnemonic.trim().toLowerCase();
       if (mnemonic === "ret" || mnemonic === "retn") break;
-      const rawDst = (_a = insn.operands[0]) == null ? void 0 : _a.trim().toLowerCase();
+      const rawDst = (_a2 = insn.operands[0]) == null ? void 0 : _a2.trim().toLowerCase();
       const dst = normalizeRegister2(insn.operands[0]);
       if (mnemonic === "pop") {
         const reg = (_b = dst != null ? dst : rawDst) != null ? _b : "?";
@@ -5382,7 +5391,7 @@ var osed_bundle = (() => {
     }
   }
   function planRegisterSetupPackingInner(index, targets, badchars = []) {
-    var _a, _b;
+    var _a2, _b;
     const bc = new Set(badchars.map((b) => b & 255));
     const targetValues = /* @__PURE__ */ new Map();
     for (const [reg, value] of Object.entries(targets)) {
@@ -5396,7 +5405,7 @@ var osed_bundle = (() => {
     const candidates2 = workingIndex.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.retImm <= MAX_RET_IMM2 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
     const clobberFrequency = /* @__PURE__ */ new Map();
     for (const c of candidates2) {
-      for (const reg of c.shape.writes) clobberFrequency.set(reg, ((_a = clobberFrequency.get(reg)) != null ? _a : 0) + 1);
+      for (const reg of c.shape.writes) clobberFrequency.set(reg, ((_a2 = clobberFrequency.get(reg)) != null ? _a2 : 0) + 1);
     }
     const pending = new Set(targetValues.keys());
     const done = /* @__PURE__ */ new Set();
@@ -5520,8 +5529,8 @@ var osed_bundle = (() => {
     return (last == null ? void 0 : last.mnemonic) === "ret";
   }
   function op(g, i, n) {
-    var _a, _b;
-    return ((_b = (_a = g.instructions[i]) == null ? void 0 : _a.operands[n]) != null ? _b : "").trim().toLowerCase();
+    var _a2, _b;
+    return ((_b = (_a2 = g.instructions[i]) == null ? void 0 : _a2.operands[n]) != null ? _b : "").trim().toLowerCase();
   }
   function isBadcharFree3(value, badchars) {
     if (badchars.size === 0) return true;
@@ -5541,14 +5550,14 @@ var osed_bundle = (() => {
   }
   var VALUE_REGS = ["ecx", "edx", "ebx", "esi", "edi", "ebp"];
   function findStores(index) {
-    var _a;
+    var _a2;
     const byReg = /* @__PURE__ */ new Map();
     for (const g of index.gadgets) {
       if (g.instructions.length !== 2 || g.instructions[0].mnemonic !== "mov" || !lastIsRet(g)) continue;
       if (!/\[eax\]$/.test(op(g, 0, 0))) continue;
       const reg = op(g, 0, 1);
       if (!VALUE_REGS.includes(reg)) continue;
-      ((_a = byReg.get(reg)) != null ? _a : byReg.set(reg, []).get(reg)).push(g);
+      ((_a2 = byReg.get(reg)) != null ? _a2 : byReg.set(reg, []).get(reg)).push(g);
     }
     const stores = [];
     for (const [reg, gadgets] of byReg) {
@@ -5574,13 +5583,13 @@ var osed_bundle = (() => {
     return { gadget, junkPops };
   }
   function findPivot(index) {
-    var _a;
+    var _a2;
     const xchg = index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "xchg" && lastIsRet(g) && (op(g, 0, 0) === "eax" && op(g, 0, 1) === "esp" || op(g, 0, 0) === "esp" && op(g, 0, 1) === "eax"));
     const movEsp = index.gadgets.filter((g) => {
-      var _a2;
-      return ((_a2 = g.instructions[0]) == null ? void 0 : _a2.mnemonic) === "mov" && op(g, 0, 0) === "esp" && op(g, 0, 1) === "eax" && lastIsRet(g);
+      var _a3;
+      return ((_a3 = g.instructions[0]) == null ? void 0 : _a3.mnemonic) === "mov" && op(g, 0, 0) === "esp" && op(g, 0, 1) === "eax" && lastIsRet(g);
     });
-    return (_a = pickBest(xchg)) != null ? _a : pickBest(movEsp);
+    return (_a2 = pickBest(xchg)) != null ? _a2 : pickBest(movEsp);
   }
   function findCleanPop(index, reg) {
     return pickBest(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "pop" && op(g, 0, 0) === reg && lastIsRet(g)));
@@ -5610,7 +5619,7 @@ var osed_bundle = (() => {
     }
   }
   function planWriteFrameInner(index, bufAddress, words2, badchars) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     const bc = new Set(badchars.map((b) => b & 255));
     const unsatisfied = [];
     const placeholders = /* @__PURE__ */ new Set();
@@ -5640,7 +5649,7 @@ var osed_bundle = (() => {
           const store = stores.find((s) => s.reg === load.valReg);
           if (!store) continue;
           const ptrPop = isBadcharFree3(word.derefSlot, bc) ? popFor(load.ptrReg) : void 0;
-          const ptrRecipe = ptrPop ? void 0 : (_a = solveValue(index, load.ptrReg, word.derefSlot, badchars, ["eax"])) != null ? _a : void 0;
+          const ptrRecipe = ptrPop ? void 0 : (_a2 = solveValue(index, load.ptrReg, word.derefSlot, badchars, ["eax"])) != null ? _a2 : void 0;
           if (!ptrPop && !ptrRecipe) continue;
           resolved.push({ word, store, reg: load.valReg, deref: { memLoad: load.gadget, ptrReg: load.ptrReg, ptrPop, ptrRecipe, slot: word.derefSlot } });
           done = true;
@@ -5739,12 +5748,12 @@ var osed_bundle = (() => {
   // src/rop/slot_dispatch.ts
   var REGS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp"];
   function op2(g, i, n) {
-    var _a, _b;
-    return ((_b = (_a = g.instructions[i]) == null ? void 0 : _a.operands[n]) != null ? _b : "").trim().toLowerCase();
+    var _a2, _b;
+    return ((_b = (_a2 = g.instructions[i]) == null ? void 0 : _a2.operands[n]) != null ? _b : "").trim().toLowerCase();
   }
   function lastIsRet2(g) {
-    var _a;
-    return ((_a = g.instructions[g.instructions.length - 1]) == null ? void 0 : _a.mnemonic) === "ret";
+    var _a2;
+    return ((_a2 = g.instructions[g.instructions.length - 1]) == null ? void 0 : _a2.mnemonic) === "ret";
   }
   function pickBest2(cands) {
     return [...cands].filter((g) => firstKnownAddress(g) !== void 0).sort((a, b) => {
@@ -5764,8 +5773,8 @@ var osed_bundle = (() => {
   }
   function findJmp(index, reg) {
     return pickBest2(index.gadgets.filter((g) => {
-      var _a;
-      return ((_a = g.instructions[0]) == null ? void 0 : _a.mnemonic) === "jmp" && op2(g, 0, 0) === reg;
+      var _a2;
+      return ((_a2 = g.instructions[0]) == null ? void 0 : _a2.mnemonic) === "jmp" && op2(g, 0, 0) === reg;
     }));
   }
   function stableCount(chain) {
@@ -5933,8 +5942,8 @@ var osed_bundle = (() => {
 
   // src/rop/api_build.ts
   function op3(gadget, instruction, operand) {
-    var _a, _b;
-    return ((_b = (_a = gadget.instructions[instruction]) == null ? void 0 : _a.operands[operand]) != null ? _b : "").trim().toLowerCase();
+    var _a2, _b;
+    return ((_b = (_a2 = gadget.instructions[instruction]) == null ? void 0 : _a2.operands[operand]) != null ? _b : "").trim().toLowerCase();
   }
   function isRetTerminated(gadget) {
     return retImmBytes(gadget) >= 0 && firstKnownAddress(gadget) !== void 0;
@@ -5974,8 +5983,8 @@ var osed_bundle = (() => {
     return void 0;
   }
   function buildApiResolution(index, candidate, options = {}) {
-    var _a, _b, _c, _d;
-    const output = ((_a = options.output) != null ? _a : "eax").toLowerCase();
+    var _a2, _b, _c, _d;
+    const output = ((_a2 = options.output) != null ? _a2 : "eax").toLowerCase();
     const preserve = new Set(((_b = options.preserve) != null ? _b : []).map((reg) => reg.toLowerCase()));
     const badchars = (_c = options.badchars) != null ? _c : [];
     const maxGadgets = (_d = options.maxGadgets) != null ? _d : 12;
@@ -6049,7 +6058,7 @@ var osed_bundle = (() => {
     };
   }
   function buildBestApiResolution(index, candidates2, options = {}) {
-    var _a;
+    var _a2;
     const attempts = candidates2.map((candidate) => {
       if (!candidate.exportRvaVerified || !candidate.pointerResolved || !candidate.targetModuleVerified) {
         return { candidate, rejectionReasons: ["Phase 1 address evidence is incomplete."] };
@@ -6058,11 +6067,11 @@ var osed_bundle = (() => {
       return { candidate, plan, rejectionReasons: plan.state === "CHAIN_CONSTRUCTED" ? [] : plan.unsatisfied };
     });
     const successful = attempts.filter((attempt) => {
-      var _a2;
-      return ((_a2 = attempt.plan) == null ? void 0 : _a2.state) === "CHAIN_CONSTRUCTED";
+      var _a3;
+      return ((_a3 = attempt.plan) == null ? void 0 : _a3.state) === "CHAIN_CONSTRUCTED";
     });
     successful.sort((left, right) => left.plan.gadgetCount - right.plan.gadgetCount || left.plan.stackBytes - right.plan.stackBytes || left.plan.clobbers.length - right.plan.clobbers.length);
-    const selected = (_a = successful[0]) != null ? _a : attempts.find((attempt) => attempt.plan !== void 0);
+    const selected = (_a2 = successful[0]) != null ? _a2 : attempts.find((attempt) => attempt.plan !== void 0);
     return selected ? { candidate: selected.candidate, plan: selected.plan, attempts } : { attempts };
   }
 
@@ -6190,8 +6199,8 @@ var osed_bundle = (() => {
     return unique(index.gadgets.flatMap((gadget) => gadget.capabilities.map((capability2) => capability2.kind))).sort();
   }
   function planExploitStrategy(index, request, planId = 1) {
-    var _a;
-    const apiResolution = (_a = request.apiResolution) != null ? _a : "direct";
+    var _a2;
+    const apiResolution = (_a2 = request.apiResolution) != null ? _a2 : "direct";
     const available = availableCapabilityKinds(index);
     const availableSet = new Set(available);
     const definitions = definitionsFor(request.strategy);
@@ -6249,9 +6258,9 @@ var osed_bundle = (() => {
 
   // src/rop/emitter.ts
   function knownAddress(gadget) {
-    var _a;
+    var _a2;
     const location = gadget.locations.find((candidate) => candidate.virtualAddress !== void 0);
-    return (location == null ? void 0 : location.virtualAddress) === void 0 ? void 0 : { address: BigInt(location.virtualAddress), module: (_a = location.module) != null ? _a : "unknown" };
+    return (location == null ? void 0 : location.virtualAddress) === void 0 ? void 0 : { address: BigInt(location.virtualAddress), module: (_a2 = location.module) != null ? _a2 : "unknown" };
   }
   function exactStackDelta(gadget) {
     const values = [...gadget.semanticSummary.summary.stackDelta.values.exact];
@@ -6263,10 +6272,10 @@ var osed_bundle = (() => {
   }
   function rankCandidates(gadgets) {
     return gadgets.filter((gadget) => knownAddress(gadget) !== void 0).sort((left, right) => {
-      var _a, _b;
+      var _a2, _b;
       const sideEffectDifference = sideEffectCount(left) - sideEffectCount(right);
       if (sideEffectDifference !== 0) return sideEffectDifference;
-      const stackDifference = ((_a = exactStackDelta(left)) != null ? _a : Number.MAX_SAFE_INTEGER) - ((_b = exactStackDelta(right)) != null ? _b : Number.MAX_SAFE_INTEGER);
+      const stackDifference = ((_a2 = exactStackDelta(left)) != null ? _a2 : Number.MAX_SAFE_INTEGER) - ((_b = exactStackDelta(right)) != null ? _b : Number.MAX_SAFE_INTEGER);
       if (stackDifference !== 0) return stackDifference;
       const lengthDifference = left.instructions.length - right.instructions.length;
       return lengthDifference !== 0 ? lengthDifference : right.score - left.score;
@@ -6342,7 +6351,7 @@ var osed_bundle = (() => {
       }];
     }
     return result3.gadgets.map((gadget) => {
-      var _a, _b;
+      var _a2, _b;
       return {
         Plan: result3.planId.toString(),
         Strategy: `${result3.strategy} / ${result3.shape}`,
@@ -6351,7 +6360,7 @@ var osed_bundle = (() => {
         Module: gadget.module,
         Sequence: gadget.sequence,
         Score: gadget.score.toString(),
-        StackDelta: (_b = (_a = gadget.stackDelta) == null ? void 0 : _a.toString()) != null ? _b : "unknown",
+        StackDelta: (_b = (_a2 = gadget.stackDelta) == null ? void 0 : _a2.toString()) != null ? _b : "unknown",
         SideEffects: gadget.sideEffects.toString()
       };
     });
@@ -6462,7 +6471,7 @@ var osed_bundle = (() => {
     return void 0;
   }
   function validateForDirectApi(state, plan) {
-    var _a;
+    var _a2;
     const blockers = [];
     const warnings = [];
     if (!state.control.instructionPointerControlled) {
@@ -6481,7 +6490,7 @@ var osed_bundle = (() => {
     if (state.stack.executable) {
       warnings.push({ kind: "warning", source: "stack", message: "Stack is already executable; DEP bypass may be unnecessary." });
     }
-    const alignment = (_a = state.stack.alignment) != null ? _a : 4;
+    const alignment = (_a2 = state.stack.alignment) != null ? _a2 : 4;
     if (alignment % 4 !== 0) {
       warnings.push({ kind: "warning", source: "stack", message: `Stack alignment is ${alignment}-byte; stdcall frames assume 4-byte alignment.` });
     }
@@ -6499,7 +6508,7 @@ var osed_bundle = (() => {
     };
   }
   function validateForRetToFrame(state, plan, index) {
-    var _a;
+    var _a2;
     const blockers = [];
     const warnings = [];
     if (!state.control.instructionPointerControlled) {
@@ -6533,7 +6542,7 @@ var osed_bundle = (() => {
     if (plan.apiResolution === "direct" && state.constraints.apiResolution === "iat") {
       blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires direct resolution but exploit state constrains to IAT resolution." });
     }
-    const alignment = (_a = state.stack.alignment) != null ? _a : 4;
+    const alignment = (_a2 = state.stack.alignment) != null ? _a2 : 4;
     if (alignment % 4 !== 0) {
       warnings.push({ kind: "warning", source: "stack", message: `Stack alignment is ${alignment}-byte; stdcall frames assume 4-byte alignment.` });
     }
@@ -6545,7 +6554,7 @@ var osed_bundle = (() => {
     };
   }
   function validateForPivotToFrame(state, plan, index) {
-    var _a;
+    var _a2;
     const blockers = [];
     const warnings = [];
     if (!state.control.instructionPointerControlled) {
@@ -6564,7 +6573,7 @@ var osed_bundle = (() => {
         blockers.push({ kind: "blocker", source: "corpus", message: "No stack-pivot gadget with a known address exists in the corpus." });
       }
     }
-    const hasControlledRegion = ((_a = state.memory) != null ? _a : []).some(
+    const hasControlledRegion = ((_a2 = state.memory) != null ? _a2 : []).some(
       (r) => r.controlled && r.writable && r.size >= 24
     );
     if (!hasControlledRegion && state.stack.controlledAfterEsp < 24) {
@@ -6904,7 +6913,7 @@ var osed_bundle = (() => {
     };
   }
   function synthesisRows(result3) {
-    var _a;
+    var _a2;
     if (!result3.layoutProduced) {
       return [
         {
@@ -6929,7 +6938,7 @@ var osed_bundle = (() => {
       rows.push({
         Offset: slot.offset < 0 ? `${slot.offset}` : `+${slot.offset}`,
         Role: slot.role,
-        Word: slot.step.kind === "gadget" ? hex322(slot.step.address) : (_a = slot.step.placeholder) != null ? _a : hex322(slot.step.value),
+        Word: slot.step.kind === "gadget" ? hex322(slot.step.address) : (_a2 = slot.step.placeholder) != null ? _a2 : hex322(slot.step.value),
         Comment: slot.step.comment
       });
     }
@@ -7015,7 +7024,7 @@ var osed_bundle = (() => {
     return v !== void 0 ? hex323(v) : "????????";
   }
   function analyzeStatic(input) {
-    var _a, _b;
+    var _a2, _b;
     const { steps, badchars } = input;
     const badSet = new Set(badchars.map((b) => b & 255));
     const hits = [];
@@ -7055,7 +7064,7 @@ var osed_bundle = (() => {
     const aligned = totalBytes % 4 === 0;
     let frameCheck;
     if (input.api || input.expectedArgCount !== void 0) {
-      const apiName = (_a = input.api) != null ? _a : "";
+      const apiName = (_a2 = input.api) != null ? _a2 : "";
       const knownArgCount = (_b = input.expectedArgCount) != null ? _b : STDCALL_ARG_COUNT[apiName];
       if (knownArgCount === void 0) {
         frameCheck = {
@@ -7133,7 +7142,7 @@ var osed_bundle = (() => {
   }
   var X86_REGS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
   function simulateGadget(gadget, regs, steps, currentIndex) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
     const sideEffects = [];
     const popTargets = [];
     let consumed = 0;
@@ -7151,7 +7160,7 @@ var osed_bundle = (() => {
           if (targetIdx < steps.length) {
             const targetStep = steps[targetIdx];
             const val = resolveStepDword(targetStep);
-            regs[reg] = val !== void 0 ? hex323(val) : (_a = targetStep.placeholder) != null ? _a : "?";
+            regs[reg] = val !== void 0 ? hex323(val) : (_a2 = targetStep.placeholder) != null ? _a2 : "?";
             popTargets.push({ reg, stepIndex: targetIdx });
           } else {
             regs[reg] = "? (past end of chain)";
@@ -7245,7 +7254,7 @@ var osed_bundle = (() => {
     return { consumed, sideEffects, popTargets };
   }
   function analyzeRuntime(input) {
-    var _a, _b;
+    var _a2, _b;
     const { steps, corpus } = input;
     if (!corpus) {
       return {
@@ -7301,7 +7310,7 @@ var osed_bundle = (() => {
         }
         const { consumed, sideEffects, popTargets } = simulateGadget(gadget, regs, steps, i);
         for (const { reg, stepIndex } of popTargets) {
-          const writes2 = (_a = registerWrites.get(reg)) != null ? _a : [];
+          const writes2 = (_a2 = registerWrites.get(reg)) != null ? _a2 : [];
           writes2.push(stepIndex);
           registerWrites.set(reg, writes2);
         }
@@ -7464,8 +7473,8 @@ var osed_bundle = (() => {
     return { kind: "unknown", text: normalized };
   }
   function memoryRegisters(text) {
-    var _a, _b;
-    const expression = (_a = text.toLowerCase().match(/\[([^\]]+)\]/)) == null ? void 0 : _a[1];
+    var _a2, _b;
+    const expression = (_a2 = text.toLowerCase().match(/\[([^\]]+)\]/)) == null ? void 0 : _a2[1];
     if (!expression) return [];
     const matches = (_b = expression.match(/\b(?:eax|ecx|edx|ebx|esp|ebp|esi|edi)\b/g)) != null ? _b : [];
     const registers = [];
@@ -7512,8 +7521,8 @@ var osed_bundle = (() => {
     const raw = text.trim().toLowerCase();
     if (/^-?0x[0-9a-f]+$/.test(raw)) {
       const negative = raw.startsWith("-");
-      const hex6 = negative ? raw.slice(3) : raw.slice(2);
-      const parsed = Number.parseInt(hex6, 16);
+      const hex7 = negative ? raw.slice(3) : raw.slice(2);
+      const parsed = Number.parseInt(hex7, 16);
       if (!Number.isFinite(parsed)) {
         return void 0;
       }
@@ -8135,11 +8144,11 @@ var osed_bundle = (() => {
     }
   ];
   function buildSemanticField(values, evidence = []) {
-    var _a, _b, _c;
-    return makeField((_a = values == null ? void 0 : values.exact) != null ? _a : [], (_b = values == null ? void 0 : values.conservative) != null ? _b : [], (_c = values == null ? void 0 : values.unknown) != null ? _c : false, evidence);
+    var _a2, _b, _c;
+    return makeField((_a2 = values == null ? void 0 : values.exact) != null ? _a2 : [], (_b = values == null ? void 0 : values.conservative) != null ? _b : [], (_c = values == null ? void 0 : values.unknown) != null ? _c : false, evidence);
   }
   function fromRuleResult(instruction, index, result3, supported) {
-    var _a, _b;
+    var _a2, _b;
     return {
       schemaVersion: SEMANTIC_SCHEMA_VERSION,
       instructionIndex: index,
@@ -8151,7 +8160,7 @@ var osed_bundle = (() => {
       memoryReads: buildSemanticField({ exact: result3.memoryReads }, result3.evidence),
       memoryWrites: buildSemanticField({ exact: result3.memoryWrites }, result3.evidence),
       flowEffects: buildSemanticField({ exact: result3.flowEffects }, result3.evidence),
-      registerEffects: (_a = result3.registerEffects) != null ? _a : {},
+      registerEffects: (_a2 = result3.registerEffects) != null ? _a2 : {},
       registerEffectsUnknown: false,
       evidence: (_b = result3.evidence) != null ? _b : [],
       supported
@@ -8289,10 +8298,10 @@ var osed_bundle = (() => {
     return state;
   }
   function balancedEspCapture(instructions) {
-    var _a;
+    var _a2;
     for (let start = 0; start < instructions.length; start += 1) {
       const first = instructions[start];
-      if (first.mnemonic !== "push" || ((_a = first.operands[0]) == null ? void 0 : _a.trim().toLowerCase()) !== "esp") continue;
+      if (first.mnemonic !== "push" || ((_a2 = first.operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) !== "esp") continue;
       for (let index = start + 1; index < instructions.length; index += 1) {
         const current = instructions[index];
         const mnemonic = current.mnemonic.toLowerCase();
@@ -8576,7 +8585,7 @@ var osed_bundle = (() => {
     return descriptor.semantic.summary.flowEffects.values.unknown || descriptor.semantic.summary.stackDelta.values.unknown || descriptor.semantic.instructionSemantics.some((entry) => !entry.supported);
   }
   function buildProofPlan(input, adapter) {
-    var _a, _b;
+    var _a2, _b;
     const normalized = normalizeChain(input, adapter);
     const incompleteReasons = [...normalized.incompleteReasons];
     const descriptors = normalized.steps.map((step, stepIndex) => ({ stepIndex, descriptor: descriptorFor(step, input.corpus, normalized.live) })).filter((entry) => entry.descriptor !== void 0);
@@ -8601,7 +8610,7 @@ var osed_bundle = (() => {
         incompleteReasons.push(`gadget at 0x${descriptor.address.toString(16)} has unknown semantics`);
       }
       const next = descriptors[position + 1];
-      const memoryRead = (_a = capability(descriptor, "MEMORY_READ")) != null ? _a : capability(descriptor, "LOAD_MEMORY");
+      const memoryRead = (_a2 = capability(descriptor, "MEMORY_READ")) != null ? _a2 : capability(descriptor, "LOAD_MEMORY");
       const dispatch = next ? capability(next.descriptor, "DISPATCH_JMP_REGISTER") : void 0;
       if (next && (memoryRead == null ? void 0 : memoryRead.register) && (dispatch == null ? void 0 : dispatch.register) === memoryRead.register) {
         const target = memoryReadTarget(descriptor, memoryRead.register);
@@ -8725,7 +8734,7 @@ var osed_bundle = (() => {
     return Number(BigInt.asIntN(32, observed - expected));
   }
   function compareCheckpoint(input, adapter) {
-    var _a;
+    var _a2;
     const current = adapter.readRegisters();
     const context = { before: input.previous, after: current, adapter };
     const assertions = [];
@@ -8784,7 +8793,7 @@ var osed_bundle = (() => {
     let unverified = false;
     for (const template of input.checkpoint.assertions) {
       const expected = evaluate(template.expected, context);
-      const observed = evaluate((_a = template.observed) != null ? _a : observedExpression(template.subject), context);
+      const observed = evaluate((_a2 = template.observed) != null ? _a2 : observedExpression(template.subject), context);
       const cannotVerify = template.confidence !== "EXACT" || !expected.ok || !observed.ok;
       if (cannotVerify) {
         const reason = template.confidence !== "EXACT" ? `assertion confidence is ${template.confidence}` : !expected.ok ? expected.reason : !observed.ok ? observed.reason : "assertion is not exact";
@@ -9108,7 +9117,7 @@ var osed_bundle = (() => {
     };
   }
   function renderProofMarkdown(record) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     const lines = [
       `# ROP proof ${record.sessionId}`,
       "",
@@ -9116,7 +9125,7 @@ var osed_bundle = (() => {
       `- Objective status: **${record.objectiveStatus}** \u2014 ${record.objectiveReason}`,
       `- Session state: ${record.state}`,
       `- Target: ${record.targetPath || "unavailable"}`,
-      `- SHA-256: ${(_a = record.targetSha256) != null ? _a : "unavailable"}`,
+      `- SHA-256: ${(_a2 = record.targetSha256) != null ? _a2 : "unavailable"}`,
       "",
       "## Checkpoints",
       ""
@@ -9310,7 +9319,7 @@ var osed_bundle = (() => {
       this.resolvedTargets = /* @__PURE__ */ new Map();
     }
     start(input) {
-      var _a, _b;
+      var _a2, _b;
       if (this.store.active()) throw new Error("A ROP proof session is already active.");
       const orphans = this.markerBreakpoints().filter((entry) => MARKER_V1.test(entry.marker));
       if (orphans.length > 0) {
@@ -9322,7 +9331,7 @@ var osed_bundle = (() => {
       }
       if (input.plan.checkpoints.length === 0) throw new Error("The proof plan has no checkpoints.");
       sessionCounter += 1;
-      const sessionId = (_a = input.sessionId) != null ? _a : `proof-${Date.now().toString(36)}-${sessionCounter}`;
+      const sessionId = (_a2 = input.sessionId) != null ? _a2 : `proof-${Date.now().toString(36)}-${sessionCounter}`;
       const nonce = (_b = input.nonce) != null ? _b : `${Date.now().toString(36)}-${sessionCounter}`;
       const session = {
         id: sessionId,
@@ -9358,7 +9367,7 @@ var osed_bundle = (() => {
       return this.armOrComplete(session, nonce);
     }
     observeAndAdvance() {
-      var _a, _b;
+      var _a2, _b;
       const session = this.store.active();
       if (!session) throw new Error('No active proof session. Start one with rop.prove({mode:"guided"}).');
       if (session.state === "POSTCONDITION_ARMED") return this.observePostcondition(session);
@@ -9374,7 +9383,7 @@ var osed_bundle = (() => {
         return session;
       }
       const checkpoint = session.plan.checkpoints[session.checkpointIndex];
-      const previous = (_a = this.priorRegisters.get(session.id)) != null ? _a : this.adapter.readRegisters();
+      const previous = (_a2 = this.priorRegisters.get(session.id)) != null ? _a2 : this.adapter.readRegisters();
       const targetKey = `${session.id}:${checkpoint.id}`;
       const capturedTarget = this.resolvedTargets.get(targetKey);
       const target = capturedTarget === void 0 ? resolveProofExpression(checkpoint.target, previous, previous, this.adapter) : { ok: true, value: capturedTarget };
@@ -9445,10 +9454,10 @@ var osed_bundle = (() => {
       return results;
     }
     armOrComplete(session, nonce) {
-      var _a;
+      var _a2;
       if (session.checkpointIndex >= session.plan.checkpoints.length) return this.complete(session);
       const checkpoint = session.plan.checkpoints[session.checkpointIndex];
-      const previous = (_a = this.priorRegisters.get(session.id)) != null ? _a : this.adapter.readRegisters();
+      const previous = (_a2 = this.priorRegisters.get(session.id)) != null ? _a2 : this.adapter.readRegisters();
       const resolved = resolveProofExpression(checkpoint.target, previous, previous, this.adapter);
       if (!resolved.ok) {
         session.state = "UNVERIFIED";
@@ -9560,7 +9569,7 @@ var osed_bundle = (() => {
       this.machine = new ProofSessionMachine(dependencies.adapter, dependencies.store);
     }
     execute(options) {
-      var _a, _b, _c, _d, _e, _f;
+      var _a2, _b, _c, _d, _e, _f;
       try {
         if (options === void 0) {
           if (!this.dependencies.store.active()) {
@@ -9601,7 +9610,7 @@ var osed_bundle = (() => {
           return { success: false, error: "A ROP proof session is already active; inspect status or cancel it first." };
         }
         const inherited = this.dependencies.getDefaultInput();
-        const chain = (_a = options.chain) != null ? _a : inherited == null ? void 0 : inherited.chain;
+        const chain = (_a2 = options.chain) != null ? _a2 : inherited == null ? void 0 : inherited.chain;
         if (chain === void 0) {
           return { success: false, error: "No chain to prove. Run rop.generate first or pass {chain: ...}." };
         }
@@ -9637,14 +9646,14 @@ var osed_bundle = (() => {
     return { ok: false, error: { code, message } };
   }
   function bigintValue(value) {
-    var _a, _b;
+    var _a2, _b;
     try {
       if (typeof value === "bigint") return value;
       if (typeof value === "number") return BigInt(value);
       if (typeof value === "string") return BigInt(value.replace(/`/g, ""));
       if (value && typeof value === "object") {
         const record = value;
-        return bigintValue((_b = (_a = record.value) != null ? _a : record.Value) != null ? _b : String(value));
+        return bigintValue((_b = (_a2 = record.value) != null ? _a2 : record.Value) != null ? _b : String(value));
       }
     } catch (e) {
     }
@@ -9667,8 +9676,8 @@ var osed_bundle = (() => {
     }
   }
   function parseBreakpoint(line) {
-    var _a;
-    const marker = (_a = /(osed-proof:v[^\s";]+)/i.exec(line)) == null ? void 0 : _a[1];
+    var _a2;
+    const marker = (_a2 = /(osed-proof:v[^\s";]+)/i.exec(line)) == null ? void 0 : _a2[1];
     const match = /^\s*(\d+)\s+\w+\s+([0-9a-f`]+)/i.exec(line);
     if (!match || !marker) return void 0;
     return {
@@ -9681,10 +9690,10 @@ var osed_bundle = (() => {
     };
   }
   function hashFile(path) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a2, _b, _c, _d, _e, _f, _g;
     try {
       const hostAny = host;
-      const fs = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem;
+      const fs = (_c = (_b = (_a2 = hostAny.namespace) == null ? void 0 : _a2.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem;
       const raw = (_f = (_d = fs == null ? void 0 : fs.OpenFile) == null ? void 0 : _d.call(fs, path)) != null ? _f : (_e = fs == null ? void 0 : fs.CreateFile) == null ? void 0 : _e.call(fs, path, "OpenExisting");
       if (!raw) return void 0;
       const file = raw;
@@ -9704,9 +9713,9 @@ var osed_bundle = (() => {
   }
   var WinDbgProofAdapter = class {
     readRegisters() {
-      var _a, _b, _c, _d;
+      var _a2, _b, _c, _d;
       const hostAny = host;
-      const thread = (_a = hostAny.currentThread) != null ? _a : {};
+      const thread = (_a2 = hostAny.currentThread) != null ? _a2 : {};
       const registers = (_c = (_b = thread.Registers) == null ? void 0 : _b.User) != null ? _c : {};
       const parsed = {};
       for (const name of ["eip", "esp", "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp"]) {
@@ -9757,8 +9766,8 @@ var osed_bundle = (() => {
       try {
         const lines = command(`u 0x${address.toString(16)} L${Math.max(1, Math.floor(maxInstructions))}`);
         const instructions = lines.map((line) => {
-          var _a, _b;
-          return (_b = (_a = /^\s*[0-9a-f`]+\s+[0-9a-f]+\s+(.+)$/i.exec(line)) == null ? void 0 : _a[1]) == null ? void 0 : _b.trim();
+          var _a2, _b;
+          return (_b = (_a2 = /^\s*[0-9a-f`]+\s+[0-9a-f]+\s+(.+)$/i.exec(line)) == null ? void 0 : _a2[1]) == null ? void 0 : _b.trim();
         }).filter((line) => Boolean(line));
         const bytes = readMemory(address, Math.max(1, Math.min(16, maxInstructions * 4)));
         return ok({ address, bytes, instructions });
@@ -9767,16 +9776,16 @@ var osed_bundle = (() => {
       }
     }
     getFingerprint(scope) {
-      var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+      var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
       try {
         const hostAny = host;
-        const process = (_a = hostAny.currentProcess) != null ? _a : {};
+        const process = (_a2 = hostAny.currentProcess) != null ? _a2 : {};
         const thread = (_b = hostAny.currentThread) != null ? _b : {};
         const rawModules = iterable(process.Modules);
         const allModules = rawModules.map((item) => {
-          var _a2, _b2, _c2, _d2, _e2, _f2;
+          var _a3, _b2, _c2, _d2, _e2, _f2;
           const module = item;
-          const base = (_a2 = bigintValue(module.BaseAddress)) != null ? _a2 : BigInt(0);
+          const base = (_a3 = bigintValue(module.BaseAddress)) != null ? _a3 : BigInt(0);
           const end = (_b2 = bigintValue(module.EndAddress)) != null ? _b2 : base;
           return {
             name: String((_c2 = module.Name) != null ? _c2 : ""),
@@ -9796,14 +9805,14 @@ var osed_bundle = (() => {
         if (!target) incompleteReasons.push("target executable identity is unavailable");
         if (!targetSha256) incompleteReasons.push("target executable could not be read for SHA-256");
         const gadgets = scope.gadgetAddresses.flatMap((address) => {
-          var _a2;
+          var _a3;
           const module = allModules.find((entry) => address >= entry.base && address < entry.base + entry.size);
           const read = this.readMemory(address, 16);
           if (!read.ok) {
             incompleteReasons.push(read.error.message);
             return [];
           }
-          return [{ address, module: (_a2 = module == null ? void 0 : module.name) != null ? _a2 : "", rva: module ? address - module.base : address, bytes: read.value, instructions: [] }];
+          return [{ address, module: (_a3 = module == null ? void 0 : module.name) != null ? _a3 : "", rva: module ? address - module.base : address, bytes: read.value, instructions: [] }];
         });
         const protections = scope.protectionAddresses.flatMap((address) => {
           const result3 = this.queryProtection(address);
@@ -9876,9 +9885,9 @@ var osed_bundle = (() => {
     };
   }
   function rehydrateGadget(stored) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a2, _b, _c, _d, _e, _f;
     const instructions = stored.instructions.map((instruction) => parseInstruction(instruction));
-    const firstLocation = (_a = stored.locations[0]) != null ? _a : {};
+    const firstLocation = (_a2 = stored.locations[0]) != null ? _a2 : {};
     const sequence = {
       schemaVersion: SEMANTIC_SCHEMA_VERSION,
       id: `corpus:${stored.instructions.join(" ; ")}`,
@@ -9926,7 +9935,7 @@ var osed_bundle = (() => {
     return JSON.stringify(stored);
   }
   function importCorpus(text) {
-    var _a;
+    var _a2;
     let parsed;
     try {
       parsed = JSON.parse(text, reviver);
@@ -9936,7 +9945,7 @@ var osed_bundle = (() => {
     if (!parsed || typeof parsed !== "object") throw new Error("ROP corpus JSON must contain an object.");
     const stored = parsed;
     if (stored.schemaVersion !== CORPUS_EXPORT_SCHEMA_VERSION && stored.schemaVersion !== LEGACY_CORPUS_EXPORT_SCHEMA_VERSION) {
-      throw new Error(`Unsupported ROP corpus schema '${String((_a = stored.schemaVersion) != null ? _a : "missing")}'.`);
+      throw new Error(`Unsupported ROP corpus schema '${String((_a2 = stored.schemaVersion) != null ? _a2 : "missing")}'.`);
     }
     if (!Array.isArray(stored.gadgets) || !isFingerprint(stored.fingerprint)) {
       throw new Error("ROP corpus JSON is missing gadgets or fingerprint data.");
@@ -10155,25 +10164,25 @@ var osed_bundle = (() => {
     }
   }
   function normalizeScan(options) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     return {
       module: options.module,
-      executableOnly: (_a = options.executableOnly) != null ? _a : true,
+      executableOnly: (_a2 = options.executableOnly) != null ? _a2 : true,
       maxResults: Math.min((_b = options.maxResults) != null ? _b : 50, 200),
       mode: (_c = options.mode) != null ? _c : "fast"
     };
   }
   function normalizeRopSuggest(options) {
-    var _a;
+    var _a2;
     return __spreadProps(__spreadValues({}, normalizeScan(options)), {
-      engine: (_a = options.engine) != null ? _a : "legacy"
+      engine: (_a2 = options.engine) != null ? _a2 : "legacy"
     });
   }
   function validationPass(flags) {
     return flags.decoded && Boolean(flags.mnemonicMatch) && flags.executable;
   }
   function collectValidatedPatternHits(pattern, options) {
-    var _a;
+    var _a2;
     const pointerSize = getPointerSize();
     const scan = scanPattern(
       {
@@ -10197,7 +10206,7 @@ var osed_bundle = (() => {
       hits.push({
         address: hit,
         pattern,
-        mnemonic: (_a = validated.mnemonic) != null ? _a : pattern.mnemonic,
+        mnemonic: (_a2 = validated.mnemonic) != null ? _a2 : pattern.mnemonic,
         bytes: pattern.bytes
       });
     }
@@ -10273,7 +10282,7 @@ var osed_bundle = (() => {
     };
   }
   function runSemanticRopSuggest(options) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j;
     const pointerSize = getPointerSize();
     const combinedWarnings = [];
     const allHits = [];
@@ -10283,7 +10292,7 @@ var osed_bundle = (() => {
       allHits.push(...result3.hits);
       combinedWarnings.push(...result3.warnings);
       combinedStats = {
-        sectionsScanned: combinedStats.sectionsScanned + ((_b = (_a = result3.stats) == null ? void 0 : _a.sectionsScanned) != null ? _b : 0),
+        sectionsScanned: combinedStats.sectionsScanned + ((_b = (_a2 = result3.stats) == null ? void 0 : _a2.sectionsScanned) != null ? _b : 0),
         chunksRead: combinedStats.chunksRead + ((_d = (_c = result3.stats) == null ? void 0 : _c.chunksRead) != null ? _d : 0),
         chunksSkipped: combinedStats.chunksSkipped + ((_f = (_e = result3.stats) == null ? void 0 : _e.chunksSkipped) != null ? _f : 0),
         results: combinedStats.results + ((_h = (_g = result3.stats) == null ? void 0 : _g.results) != null ? _h : 0),
@@ -10292,18 +10301,18 @@ var osed_bundle = (() => {
     }
     const index = buildRopIndexFromSequences(allHits.map((hit) => buildSequenceFromHit(hit)));
     const gadgets = [...index.gadgets].sort((left, right) => {
-      var _a2, _b2, _c2, _d2;
+      var _a3, _b2, _c2, _d2;
       if (left.score !== right.score) {
         return right.score - left.score;
       }
-      const leftAddress = (_b2 = (_a2 = left.locations[0]) == null ? void 0 : _a2.virtualAddress) != null ? _b2 : 0;
+      const leftAddress = (_b2 = (_a3 = left.locations[0]) == null ? void 0 : _a3.virtualAddress) != null ? _b2 : 0;
       const rightAddress = (_d2 = (_c2 = right.locations[0]) == null ? void 0 : _c2.virtualAddress) != null ? _d2 : 0;
       return leftAddress - rightAddress;
     });
     const rows = gadgets.map((gadget, index2) => {
-      var _a2, _b2;
+      var _a3, _b2;
       const firstLocation = gadget.locations[0];
-      const address = BigInt((_a2 = firstLocation == null ? void 0 : firstLocation.virtualAddress) != null ? _a2 : 0);
+      const address = BigInt((_a3 = firstLocation == null ? void 0 : firstLocation.virtualAddress) != null ? _a3 : 0);
       return {
         rank: `${index2 + 1}`,
         address: formatAddress(address, pointerSize),
@@ -10344,7 +10353,7 @@ var osed_bundle = (() => {
     };
   }
   function runLegacyRopSuggest(options, initialWarnings = []) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j;
     const combinedFindings = [];
     const combinedWarnings = [...initialWarnings];
     let combinedStats = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
@@ -10356,7 +10365,7 @@ var osed_bundle = (() => {
       );
       combinedWarnings.push(...result3.warnings);
       combinedStats = {
-        sectionsScanned: combinedStats.sectionsScanned + ((_b = (_a = result3.stats) == null ? void 0 : _a.sectionsScanned) != null ? _b : 0),
+        sectionsScanned: combinedStats.sectionsScanned + ((_b = (_a2 = result3.stats) == null ? void 0 : _a2.sectionsScanned) != null ? _b : 0),
         chunksRead: combinedStats.chunksRead + ((_d = (_c = result3.stats) == null ? void 0 : _c.chunksRead) != null ? _d : 0),
         chunksSkipped: combinedStats.chunksSkipped + ((_f = (_e = result3.stats) == null ? void 0 : _e.chunksSkipped) != null ? _f : 0),
         results: combinedStats.results + ((_h = (_g = result3.stats) == null ? void 0 : _g.results) != null ? _h : 0),
@@ -10521,9 +10530,9 @@ var osed_bundle = (() => {
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
       },
       execute(options) {
-        var _a, _b;
+        var _a2, _b;
         const pointerSize = getPointerSize();
-        const maxResults = Math.min((_a = options.maxResults) != null ? _a : 50, 200);
+        const maxResults = Math.min((_a2 = options.maxResults) != null ? _a2 : 50, 200);
         const executableOnly = (_b = options.executableOnly) != null ? _b : true;
         const moduleFilter = options.module;
         const chunkSize = options.mode === "thorough" ? 4096 : 16384;
@@ -10596,9 +10605,9 @@ var osed_bundle = (() => {
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
       },
       execute(options) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
+        var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
         const pointerSize = getPointerSize();
-        const maxResults = Math.min((_a = options.maxResults) != null ? _a : 50, 200);
+        const maxResults = Math.min((_a2 = options.maxResults) != null ? _a2 : 50, 200);
         const executableOnly = (_b = options.executableOnly) != null ? _b : true;
         const moduleFilter = options.module;
         const chunkSize = options.mode === "thorough" ? 4096 : 16384;
@@ -10738,7 +10747,7 @@ var osed_bundle = (() => {
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
       },
       execute(options) {
-        var _a, _b, _c, _d;
+        var _a2, _b, _c, _d;
         const pointerSize = getPointerSize();
         const patterns = pointerSize === 8 ? X64_PIVOT_PATTERNS : PIVOT_PATTERNS;
         const warnings = [];
@@ -10748,7 +10757,7 @@ var osed_bundle = (() => {
           const scan = scanPattern(
             {
               module: options.module,
-              executableOnly: (_a = options.executableOnly) != null ? _a : true,
+              executableOnly: (_a2 = options.executableOnly) != null ? _a2 : true,
               maxResults: (_b = options.maxResults) != null ? _b : 50,
               chunkSize: options.mode === "thorough" ? 4096 : 16384
             },
@@ -10777,8 +10786,8 @@ var osed_bundle = (() => {
           capability: "STACK_PIVOT",
           executableOnly: true
         }).map((gadget) => {
-          var _a2, _b2, _c2, _d2;
-          const address = BigInt((_b2 = (_a2 = gadget.locations[0]) == null ? void 0 : _a2.virtualAddress) != null ? _b2 : 0);
+          var _a3, _b2, _c2, _d2;
+          const address = BigInt((_b2 = (_a3 = gadget.locations[0]) == null ? void 0 : _a3.virtualAddress) != null ? _b2 : 0);
           const detail = detailsByAddress.get(address);
           return {
             address,
@@ -11383,6 +11392,18 @@ var osed_bundle = (() => {
       ]
     },
     {
+      name: "explain",
+      summary: "Explain any command, with a report sentence",
+      description: "Explains a command in plain words: what it does, how it works, when to use it, its arguments, how to read its output, and a sentence for an exam report. Append .explain to any call to explain that call with its real arguments and results.",
+      usage: "dx @$osed().explain(command?, args...)",
+      examples: [
+        'dx @$osed().sc.resolve("kernel32", "WinExec").explain',
+        'dx @$osed().explain("sc.resolve")',
+        "dx @$osed().explain()"
+      ],
+      keywords: ["report", "why", "what"]
+    },
+    {
       name: "exploit.state",
       description: "Views or updates the cached exploit state used by rop.synthesize(). Populated automatically by triage(); individual fields can be set or overridden manually.",
       usage: "dx @$osed().exploit.state(overrides?)",
@@ -11425,10 +11446,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-19T20:17:26.151Z" : globalThis[key2];
+        value = true ? "2026-11-20T11:35:15.135Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "aeb8a7b34c1f" : globalThis[key2];
+        value = true ? "a466cd02a36c" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -11500,14 +11521,14 @@ var osed_bundle = (() => {
     return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
   }
   function categoryLabel(key2) {
-    var _a;
-    return (_a = CATEGORY_LABELS[key2]) != null ? _a : key2.toUpperCase();
+    var _a2;
+    return (_a2 = CATEGORY_LABELS[key2]) != null ? _a2 : key2.toUpperCase();
   }
   function renderListing(entries) {
     return entries.map((entry) => {
-      var _a;
+      var _a2;
       const label = `  ${entry.name}(...)`;
-      const summary = (_a = entry.summary) != null ? _a : entry.description;
+      const summary = (_a2 = entry.summary) != null ? _a2 : entry.description;
       if (label.length >= INDEX_NAME_WIDTH) {
         return `${label}  ${summary}`;
       }
@@ -11517,8 +11538,8 @@ var osed_bundle = (() => {
   function renderDetailListing(entries) {
     const nameWidth = Math.max(DETAIL_NAME_WIDTH, ...entries.map((e) => e.name.length + 2));
     return entries.flatMap((entry) => {
-      var _a;
-      const summary = (_a = entry.summary) != null ? _a : entry.description;
+      var _a2;
+      const summary = (_a2 = entry.summary) != null ? _a2 : entry.description;
       if (entry.name.length + 2 > nameWidth) {
         return [entry.name, ...wrapText(summary, HELP_WIDTH, "  ")];
       }
@@ -11566,13 +11587,13 @@ var osed_bundle = (() => {
     return lines;
   }
   function renderNamespace(name, groups) {
-    var _a;
+    var _a2;
     const label = categoryLabel(name.toLowerCase());
     const lines = ["", `${label} \u2014 COMMAND REFERENCE`, ruler()];
     for (const [task, entries] of orderedGroups(groups, name.toLowerCase() === "rop" ? ROP_TASK_ORDER : [])) {
       lines.push("", task.toUpperCase());
       for (const entry of entries) {
-        const summary = (_a = entry.summary) != null ? _a : entry.description;
+        const summary = (_a2 = entry.summary) != null ? _a2 : entry.description;
         lines.push(`  ${entry.usage.replace(/^dx @\$osed\(\)\./, "")}`);
         lines.push(...wrapText(summary, HELP_WIDTH, "      "));
         lines.push("");
@@ -11599,10 +11620,10 @@ var osed_bundle = (() => {
     return lines;
   }
   function renderCompactDetail(entry) {
-    var _a, _b, _c, _d;
+    var _a2, _b, _c, _d;
     const examples = normalizeHelpExamples(entry.examples);
     const lines = ["", `=== Help: ${entry.name} ===`];
-    lines.push(...wrapText((_a = entry.summary) != null ? _a : entry.description, HELP_WIDTH));
+    lines.push(...wrapText((_a2 = entry.summary) != null ? _a2 : entry.description, HELP_WIDTH));
     if (examples.length > 0) {
       lines.push("", "RUN");
       for (const example of examples.slice(0, (_b = entry.compactExampleCount) != null ? _b : 1)) {
@@ -11616,11 +11637,11 @@ var osed_bundle = (() => {
     return lines;
   }
   function renderFullDetail(entry) {
-    var _a, _b, _c, _d;
+    var _a2, _b, _c, _d;
     const lines = ["", `=== Help: ${entry.name} ===`];
     lines.push("PURPOSE", ...wrapText(entry.description, HELP_WIDTH, "  "), "", "USAGE", `  ${entry.usage}`);
     if (entry.details) lines.push("", "DETAILS", ...wrapText(entry.details, HELP_WIDTH, "  "));
-    if ((_a = entry.arguments) == null ? void 0 : _a.length) lines.push("", "ARGUMENTS", ...entry.arguments.flatMap((argument) => labelled(`  ${argument.name}${argument.required ? "" : "?"}: `, argument.description)));
+    if ((_a2 = entry.arguments) == null ? void 0 : _a2.length) lines.push("", "ARGUMENTS", ...entry.arguments.flatMap((argument) => labelled(`  ${argument.name}${argument.required ? "" : "?"}: `, argument.description)));
     if ((_b = entry.prerequisites) == null ? void 0 : _b.length) lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
     if ((_c = entry.limitations) == null ? void 0 : _c.length) lines.push("", "LIMITATIONS", ...entry.limitations.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
     if (entry.examples.length) lines.push("", "EXAMPLES", ...exampleLines(entry.examples));
@@ -11756,15 +11777,15 @@ var osed_bundle = (() => {
     version: "Show loaded build identity"
   };
   function shortSummary(name, description, supplied) {
-    var _a, _b, _c, _d;
-    return (_d = (_c = (_a = LISTING_SUMMARIES[name]) != null ? _a : supplied) != null ? _c : (_b = /^[\s\S]*?[.!?](?=\s)/.exec(description)) == null ? void 0 : _b[0]) != null ? _d : description;
+    var _a2, _b, _c, _d;
+    return (_d = (_c = (_a2 = LISTING_SUMMARIES[name]) != null ? _a2 : supplied) != null ? _c : (_b = /^[\s\S]*?[.!?](?=\s)/.exec(description)) == null ? void 0 : _b[0]) != null ? _d : description;
   }
   var toDocument = (entry) => __spreadProps(__spreadValues({}, entry), { summary: shortSummary(entry.name, entry.description, entry.summary) });
   function registryDocument(command2) {
     return { name: command2.name, description: command2.description, summary: shortSummary(command2.name, command2.description), usage: command2.usage, examples: command2.examples, compactExampleCount: command2.compactExampleCount, category: categoryForName(command2.name) };
   }
   function groupedDocuments(registry2) {
-    var _a, _b;
+    var _a2, _b;
     const documents2 = /* @__PURE__ */ new Map();
     for (const command2 of registry2.getAll()) {
       if (!command2.name.startsWith("sc_")) documents2.set(command2.name, registryDocument(command2));
@@ -11774,7 +11795,7 @@ var osed_bundle = (() => {
     documents2.delete("exploit");
     const groups = /* @__PURE__ */ new Map();
     for (const entry of [...documents2.values()].sort((a, b) => a.name.localeCompare(b.name))) {
-      const category = (_a = entry.category) != null ? _a : categoryForName(entry.name);
+      const category = (_a2 = entry.category) != null ? _a2 : categoryForName(entry.name);
       groups.set(category, [...(_b = groups.get(category)) != null ? _b : [], entry]);
     }
     return groups;
@@ -11821,11 +11842,11 @@ var osed_bundle = (() => {
     return "commands";
   }
   function namespaceDocuments(name, all) {
-    var _a;
+    var _a2;
     const normalized = name.toLowerCase();
     const matches = all.filter((entry) => {
-      var _a2, _b, _c;
-      if (normalized === "rop") return ((_a2 = entry.category) != null ? _a2 : categoryForName(entry.name)) === "rop";
+      var _a3, _b, _c;
+      if (normalized === "rop") return ((_a3 = entry.category) != null ? _a3 : categoryForName(entry.name)) === "rop";
       if (normalized === "seh") return ((_b = entry.category) != null ? _b : categoryForName(entry.name)) === "seh";
       if (["crash", "payload", "target", "shellcode", "pe-api", "strings", "format", "tools"].includes(normalized)) {
         return ((_c = entry.category) != null ? _c : categoryForName(entry.name)) === normalized;
@@ -11836,25 +11857,25 @@ var osed_bundle = (() => {
     const groups = /* @__PURE__ */ new Map();
     for (const entry of matches) {
       const task = namespaceTask(normalized, entry);
-      groups.set(task, [...(_a = groups.get(task)) != null ? _a : [], entry]);
+      groups.set(task, [...(_a2 = groups.get(task)) != null ? _a2 : [], entry]);
     }
     return groups;
   }
   function searchDocuments(query, all) {
     const needle = query.toLowerCase();
     return all.filter((entry) => {
-      var _a;
-      return [entry.name, entry.summary, entry.description, ...(_a = entry.keywords) != null ? _a : []].filter((value) => Boolean(value)).some((value) => value.toLowerCase().includes(needle));
+      var _a2;
+      return [entry.name, entry.summary, entry.description, ...(_a2 = entry.keywords) != null ? _a2 : []].filter((value) => Boolean(value)).some((value) => value.toLowerCase().includes(needle));
     }).sort((a, b) => {
       const score = (entry) => entry.name.toLowerCase().includes(needle) ? 0 : 1;
       return score(a) - score(b) || a.name.localeCompare(b.name);
     });
   }
   function groupByCategory(entries) {
-    var _a, _b;
+    var _a2, _b;
     const groups = /* @__PURE__ */ new Map();
     for (const entry of entries) {
-      const category = (_a = entry.category) != null ? _a : categoryForName(entry.name);
+      const category = (_a2 = entry.category) != null ? _a2 : categoryForName(entry.name);
       groups.set(category, [...(_b = groups.get(category)) != null ? _b : [], entry]);
     }
     return groups;
@@ -11931,12 +11952,12 @@ var osed_bundle = (() => {
       examples: ["dx @$osed().reload()"],
       schema: {},
       execute(options) {
-        var _a, _b;
+        var _a2, _b;
         const result3 = registry2.reload();
         result3.args = options;
         section("Reload");
         if (result3.success) {
-          info(`Re-registered ${(_b = (_a = result3.findings[0]) == null ? void 0 : _a.commandCount) != null ? _b : 0} commands.`);
+          info(`Re-registered ${(_b = (_a2 = result3.findings[0]) == null ? void 0 : _a2.commandCount) != null ? _b : 0} commands.`);
         } else {
           for (const err of result3.errors) {
             error(err);
@@ -12012,9 +12033,9 @@ var osed_bundle = (() => {
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
       },
       execute(options) {
-        var _a, _b, _c, _d, _e, _f, _g;
+        var _a2, _b, _c, _d, _e, _f, _g;
         const pointerSize = getPointerSize();
-        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const normalizedExclude = normalizeByteArray((_a2 = options.exclude) != null ? _a2 : []);
         const executableOnly = (_b = options.executableOnly) != null ? _b : true;
         const maxResults = Math.min((_c = options.maxResults) != null ? _c : 50, 200);
         const mode = normalizeMode(options.mode);
@@ -12276,7 +12297,7 @@ var osed_bundle = (() => {
     return matches;
   }
   function scanStack(regs, haystacks, stackBytes) {
-    var _a;
+    var _a2;
     if (regs.sp === void 0) {
       return { matches: [], truncated: false, readable: false };
     }
@@ -12284,7 +12305,7 @@ var osed_bundle = (() => {
     if (!buffer) {
       return { matches: [], truncated: false, readable: false };
     }
-    const label = ((_a = regs.spName) != null ? _a : "sp").toLowerCase();
+    const label = ((_a2 = regs.spName) != null ? _a2 : "sp").toLowerCase();
     const matches = [];
     let truncated = false;
     for (let index = 0; index + 4 <= buffer.length; index += 4) {
@@ -12359,7 +12380,7 @@ var osed_bundle = (() => {
         probeBytes: { type: "number", min: 8, max: 256, default: 32 }
       },
       execute(options) {
-        var _a;
+        var _a2;
         const pointerSize = getPointerSize();
         const patternLength = options.patternLength;
         const stackBytes = options.stackBytes;
@@ -12370,7 +12391,7 @@ var osed_bundle = (() => {
         const stack = scanStack(regs, haystacks, stackBytes);
         const seh = scanSeh(pointerSize, haystacks);
         const matches = [...registerMatches, ...stack.matches, ...seh.matches];
-        const ipName = ((_a = regs.ipName) != null ? _a : pointerSize === 8 ? "rip" : "eip").toLowerCase();
+        const ipName = ((_a2 = regs.ipName) != null ? _a2 : pointerSize === 8 ? "rip" : "eip").toLowerCase();
         const ipMatch = registerMatches.find((match) => match.source === ipName && match.type === "register");
         section("INSTRUCTION POINTER");
         if (ipMatch) {
@@ -12535,7 +12556,7 @@ var osed_bundle = (() => {
     return `${module.name}+0x${(address - module.base).toString(16).toUpperCase()}`;
   }
   function resolvePattern(options) {
-    var _a;
+    var _a2;
     if (typeof options.instruction === "string" && options.instruction.trim().length > 0) {
       const encoded = encodeInstructionSearch(options.instruction);
       if (!encoded) {
@@ -12543,7 +12564,7 @@ var osed_bundle = (() => {
       }
       return encoded;
     }
-    const bytes = (_a = options.bytes) != null ? _a : [];
+    const bytes = (_a2 = options.bytes) != null ? _a2 : [];
     if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
       throw new Error("Provide an 'instruction' (e.g. 'jmp esp') or a non-empty 'bytes' array of 0x00..0xFF integers.");
     }
@@ -12567,10 +12588,10 @@ var osed_bundle = (() => {
         maxResults: { type: "number", min: 1, max: 200, default: 20 }
       },
       execute(options) {
-        var _a;
+        var _a2;
         const pointerSize = getPointerSize();
         const pattern = resolvePattern(options);
-        const normalizedExclude = normalizeByteArray((_a = options.badchars) != null ? _a : []);
+        const normalizedExclude = normalizeByteArray((_a2 = options.badchars) != null ? _a2 : []);
         const maxResults = options.maxResults;
         const executableOnly = options.executableOnly !== false;
         const scanCap = Math.min(Math.max(maxResults * 5, maxResults), 200);
@@ -12728,13 +12749,13 @@ var osed_bundle = (() => {
     if (typeof raw !== "string" || !raw.trim()) {
       throw new Error("shellcode must be a non-empty hex string or byte array.");
     }
-    const hex6 = raw.replace(/[^0-9a-fA-F]/g, "");
-    if (hex6.length % 2 !== 0) {
+    const hex7 = raw.replace(/[^0-9a-fA-F]/g, "");
+    if (hex7.length % 2 !== 0) {
       throw new Error("shellcode hex string must have an even number of hex digits.");
     }
     const result3 = [];
-    for (let i = 0; i < hex6.length; i += 2) {
-      result3.push(parseInt(hex6.slice(i, i + 2), 16));
+    for (let i = 0; i < hex7.length; i += 2) {
+      result3.push(parseInt(hex7.slice(i, i + 2), 16));
     }
     return result3;
   }
@@ -12759,9 +12780,9 @@ var osed_bundle = (() => {
         key: { type: "number" }
       },
       execute(options) {
-        var _a;
+        var _a2;
         const shellcode = parseShellcodeHex(options.shellcode);
-        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : [0, 10, 13]);
+        const normalizedExclude = normalizeByteArray((_a2 = options.exclude) != null ? _a2 : [0, 10, 13]);
         const exclude = new Set(normalizedExclude.values);
         const keyHint = options.key !== void 0 ? options.key & 255 : void 0;
         const warnings = [];
@@ -12847,9 +12868,9 @@ var osed_bundle = (() => {
         byte: { type: "number", default: 144 }
       },
       execute(options) {
-        var _a;
+        var _a2;
         const length = options.length;
-        const nopByte = ((_a = options.byte) != null ? _a : 144) & 255;
+        const nopByte = ((_a2 = options.byte) != null ? _a2 : 144) & 255;
         const sled = Array.from({ length }, () => nopByte);
         const hexStr = sled.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
         const python = `b"${sled.map((b) => `\\x${b.toString(16).padStart(2, "0")}`).join("")}"`;
@@ -13135,8 +13156,8 @@ var osed_bundle = (() => {
         module: { type: "string", default: "TARGET_MODULE" }
       },
       execute(options) {
-        var _a, _b;
-        const api = (_a = options.api) != null ? _a : "VirtualProtect";
+        var _a2, _b;
+        const api = (_a2 = options.api) != null ? _a2 : "VirtualProtect";
         const mod = (_b = options.module) != null ? _b : "TARGET_MODULE";
         switch (api) {
           case "WriteProcessMemory":
@@ -13297,7 +13318,7 @@ var osed_bundle = (() => {
   var HashResolver = class {
     constructor(providers) {
       this.defaultAlias = "ror13";
-      var _a;
+      var _a2;
       const configured = providers != null ? providers : [
         new MetasploitRor13Provider(),
         new Crc32Provider(),
@@ -13307,7 +13328,7 @@ var osed_bundle = (() => {
       this.providers = /* @__PURE__ */ new Map();
       for (const provider of configured) {
         this.providers.set(provider.algorithm.toLowerCase(), provider);
-        for (const alias of (_a = provider.aliases) != null ? _a : []) {
+        for (const alias of (_a2 = provider.aliases) != null ? _a2 : []) {
           this.providers.set(alias.toLowerCase(), provider);
         }
       }
@@ -13339,10 +13360,10 @@ var osed_bundle = (() => {
     listAlgorithms() {
       const defaultProvider = this.resolveProvider(this.defaultAlias);
       return this.canonicalProviders.map((provider) => {
-        var _a;
+        var _a2;
         return {
           Algorithm: provider.algorithm,
-          Aliases: ((_a = provider.aliases) != null ? _a : []).join(", "),
+          Aliases: ((_a2 = provider.aliases) != null ? _a2 : []).join(", "),
           Description: provider.description,
           Default: provider === defaultProvider ? "yes" : "no"
         };
@@ -13471,7 +13492,7 @@ var osed_bundle = (() => {
       };
     }
     parseExports(module) {
-      var _a;
+      var _a2;
       const exportInfo = this.parseExportDirectory(module);
       if (!exportInfo) {
         return [];
@@ -13498,7 +13519,7 @@ var osed_bundle = (() => {
           ordinal,
           rva,
           va,
-          name: (_a = namesByIndex.get(index)) != null ? _a : ""
+          name: (_a2 = namesByIndex.get(index)) != null ? _a2 : ""
         });
       }
       return entries;
@@ -14220,7 +14241,7 @@ var osed_bundle = (() => {
           if (!needle) return true;
           return entry.symbol.toLowerCase().includes(needle) || entry.importDll.toLowerCase().includes(needle);
         }).map((entry) => {
-          var _a;
+          var _a2;
           return {
             Owner: toDmlModule(entry.ownerModule),
             DLL: toDmlModule(entry.importDll),
@@ -14231,7 +14252,7 @@ var osed_bundle = (() => {
             Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
             "Symbol+Offset": entry.nearest ? toDmlText(`${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}`, `u ${formatAddress(entry.target, this.pointerSize)}`) : "",
             Status: entry.status,
-            Note: (_a = entry.nameWarning) != null ? _a : ""
+            Note: (_a2 = entry.nameWarning) != null ? _a2 : ""
           };
         });
         if (rows.length === 0) {
@@ -14243,7 +14264,7 @@ var osed_bundle = (() => {
       }
     }
     iat_find(symbol) {
-      var _a;
+      var _a2;
       const needle = symbol.trim().toLowerCase();
       if (!needle) {
         return this.errorRows("Symbol substring is required.");
@@ -14262,7 +14283,7 @@ var osed_bundle = (() => {
                 Target: toDmlAddress(entry.target, "u"),
                 Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
                 Status: entry.status,
-                Note: (_a = entry.nameWarning) != null ? _a : ""
+                Note: (_a2 = entry.nameWarning) != null ? _a2 : ""
               });
             }
           }
@@ -14275,7 +14296,7 @@ var osed_bundle = (() => {
       return rows;
     }
     iat_ptr(moduleName, symbol) {
-      var _a;
+      var _a2;
       const lookup = this.findModule(moduleName);
       if (lookup.kind !== "ok") {
         return this.lookupFailureRows(lookup);
@@ -14296,7 +14317,7 @@ var osed_bundle = (() => {
             module: match.actualModule ? toDmlModule(match.actualModule.name) : "unknown",
             symbol: toDmlSymbol(match.importDll, match.symbol),
             status: match.status,
-            note: (_a = match.nameWarning) != null ? _a : ""
+            note: (_a2 = match.nameWarning) != null ? _a2 : ""
           }
         ];
       } catch (error2) {
@@ -14326,14 +14347,14 @@ var osed_bundle = (() => {
           try {
             const ownerHeaders = this.parser.parseHeaders(owner);
             return this.iatResolver.enumerateIat(owner).map((entry) => {
-              var _a, _b, _c, _d;
+              var _a2, _b, _c, _d;
               return {
                 ownerModule: owner.name,
                 ownerBase: owner.base,
                 ownerImageBase: ownerHeaders.imageBase,
                 slot: entry.slot,
                 pointer: entry.target,
-                actualModule: (_a = entry.actualModule) == null ? void 0 : _a.name,
+                actualModule: (_a2 = entry.actualModule) == null ? void 0 : _a2.name,
                 actualModuleBase: (_b = entry.actualModule) == null ? void 0 : _b.base,
                 importedSymbol: entry.symbol,
                 nearestSymbol: (_c = entry.nearest) == null ? void 0 : _c.name,
@@ -14397,13 +14418,13 @@ var osed_bundle = (() => {
       return { kind: "ambiguous", candidates: candidates2 };
     }
     findMainModule() {
-      var _a, _b, _c, _d, _e, _f;
+      var _a2, _b, _c, _d, _e, _f;
       const modules = this.readModules();
       if (modules.length === 0) {
         return { kind: "not_found", name: "<main-executable>" };
       }
       const process = host;
-      const executablePath = ((_d = (_c = (_a = process.currentProcess) == null ? void 0 : _a.ExecutablePath) != null ? _c : (_b = process.currentProcess) == null ? void 0 : _b.Path) != null ? _d : "").toLowerCase();
+      const executablePath = ((_d = (_c = (_a2 = process.currentProcess) == null ? void 0 : _a2.ExecutablePath) != null ? _c : (_b = process.currentProcess) == null ? void 0 : _b.Path) != null ? _d : "").toLowerCase();
       const processName = ((_f = (_e = process.currentProcess) == null ? void 0 : _e.Name) != null ? _f : "").toLowerCase();
       if (executablePath) {
         const byPath = modules.find((module) => module.path.toLowerCase() === executablePath);
@@ -14421,9 +14442,9 @@ var osed_bundle = (() => {
       return { kind: "ok", module: modules[0] };
     }
     getPebAddress() {
-      var _a, _b, _c, _d, _e, _f, _g;
+      var _a2, _b, _c, _d, _e, _f, _g;
       const hostAny = host;
-      const fromPseudo = tryToBigInt((_e = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.State) == null ? void 0 : _c.PseudoRegisters) == null ? void 0 : _d.General) == null ? void 0 : _e.peb);
+      const fromPseudo = tryToBigInt((_e = (_d = (_c = (_b = (_a2 = hostAny.namespace) == null ? void 0 : _a2.Debugger) == null ? void 0 : _b.State) == null ? void 0 : _c.PseudoRegisters) == null ? void 0 : _d.General) == null ? void 0 : _e.peb);
       if (fromPseudo && fromPseudo !== BigInt(0)) {
         return fromPseudo;
       }
@@ -14434,14 +14455,14 @@ var osed_bundle = (() => {
       return void 0;
     }
     readModules() {
-      var _a;
+      var _a2;
       const hostAny = host;
-      const source = (_a = hostAny.currentProcess) == null ? void 0 : _a.Modules;
+      const source = (_a2 = hostAny.currentProcess) == null ? void 0 : _a2.Modules;
       const items = toArray2(source);
       return items.map((entry) => {
-        var _a2, _b, _c, _d, _e, _f;
+        var _a3, _b, _c, _d, _e, _f;
         const moduleAny = entry;
-        const rawName = (_a2 = moduleAny.Name) != null ? _a2 : "<unknown>";
+        const rawName = (_a3 = moduleAny.Name) != null ? _a3 : "<unknown>";
         const path = (_b = moduleAny.Path) != null ? _b : rawName;
         const name = moduleBasename(rawName);
         const base = (_e = tryToBigInt((_d = (_c = moduleAny.BaseAddress) != null ? _c : moduleAny.Base) != null ? _d : moduleAny.Address)) != null ? _e : BigInt(0);
@@ -14464,12 +14485,12 @@ var osed_bundle = (() => {
       }).filter((module) => module.base !== BigInt(0)).sort((a, b) => a.base < b.base ? -1 : 1);
     }
     collectPageProtections(module) {
-      var _a;
+      var _a2;
       const counts = /* @__PURE__ */ new Map();
       const pageSize = BigInt(4096);
       for (let page = module.base; page < module.end; page += pageSize) {
         const protect = this.readPageProtection(page);
-        counts.set(protect, ((_a = counts.get(protect)) != null ? _a : 0) + 1);
+        counts.set(protect, ((_a2 = counts.get(protect)) != null ? _a2 : 0) + 1);
       }
       return counts;
     }
@@ -14519,7 +14540,7 @@ var osed_bundle = (() => {
     return [];
   }
   function tryToBigInt(value) {
-    var _a;
+    var _a2;
     if (typeof value === "bigint") {
       return value;
     }
@@ -14543,7 +14564,7 @@ var osed_bundle = (() => {
       return void 0;
     }
     const addressed = value;
-    const fromAddress = tryToBigInt((_a = addressed.address) != null ? _a : addressed.Address);
+    const fromAddress = tryToBigInt((_a2 = addressed.address) != null ? _a2 : addressed.Address);
     if (fromAddress !== void 0) {
       return fromAddress;
     }
@@ -14586,12 +14607,12 @@ var osed_bundle = (() => {
     return chars.join("");
   }
   function toDmlAddress(address, command2) {
-    const hex6 = `0x${address.toString(16).toUpperCase()}`;
-    return `<link cmd="${command2} ${hex6}">${hex6}</link>`;
+    const hex7 = `0x${address.toString(16).toUpperCase()}`;
+    return `<link cmd="${command2} ${hex7}">${hex7}</link>`;
   }
   function toDmlModule(name) {
-    var _a;
-    const fileName = (_a = name.replace(/\\/g, "/").split("/").pop()) != null ? _a : "";
+    var _a2;
+    const fileName = (_a2 = name.replace(/\\/g, "/").split("/").pop()) != null ? _a2 : "";
     const moduleName = fileName.replace(/\.[^.]+$/, "");
     if (!moduleName || !/^[A-Za-z0-9_.$?-]+$/.test(moduleName)) {
       return name;
@@ -14599,11 +14620,11 @@ var osed_bundle = (() => {
     return toDmlText(name, `lmv m ${moduleName}`);
   }
   function toDmlSymbol(moduleName, symbol) {
-    var _a;
+    var _a2;
     if (symbol === "<ordinal>" || !/^[A-Za-z0-9_?$@.]+$/.test(symbol)) {
       return symbol;
     }
-    const fileName = (_a = moduleName.replace(/\\/g, "/").split("/").pop()) != null ? _a : "";
+    const fileName = (_a2 = moduleName.replace(/\\/g, "/").split("/").pop()) != null ? _a2 : "";
     const moduleToken = fileName.replace(/\.[^.]+$/, "");
     if (!moduleToken || !/^[A-Za-z0-9_.$?-]+$/.test(moduleToken)) {
       return symbol;
@@ -15542,11 +15563,11 @@ if __name__ == "__main__":
     return arg.kind === "frame" ? ["ebp"] : [];
   }
   function callFrame(api, rawArgs, bad) {
-    var _a, _b, _c, _d;
+    var _a2, _b, _c, _d;
     const typed = api.trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(typed)) return { ok: false, error: "API name must be an export name such as WinExec." };
     const prototype = API_PROTOTYPES.find((entry) => entry.name.toLowerCase() === typed.toLowerCase());
-    const name = (_a = prototype == null ? void 0 : prototype.name) != null ? _a : typed;
+    const name = (_a2 = prototype == null ? void 0 : prototype.name) != null ? _a2 : typed;
     const module = (_b = prototype == null ? void 0 : prototype.module) != null ? _b : "kernel32.dll";
     const warnings = [];
     if (!prototype) {
@@ -15800,8 +15821,8 @@ if __name__ == "__main__":
   }
   function pythonAsmEntries(lines) {
     const entries = lines.map((line) => {
-      var _a;
-      return "comment" in line ? { text: "", note: line.comment, comment: true } : "label" in line ? { text: `${pyString(`${line.label}:`)},`, note: "", comment: false } : { text: `${pyString(line.asm)},`, note: (_a = line.note) != null ? _a : "", comment: false };
+      var _a2;
+      return "comment" in line ? { text: "", note: line.comment, comment: true } : "label" in line ? { text: `${pyString(`${line.label}:`)},`, note: "", comment: false } : { text: `${pyString(line.asm)},`, note: (_a2 = line.note) != null ? _a2 : "", comment: false };
     });
     const width = Math.max(...entries.filter((entry) => !entry.comment).map((entry) => entry.text.length));
     return entries.map((entry) => entry.comment ? `    # ${entry.note}` : `    ${entry.text.padEnd(width)}${entry.note ? `  # ${entry.note}` : ""}`.trimEnd());
@@ -15920,7 +15941,7 @@ if __name__ == "__main__":
     return code <= 255 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u${code.toString(16).padStart(4, "0")}`;
   }).join("")}"`;
   function builderConfig(plan) {
-    var _a;
+    var _a2;
     const calls = [];
     let lastLoad;
     let exit = "ret";
@@ -15939,7 +15960,7 @@ if __name__ == "__main__":
     const direct = plan.tasks.some((task) => task.kind === "loadlibrary" || task.kind === "getprocaddress") ? ['    # The builder loads DLLs and resolves exports itself: ("user32.dll", "MessageBoxA", [0, s("text"), s("caption"), 0]) needs neither call.'] : [];
     return [
       `BADCHARS = b"${plan.badchars.map((byte) => `\\x${byte.toString(16).padStart(2, "0")}`).join("")}"`,
-      `MAX_SIZE = ${(_a = plan.maxSize) != null ? _a : "None"}`,
+      `MAX_SIZE = ${(_a2 = plan.maxSize) != null ? _a2 : "None"}`,
       "CALLS = [",
       ...direct,
       ...calls.map((call) => `    ${call}`),
@@ -16009,10 +16030,10 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       compactExampleCount: 2,
       schema: { api: { type: "string", required: true }, args: { type: "array" }, badchars: { type: ["string", "array"] } },
       execute(options) {
-        var _a;
+        var _a2;
         const badchars = parseBadchars(options.badchars);
         if (!badchars) return fail2("sc_call_frame", options, `Cannot read the bad characters "${String(options.badchars)}".`);
-        const args = ((_a = options.args) != null ? _a : []).map(String);
+        const args = ((_a2 = options.args) != null ? _a2 : []).map(String);
         const result3 = callFrame(options.api, args, new Set(badchars));
         if (!result3.ok) return fail2("sc_call_frame", options, result3.error);
         section(`sc.call_frame: ${result3.title}`);
@@ -16045,8 +16066,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       compactExampleCount: 2,
       schema: { tasks: { type: "array" } },
       execute(options) {
-        var _a;
-        const tokens = ((_a = options.tasks) != null ? _a : []).map(String);
+        var _a2;
+        const tokens = ((_a2 = options.tasks) != null ? _a2 : []).map(String);
         const plan = parseTemplateArgs(tokens);
         if (!plan.ok) return fail2("sc_template", options, plan.error);
         const invocation = `sc.template(${tokens.map((token) => JSON.stringify(token)).join(", ")})`;
@@ -16072,8 +16093,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       compactExampleCount: 2,
       schema: { tasks: { type: "array" } },
       execute(options) {
-        var _a;
-        const tokens = ((_a = options.tasks) != null ? _a : []).map(String);
+        var _a2;
+        const tokens = ((_a2 = options.tasks) != null ? _a2 : []).map(String);
         const result3 = builderScript(tokens);
         if (!result3.ok) return fail2("sc_builder", options, result3.error);
         const plan = result3.plan;
@@ -16135,12 +16156,12 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     }
   }
   function computeEffectiveSizes(sections) {
-    var _a;
+    var _a2;
     if (sections.length === 0) return [];
     const grouped = /* @__PURE__ */ new Map();
     for (const section2 of sections) {
       const key2 = `${section2.module.base.toString(16)}`;
-      const list = (_a = grouped.get(key2)) != null ? _a : [];
+      const list = (_a2 = grouped.get(key2)) != null ? _a2 : [];
       list.push(section2);
       grouped.set(key2, list);
     }
@@ -16430,9 +16451,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         capability: { type: "string" }
       },
       execute(options) {
-        var _a, _b;
+        var _a2, _b;
         const module = options.module;
-        const minSize = (_a = options.minSize) != null ? _a : 50;
+        const minSize = (_a2 = options.minSize) != null ? _a2 : 50;
         const maxResults = (_b = options.maxResults) != null ? _b : 25;
         const badChars = options.badChars;
         const capability2 = options.capability;
@@ -16561,8 +16582,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     return [value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255];
   }
   function buildFormatString(options) {
-    var _a, _b, _c;
-    const width = (_a = options.width) != null ? _a : "word";
+    var _a2, _b, _c;
+    const width = (_a2 = options.width) != null ? _a2 : "word";
     const spec = WIDTHS[width];
     const prefix = (_b = options.prefix) != null ? _b : 0;
     const exclude = new Set(((_c = options.exclude) != null ? _c : []).map((b) => b & 255));
@@ -16692,11 +16713,11 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         prefix: { type: "number", min: 0, default: 0 }
       },
       execute(options) {
-        var _a, _b;
+        var _a2, _b;
         const writes2 = parseWrites(options.writes);
         const argIndex = options.argIndex;
         const width = normalizeWidth(options.width);
-        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : [0, 10, 13]);
+        const normalizedExclude = normalizeByteArray((_a2 = options.exclude) != null ? _a2 : [0, 10, 13]);
         const prefix = (_b = options.prefix) != null ? _b : 0;
         const result3 = buildFormatString({
           writes: writes2,
@@ -16780,9 +16801,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     };
   }
   function readStackPointer(pointerSize) {
-    var _a, _b;
+    var _a2, _b;
     const thread = host.currentThread;
-    const regsRoot = (_a = thread == null ? void 0 : thread.Registers) != null ? _a : void 0;
+    const regsRoot = (_a2 = thread == null ? void 0 : thread.Registers) != null ? _a2 : void 0;
     const userRegs = (_b = regsRoot == null ? void 0 : regsRoot.User) != null ? _b : regsRoot;
     if (!userRegs) {
       return void 0;
@@ -16804,13 +16825,13 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     return void 0;
   }
   function stackBounds(pointerSize) {
-    var _a;
+    var _a2;
     if (pointerSize !== 4) {
       return {};
     }
     const thread = host.currentThread;
     let teb;
-    const raw = (_a = thread == null ? void 0 : thread.Teb) != null ? _a : thread == null ? void 0 : thread.TebAddress;
+    const raw = (_a2 = thread == null ? void 0 : thread.Teb) != null ? _a2 : thread == null ? void 0 : thread.TebAddress;
     try {
       if (typeof raw === "bigint") teb = raw;
       else if (typeof raw === "number") teb = BigInt(raw);
@@ -16898,7 +16919,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         max: { type: "number", min: 1, max: 4096, default: 512 }
       },
       execute(options) {
-        var _a;
+        var _a2;
         const pointerSize = getPointerSize();
         if (pointerSize !== 4) {
           return {
@@ -16915,7 +16936,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
           return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: ["ESP is unavailable \u2014 break at a supported printf-family call entry or call site."] };
         }
         const family = options.family;
-        const formatArgOffset = (_a = options.formatArgOffset) != null ? _a : FORMAT_ARGUMENT_OFFSETS[family];
+        const formatArgOffset = (_a2 = options.formatArgOffset) != null ? _a2 : FORMAT_ARGUMENT_OFFSETS[family];
         const pointerBytes = tryReadMemory(sp + BigInt(formatArgOffset), 4);
         if (!pointerBytes) {
           return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read ${family} format argument at ESP+0x${formatArgOffset.toString(16)}.`] };
@@ -16980,9 +17001,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         firstArg: { type: "number", min: 0, default: 8 }
       },
       execute(options) {
-        var _a, _b, _c;
+        var _a2, _b, _c;
         const pointerSize = getPointerSize();
-        const marker = ((_a = options.marker) != null ? _a : 1094795585) >>> 0;
+        const marker = ((_a2 = options.marker) != null ? _a2 : 1094795585) >>> 0;
         const count = (_b = options.count) != null ? _b : 40;
         const firstArg = (_c = options.firstArg) != null ? _c : 8;
         const warnings = [];
@@ -17050,6 +17071,1820 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
   }
   function createFmtCommands() {
     return [createFmtBuildCommand(), createFmtOffsetCommand(), createFmtInspectCommand()];
+  }
+
+  // src/explain/catalog.ts
+  var BADCHARS = (meaning = 'Bytes the target corrupts or cuts, as one hex string such as "00 0A 0D".', defaultValue = "none") => ({ name: "badchars", meaning, optional: true, default: defaultValue });
+  var MODULE = (meaning = "Loaded module name, with or without the extension, such as essfunc or kernel32.") => ({ name: "module", meaning });
+  var SCAN_MODE = { name: "mode", meaning: "fast scans the usual gadget shapes; thorough also decodes more starting offsets.", optional: true, default: "fast", values: { fast: "the quicker scan.", thorough: "the slower, wider scan." } };
+  var EXEC_ONLY = { name: "executableOnly", meaning: "true keeps only addresses in executable sections.", optional: true, default: "true" };
+  var MAX_RESULTS = { name: "maxResults", meaning: "Upper limit on the number of hits printed.", optional: true, kind: "number" };
+  var TEMPLATE_TASKS = {
+    "winexec=": "builds the command line on the stack with null-free pushes and calls WinExec on it.",
+    "loadlibrary=": "calls LoadLibraryA on the DLL name and keeps the returned base at [ebp-0x0c].",
+    "getprocaddress=": "calls GetProcAddress on the last loaded base and keeps the address at [ebp-0x10].",
+    exit: "ends the process with ExitProcess(0).",
+    terminate: "ends the process with TerminateProcess(-1, 0); -1 means the current process.",
+    "show=": "sets the uCmdShow value that later winexec tasks pass (0 hides the window, 1 shows it).",
+    "bad=": "lists the bad characters that the generated code and the script check must avoid.",
+    xor: "prepends a small XOR decoder stub, a fallback when a fixed line still holds a bad byte.",
+    "max=": "sets MAX_SIZE, the largest shellcode size the script accepts."
+  };
+  var EXPLANATIONS = [
+    // Crash triage
+    {
+      name: "triage",
+      summary: "One-screen crash summary and module score",
+      what: "Prints one summary of the crash: what you control (EIP or the SEH record), the stack around ESP, useful gadgets, and which modules are safe to take addresses from.",
+      how: "Reads the live registers, walks the SEH chain from the thread's TEB, reads stack memory from ESP upward, and parses each module's PE header for ASLR, DEP and SafeSEH. It compares register values with the cyclic pattern of <patternLength> bytes, so a hit means your own bytes reached that place.",
+      when: "First command after the crash, before you look for the offset. It also caches the state that rop.synthesize reads later.",
+      args: [
+        { name: "patternLength", meaning: "Length of the cyclic pattern you sent.", optional: true, default: "10000", kind: "number" },
+        BADCHARS(void 0, "00 0A 0D"),
+        { name: "module", meaning: "Module to look at first for gadgets.", optional: true },
+        { name: "stackBytes", meaning: "How many stack bytes to read from ESP.", optional: true, default: "1024", kind: "number" }
+      ],
+      example: 'dx @$osed().triage(10000, "00 0A 0D", "vulnserver")',
+      output: "CONTROL says whether EIP or SEH holds pattern bytes. STACK shows the slots around ESP. MODULE SCORE lists modules without ASLR first, because their addresses stay the same between runs. EXPLOIT STRATEGY proposes the next step.",
+      report: "After the crash, triage showed which register held the cyclic pattern of <patternLength> bytes and ranked the loaded modules by ASLR, DEP and SafeSEH, which confirmed that the instruction pointer was under control."
+    },
+    {
+      name: "findmsp",
+      summary: "Find pattern offsets in registers, stack and SEH",
+      what: "Finds where the cyclic pattern sits after the crash: in each register, on the stack, in the SEH record, and in memory that registers point to, with the offset for each hit.",
+      how: "Builds the same pattern of <patternLength> bytes inside the script, then reads each register, <stackBytes> bytes of stack and <probeBytes> bytes behind each register pointer, and searches each 4-byte value in the pattern. Every 4-byte window of the pattern is unique, so one match gives one exact offset.",
+      when: "Offset step, right after the crash with the pattern as the buffer. It replaces running pattern_offset on each register by hand.",
+      args: [
+        { name: "patternLength", meaning: "Length of the pattern you sent, 256 to 100000.", optional: true, default: "10000", kind: "number" },
+        { name: "stackBytes", meaning: "Stack bytes to scan from ESP, 128 to 8192.", optional: true, default: "2048", kind: "number" },
+        { name: "probeBytes", meaning: "Bytes read behind each register pointer, 8 to 256.", optional: true, default: "32", kind: "number" }
+      ],
+      example: "dx @$osed().findmsp(3000)",
+      output: "INSTRUCTION POINTER gives the EIP offset. PATTERN MATCHES lists each place with its offset. EXACT means one possible offset; CONSERVATIVE means the pattern repeats there, so check it.",
+      report: "Ran findmsp against the pattern of <patternLength> bytes, which located the pattern in the overwritten registers and stack and gave the exact offset to the saved return address."
+    },
+    {
+      name: "stackmap",
+      summary: "Label each stack slot at the crash",
+      what: "Labels each 4-byte stack slot from ESP: your pattern, a return address, a saved EBP, an old pointer, zero, or plain data.",
+      how: "Reads <depth> slots from ESP. A value inside a module's code is labelled RET, a value that points higher in the same stack is SAVED_EBP, and a value found in the pattern of <patternLength> bytes is PATTERN. The labels come from the live memory map, so they match the process as it is now.",
+      when: "After the offset step, to see how much stack you control and where a ROP chain or shellcode can start.",
+      args: [
+        { name: "depth", meaning: "Number of stack slots to label.", optional: true, kind: "number" },
+        { name: "patternLength", meaning: "Length of the pattern you sent.", optional: true, default: "10000", kind: "number" }
+      ],
+      example: "dx @$osed().stackmap(64, 3000)",
+      output: "One line per slot with its address, value and label. The summary gives how many slots you control, the room for a chain, and the slot where it would start.",
+      report: "Mapped <depth> stack slots with stackmap, which showed the contiguous region controlled by the payload and the slot where the ROP chain starts."
+    },
+    {
+      name: "landing",
+      summary: "What sits at ESP or an address, and is it executable",
+      what: "Shows the bytes at ESP, or at <address>, and whether that memory can run code.",
+      how: "Reads a sample of bytes at the address and asks the debugger for the memory region and its protection, the same data that !address shows. It also notes NOP runs, marker bytes and pattern matches in the sample. These are observations of memory, not proof that the bytes are your shellcode.",
+      when: "Right after a jump such as JMP ESP lands, to confirm that execution reached your buffer and that DEP allows it to run there.",
+      args: [{ name: "address", meaning: "Address to inspect; ESP when left out.", optional: true, default: "ESP", kind: "address" }],
+      example: "dx @$osed().landing()",
+      output: "The byte sample, the observations (NOP run, marker, pattern), and the protection flags. executable true means the CPU may run code there.",
+      report: "After the redirect, landing showed the payload bytes at <address> and that the memory there was executable, which confirmed the landing zone."
+    },
+    // Pattern and bad characters
+    {
+      name: "pattern.create",
+      aliases: ["pattern_create"],
+      summary: "Make a cyclic pattern to send as the buffer",
+      what: "Prints a cyclic pattern of <length> characters. Every 4-character window in it is different, so any 4 bytes from it point to one position.",
+      how: "Generates the pattern in the script itself, either the Metasploit Aa0Aa1 form or a de Bruijn cyclic form, chosen by <type>. Nothing is read from the target, so it works in any process.",
+      when: "Offset step: send the pattern in place of the buffer, crash the target, then read the register with pattern_offset or findmsp.",
+      args: [
+        { name: "length", meaning: "Number of characters to generate.", kind: "number" },
+        { name: "type", meaning: "Pattern family.", optional: true, default: "msf", values: { msf: "the Metasploit Aa0Aa1 pattern.", cyclic: "a de Bruijn cyclic pattern." } }
+      ],
+      example: "dx @$osed().pattern_create(3000)",
+      output: "One line with the pattern. Copy it into the exploit as the buffer.",
+      report: "Generated a <length>-byte <type> cyclic pattern with pattern_create and sent it in place of the buffer to find the offset of the overwrite.",
+      quick: true
+    },
+    {
+      name: "pattern.offset",
+      aliases: ["pattern_offset"],
+      summary: "Turn a register value into a pattern offset",
+      what: "Tells you how many bytes into the pattern the 4-byte <value> starts. That number is the offset to the overwritten field.",
+      how: "Converts <value> to the 4 characters it holds in memory (little-endian, so the bytes are reversed), then searches them in the same pattern that pattern_create makes. Each window is unique, so one match is the answer.",
+      when: "Offset step, after the crash: pass the value of EIP or of the SEH handler.",
+      args: [
+        { name: "value", meaning: "The 4-byte value from the register, as a number or a hex string.", kind: "address" },
+        { name: "type", meaning: "The pattern family you sent; must match pattern_create.", optional: true, default: "msf", values: { msf: "the Metasploit pattern.", cyclic: "the cyclic pattern." } }
+      ],
+      results: [
+        { name: "offset", meaning: "Bytes from the start of the buffer to the 4 bytes.", field: "offset", kind: "number" },
+        { name: "needle", meaning: "The 4 characters that the value holds.", field: "needle" }
+      ],
+      example: "dx @$osed().pattern_offset(0x39654138)",
+      output: 'Needle is the text of the 4 bytes. Offset is the answer; -1 or "not found" means the value is not from this pattern.',
+      report: "The overwritten value <value> was located with pattern_offset at offset <offset> of the cyclic pattern, so the field is overwritten after <offset> bytes of the buffer.",
+      quick: true
+    },
+    {
+      name: "badchar_function",
+      summary: "Python helpers to send the bad-character test",
+      what: "Prints a BADCHARS line and two Python helpers, badchar_array() and badchar_block(), to paste into the exploit once.",
+      how: "Writes the Python text from <badchars> and <space>. The helpers build the 0x01 to 0xFF test bytes from the BADCHARS list, so each later round only adds one byte to that line. Nothing is read from the target.",
+      when: "Bad-character step, once, before the first test send. With a small space after EIP, pass <space> to test in blocks.",
+      args: [
+        BADCHARS('Bytes already known to be bad, such as "00".'),
+        { name: "space", meaning: "Bytes that fit after EIP; 0 means no limit.", optional: true, default: "0", kind: "number" }
+      ],
+      example: 'dx @$osed().badchar_function("00", 76)',
+      output: "The BADCHARS and SPACE lines, the two helper functions, and with a space, the first block line and the first badchar_find command.",
+      report: "Added the badchar_function helpers to the exploit with the initial bad characters <badchars>, so each test round rebuilt the byte array from the BADCHARS list."
+    },
+    {
+      name: "badchar_array",
+      summary: "The 0x00 to 0xFF test array minus known bad bytes",
+      what: "Prints every byte from 0x00 to 0xFF except <badchars>, as Python, C and hex, to send as the test payload.",
+      how: "Builds the list in the script. Sending every possible byte value once lets the comparison show exactly which values the target changes or cuts.",
+      when: "Bad-character step: send this array where the shellcode will go, crash the target, then run badchar_find.",
+      args: [BADCHARS("Bytes to leave out of the array.")],
+      example: 'dx @$osed().badchar_array("00 0A 0D")',
+      output: "The same bytes three ways: a Python bytes literal, a C array and plain hex.",
+      report: "Sent the full byte range 0x00 to 0xFF, excluding <badchars>, as a test array to identify the characters that the application corrupts.",
+      quick: true
+    },
+    {
+      name: "badchar_find",
+      summary: "Find the sent test array and its first bad byte",
+      what: "Finds the bad-character test array, or one block of it, in memory near <address> (ESP when left out) and reports the first byte that arrived changed or never arrived.",
+      how: "Reads memory around the anchor, finds the longest run that matches the expected array built from <badchars>, then compares byte by byte. The expected bytes are computed, not guessed, so a difference is a byte the target changed. If the copy stops early, the first missing byte is reported as the likely terminator.",
+      when: "Bad-character step, after each crash with the test array. Repeat with the grown list until it reports no corrupted byte.",
+      args: [
+        { name: "address", meaning: "Where the array should be; ESP when left out.", optional: true, default: "ESP", kind: "address" },
+        BADCHARS("Bad bytes found so far, left out of the expected array."),
+        { name: "windowBytes", meaning: "How many bytes around the anchor to search.", optional: true, kind: "number" },
+        { name: "minRun", meaning: "Shortest matching run accepted as the array.", optional: true, kind: "number" },
+        { name: "start", meaning: "First byte value of the block you sent.", optional: true, default: "0x01", kind: "address" },
+        { name: "size", meaning: "Length of the block; 0 means the rest of the array.", optional: true, kind: "number" }
+      ],
+      results: [{ name: "found", meaning: "Bad bytes found in this run.", field: "badChars" }],
+      example: 'dx @$osed().badchar_find(0x0012F800, "00 0A 0D")',
+      output: 'Survivors counts the bytes that arrived intact. "Bad characters found" names the new bad bytes. Exploit line is the updated BADCHARS line, and Next command is the exact command for the next round.',
+      report: "Compared the test array in memory at <address> against the expected bytes with badchar_find, which identified <found> as corrupted in addition to <badchars>."
+    },
+    {
+      name: "badchars",
+      summary: "Compare memory at a known address with the test array",
+      what: "Compares the bytes at <address> with the expected test array and lists every byte that differs.",
+      how: "Reads memory at <address> and compares it, position by position, with the 0x01 to 0xFF array minus <badchars>. Because the expected order is known, a mismatch names the exact byte value the target broke.",
+      when: "Bad-character step, when you already know where the array starts. Otherwise use badchar_find, which searches for it.",
+      args: [
+        { name: "address", meaning: "Start of the test array in memory.", kind: "address" },
+        BADCHARS("Bad bytes already left out of the array.")
+      ],
+      example: 'dx @$osed().badchars(0x00B8F900, "00 0A 0D")',
+      output: "The differing bytes with their positions, then the Exploit line and the Next command for the next round.",
+      report: "Compared the test array at <address> with the expected byte sequence using badchars, excluding <badchars>, to confirm the full list of bad characters."
+    },
+    // Target and memory
+    {
+      name: "modules",
+      summary: "Loaded modules with ASLR, DEP and SafeSEH",
+      what: "Lists the loaded modules with their base, size and protections: ASLR, DEP (NX_COMPAT) and SafeSEH.",
+      how: "Reads each module's PE header in process memory. The DllCharacteristics flags say whether ASLR (DYNAMIC_BASE) and DEP (NX_COMPAT) apply, and the load configuration or the NO_SEH flag says whether SafeSEH applies. These flags are what the Windows loader itself obeys.",
+      when: "Before you pick any address: return addresses, gadgets and SEH handlers must come from a module without ASLR, and SEH handlers from one without SafeSEH.",
+      args: [{ name: "filter", meaning: "Show only modules whose name contains this text.", optional: true }],
+      results: [{ name: "count", meaning: "Number of modules listed.", field: "#count", kind: "number" }],
+      example: "dx @$osed().modules()",
+      output: "One row per module: Base, Size, ASLR, NX_COMPAT, SafeSEH, System. A module with ASLR disabled keeps the same addresses between runs.",
+      report: "Enumerated the <count> loaded modules with modules, which showed their ASLR, DEP and SafeSEH settings and identified a module without ASLR as the source of stable addresses.",
+      quick: true
+    },
+    {
+      name: "memory",
+      summary: "Memory region and protection of an address",
+      what: "Shows the memory region that holds <address> and whether it is readable, writable and executable.",
+      how: "Asks the debugger for the region information of <address>, the same data as !address, and decodes the protection value. null means the debugger could not tell, which is different from false.",
+      when: "Whenever you need to know if a buffer can be written or run, for example a code cave or the stack before a DEP bypass.",
+      args: [{ name: "address", meaning: "Address to look up.", kind: "address" }],
+      results: [{ name: "executable", meaning: "true when code may run there.", field: "executable" }],
+      example: "dx @$osed().memory(0x0012F800)",
+      output: "The region base and size, then readable, writable, executable, guarded, noAccess and committed. raw holds the original protection values.",
+      report: "Checked the memory region of <address> with memory, which reported it as executable: <executable>.",
+      quick: true
+    },
+    {
+      name: "can_execute",
+      summary: "true, false or null: can code run at an address",
+      what: "Answers one question: can the CPU run code at <address>?",
+      how: "Returns the executable field from memory(<address>), which comes from the region protection. null means unknown.",
+      when: "Quick check before jumping to a buffer, or after a DEP bypass to see if the protection changed.",
+      args: [{ name: "address", meaning: "Address to test.", kind: "address" }],
+      results: [{ name: "executable", meaning: "true, false or null.", field: "value" }],
+      example: "dx @$osed().can_execute(0x0012F800)",
+      output: "true, false, or null for unknown.",
+      report: "Verified with can_execute that the memory at <address> was executable: <executable>.",
+      quick: true,
+      primitive: "value"
+    },
+    {
+      name: "find_ptr",
+      summary: "Find jmp, call or push-ret on a register",
+      what: "Finds addresses of an instruction that sends execution to a register, such as jmp esp, call eax or push esp ; ret, and drops addresses that hold bad characters.",
+      how: "Encodes <instruction> into its machine bytes (jmp esp is FF E4), searches those bytes in the executable sections of <module>, then removes every address that contains a byte from <badchars>. A byte match in code is exactly what the CPU will run.",
+      when: "Return-address step of a direct EIP overwrite: the address replaces the saved return address so execution jumps to your buffer.",
+      args: [
+        { name: "instruction", meaning: "Mnemonic and register.", values: { "jmp ": "an unconditional jump to the register.", "call ": "a call through the register.", "pushret ": "push register then ret." } },
+        { name: "module", meaning: "Module to search; all modules when left out.", optional: true },
+        BADCHARS(),
+        MAX_RESULTS,
+        EXEC_ONLY
+      ],
+      results: [{ name: "count", meaning: "Addresses that survived the bad-character filter.", field: "surviving.length", kind: "number" }],
+      example: 'dx @$osed().find_ptr("jmp esp", "essfunc", "00 0A 0D")',
+      output: "One line per hit as module+offset and the address. Use an address from a module without ASLR.",
+      report: "Searched <module> for the instruction <instruction> with find_ptr, excluding <badchars>, and selected one of the <count> clean addresses as the return address."
+    },
+    {
+      name: "find_bytes",
+      summary: "Search one module's sections for bytes",
+      what: "Searches the PE sections of <module> for the byte sequence <bytes>.",
+      how: "Reads the section table from the module's PE header and scans the bytes of each section (executable ones only by default). It does not look at the stack or the heap, and says so when nothing is found.",
+      when: "Gadget and pointer search when you know the exact bytes, such as 58 C3 for pop eax ; ret.",
+      args: [
+        MODULE(),
+        { name: "bytes", meaning: 'Byte sequence as hex, such as "FF E4".' },
+        MAX_RESULTS,
+        EXEC_ONLY,
+        SCAN_MODE
+      ],
+      example: 'dx @$osed().find_bytes("essfunc", "FF E4")',
+      output: "One line per hit with the address and the section that holds it.",
+      report: "Located the byte sequence <bytes> in the sections of <module> with find_bytes."
+    },
+    {
+      name: "find_stack_bytes",
+      summary: "Search the thread stack for bytes",
+      what: "Searches the current thread's stack, from ESP upward, for <bytes>.",
+      how: "Reads the stack limits of the thread and scans up to <stackBytes> bytes from ESP. Finding your marker there shows where the buffer landed.",
+      when: "After the crash, to confirm where the buffer or a marker such as CCCC sits on the stack.",
+      args: [
+        { name: "bytes", meaning: "Byte sequence as hex." },
+        MAX_RESULTS,
+        { name: "stackBytes", meaning: "How many bytes above ESP to scan.", optional: true, kind: "number" }
+      ],
+      example: 'dx @$osed().find_stack_bytes("43 43 43 43")',
+      output: "One line per hit with the address and its distance from ESP.",
+      report: "Searched the thread stack with find_stack_bytes for <bytes>, which located the buffer relative to ESP."
+    },
+    {
+      name: "find_mem_bytes",
+      summary: "Search an address range for bytes",
+      what: "Searches <length> bytes from <address> for <bytes>.",
+      how: "Reads exactly the range you give and scans it. Use it for the heap or any region the other searches skip.",
+      when: "When the buffer may be in the heap or another region you already know, for example while hunting the second stage of an egghunter.",
+      args: [
+        { name: "address", meaning: "Start of the range.", kind: "address" },
+        { name: "length", meaning: "Size of the range in bytes.", kind: "address" },
+        { name: "bytes", meaning: "Byte sequence as hex." },
+        MAX_RESULTS
+      ],
+      example: 'dx @$osed().find_mem_bytes(0x14800000, 0x16000, "43 43 43 43")',
+      output: "One line per hit with the address.",
+      report: "Scanned <length> bytes from <address> with find_mem_bytes and located the sequence <bytes>."
+    },
+    {
+      name: "code_caves",
+      summary: "Find padding inside modules that can hold a payload",
+      what: "Finds runs of padding bytes (00, CC or 90) inside module sections that are large enough to hold code or data.",
+      how: "Reads each section of the module from its PE header and measures runs of padding of at least <minSize> bytes. Each cave gets its protection and a bad-character check of its address, so you can see if it is writable, executable and reachable.",
+      when: "When you need a fixed writable or executable buffer, for example for WriteProcessMemory or a frame built by rop.frame_write.",
+      args: [
+        { name: "module", meaning: "Module to search; all modules when left out or empty.", optional: true },
+        { name: "minSize", meaning: "Smallest cave to report, in bytes.", optional: true, kind: "number" },
+        MAX_RESULTS,
+        BADCHARS(),
+        { name: "capability", meaning: "Filter by use, such as EXEC.", optional: true }
+      ],
+      example: 'dx @$osed().code_caves("essfunc", 100)',
+      output: "One row per cave: address, size, protection, ASLR state of the module, and whether the address holds a bad character.",
+      report: "Identified a code cave of at least <minSize> bytes in <module> with code_caves to use as a stable buffer."
+    },
+    // SEH
+    {
+      name: "seh.visualize",
+      summary: "Walk the SEH chain: each Next and Handler",
+      what: "Walks the structured exception handler chain of the current thread and shows each record's Next pointer and Handler address.",
+      how: "Reads the thread's TEB, whose first field points to the newest SEH record, then follows each Next pointer until 0xFFFFFFFF. On WOW64 it uses the 32-bit TEB and checks its self pointer. It is the same walk that !exchain does, without needing symbols.",
+      when: "SEH overwrite: after the first-chance exception, to see whether Next and Handler hold your pattern, and later to check your PPR address in the Handler.",
+      args: [],
+      example: "dx @$osed().seh.visualize()",
+      output: "One row per record with its address, Next and Handler. A Handler with pattern bytes gives the offset through pattern_offset; nSEH sits 4 bytes before it.",
+      report: "Walked the SEH chain with seh.visualize, which showed that the exception registration record was overwritten by the payload."
+    },
+    {
+      name: "seh_ppr",
+      summary: "Rank pop pop ret gadgets for an SEH overwrite",
+      what: "Finds and ranks pop r32 ; pop r32 ; ret gadgets, the instruction sequence that returns into the overwritten nSEH field.",
+      how: "Scans the executable sections of <module> for the pop-pop-ret byte patterns, drops addresses that contain a byte from <badchars>, and ranks the rest by module protections. When the handler runs, two pops remove two stack values and ret jumps to the address the exception code left there, which points to nSEH.",
+      when: "SEH overwrite, after the offset: the gadget address goes in the Handler field. Take it from a module without SafeSEH and without ASLR.",
+      args: [MODULE("Module to search; all modules when left out."), BADCHARS(), MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
+      example: 'dx @$osed().seh_ppr("libspp.dll", "00 0A 0D")',
+      output: "The SEH PPR Candidates table: address, the instructions, the module and its SafeSEH and ASLR state.",
+      report: "Selected a pop-pop-ret gadget from <module> with seh_ppr, excluding <badchars>, to overwrite the SEH handler."
+    },
+    // Quick gadget scans and ROP skeletons
+    {
+      name: "rop_suggest",
+      summary: "Common exploit gadgets in a module, by purpose",
+      what: "Scans a module and prints the common exploit gadgets grouped by what they do, such as register loads, stack pivots and memory writes.",
+      how: "Decodes instruction sequences that end in ret in the executable sections of <module> and sorts them by effect. It needs no corpus.",
+      when: "Early ROP step, for a quick look at what a module offers before you build a full corpus with rop.scan_live.",
+      args: [
+        { name: "module", meaning: "Module to scan; every module when empty.", optional: true },
+        MAX_RESULTS,
+        EXEC_ONLY,
+        SCAN_MODE,
+        { name: "engine", meaning: "semantic or legacy gadget classifier.", optional: true, values: { semantic: "the newer effect-based classifier.", legacy: "the older pattern classifier." } }
+      ],
+      example: 'dx @$osed().rop_suggest("essfunc")',
+      output: "One group per purpose, each with addresses and instruction text.",
+      report: "Surveyed the gadgets available in <module> with rop_suggest to plan the ROP chain."
+    },
+    {
+      name: "retn",
+      summary: "Find retn N gadgets",
+      what: "Finds retn N gadgets, which return and then drop N more bytes from the stack.",
+      how: "Searches the executable sections of <module> for the C2 opcode with its 16-bit count. Each hit is a real return instruction at that address.",
+      when: "ROP chains and stack alignment, when you need to skip a few stack slots after a return.",
+      args: [MODULE("Module to scan; all modules when left out."), MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
+      example: 'dx @$osed().retn("essfunc")',
+      output: "One line per gadget with its address and N.",
+      report: "Located retn gadgets in <module> with retn to skip stack slots in the chain."
+    },
+    {
+      name: "add_esp",
+      summary: "Find add esp, N ; ret gadgets",
+      what: "Finds add esp, N ; ret gadgets, which move the stack pointer up and skip stack slots.",
+      how: "Searches the executable sections of <module> for the byte patterns of add esp followed by ret.",
+      when: "ROP chains, to step over data that sits between two parts of the chain.",
+      args: [MODULE("Module to scan; all modules when left out."), MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
+      example: 'dx @$osed().add_esp("essfunc")',
+      output: "One line per gadget with its address and the size of the skip.",
+      report: "Located add esp gadgets in <module> with add_esp to skip over data in the chain."
+    },
+    {
+      name: "pivots",
+      summary: "Find stack pivot gadgets in a module",
+      what: "Finds stack pivot gadgets, which move ESP to a register or by a large offset, such as xchg eax, esp ; ret.",
+      how: "Scans the executable sections of <module> for instructions that write ESP, followed by ret. It needs no corpus.",
+      when: "When the buffer you control is not where ESP points, so the chain must first move the stack onto it.",
+      args: [{ name: "module", meaning: "Module to scan; every module when empty.", optional: true }, MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
+      example: 'dx @$osed().pivots("essfunc")',
+      output: "One line per gadget with its address and how it changes ESP.",
+      report: "Identified stack pivot gadgets in <module> with pivots to move the stack pointer onto the controlled buffer."
+    },
+    {
+      name: "rop.find",
+      aliases: ["rop_find"],
+      summary: "Older ROP helper: gadgets and module summary",
+      what: "Runs the older ROP helper, which scans one module for gadgets and prints a summary of the module.",
+      how: "Reads the executable sections of <module> and lists gadget shapes it recognises. It keeps no corpus; the rop.* corpus commands are the newer path.",
+      when: "Quick gadget triage of one module.",
+      args: [MODULE("Module to scan."), MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
+      example: 'dx @$osed().rop.find("essfunc")',
+      output: "The module summary, then the gadgets found.",
+      report: "Triaged the gadgets of <module> with rop.find."
+    },
+    {
+      name: "rop_template",
+      summary: "Commented ROP chain skeleton for one API",
+      what: "Prints a commented chain skeleton for <api>, with ??? for each value you still need and the dx command that finds it.",
+      how: "Fills a fixed layout for the API's arguments and the PUSHAD register map. It reads nothing from the target; <module> only appears in the suggested commands.",
+      when: "Start of the DEP bypass, to see which values the chain needs before you search for them.",
+      args: [
+        { name: "api", meaning: "API to call.", optional: true, values: { VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into executable memory.", LoadLibraryA: "loads a DLL.", GetProcAddress: "looks up an export." } },
+        { name: "module", meaning: "Module named in the suggested commands.", optional: true }
+      ],
+      example: 'dx @$osed().rop_template("VirtualProtect", "essfunc")',
+      output: "The register map, a Python layout with ??? placeholders, and the commands that find each value.",
+      report: "Laid out the <api> ROP chain with rop_template and filled each placeholder with addresses taken from <module>."
+    },
+    {
+      name: "dep_function",
+      summary: "VirtualAlloc or WriteProcessMemory frame skeleton",
+      what: "Prints a Python call-frame skeleton for VirtualAlloc or WriteProcessMemory, the two usual DEP bypass APIs.",
+      how: "Writes the stack frame in the order the API reads it: the API address, the return address, then each argument. It chooses no addresses; you fill them in for the target.",
+      when: "DEP bypass, when you write the frame by hand before building it with gadgets.",
+      args: [{ name: "method", meaning: "Which API frame to print.", values: { VA: "VirtualAlloc.", WPM: "WriteProcessMemory." } }],
+      example: 'dx @$osed().dep_function("VA")',
+      output: "A commented Python skeleton with one line per stack word.",
+      report: "Prepared the <method> call frame skeleton with dep_function and replaced each placeholder with target addresses.",
+      quick: true
+    },
+    // Gadget corpus
+    {
+      name: "rop.scan_live",
+      summary: "Load gadgets of loaded modules into the corpus",
+      what: "Finds gadgets in one or more loaded modules and stores them in the corpus that the other rop.* commands use.",
+      how: "Reads the executable sections of <module> from memory, decodes instruction sequences that end in a return or jump, scanning backward from each terminator up to <maxInstructionsPerGadget> instructions, and records what each gadget reads, writes and does to ESP. Addresses that hold a byte from <badchars> are dropped. The bytes come from the live process, so they are the bytes that will run.",
+      when: "Start of the ROP step, once per module, before rop.query, rop.construct or any chain builder.",
+      args: [
+        { name: "module", meaning: "Module or modules to scan." },
+        BADCHARS(),
+        { name: "append", meaning: "true keeps the current corpus and adds to it.", optional: true, default: "false" },
+        { name: "maxPerPattern", meaning: "Cap on gadgets kept per pattern.", optional: true, kind: "number" },
+        { name: "maxInstructionsPerGadget", meaning: "Longest gadget, 1 to 12 instructions.", optional: true, default: "6", kind: "number" },
+        { name: "maxBackwardGadgets", meaning: "Cap on the backward scan.", optional: true, default: "10000", kind: "number" }
+      ],
+      example: 'dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D")',
+      output: "The summary counts the gadgets kept and says whether the backward scan finished or hit its cap.",
+      report: "Built the gadget corpus from <module> with rop.scan_live, excluding addresses with the bad characters <badchars>."
+    },
+    {
+      name: "rop.scan",
+      summary: "Load RP++ gadget text into the corpus",
+      what: "Loads gadget lines from RP++ output into the corpus.",
+      how: "Parses each address and instruction line, decodes its effects, and drops addresses that contain a byte from <badchars>. It trusts the text you give, so the gadgets are only as current as that RP++ run.",
+      when: "ROP step, when you already have RP++ output instead of scanning live.",
+      args: [{ name: "text", meaning: "RP++ lines as one string." }, BADCHARS()],
+      example: 'dx @$osed().rop.scan("0x1000: pop eax ; ret ;", "00 0A 0D")',
+      output: "The number of gadgets loaded and dropped.",
+      report: "Imported the RP++ gadget list into the corpus with rop.scan, excluding <badchars>."
+    },
+    {
+      name: "rop.capabilities",
+      summary: "Count corpus gadgets by capability",
+      what: "Counts the gadgets in the corpus by what they can do, such as LOAD_REGISTER, MEMORY_WRITE or STACK_PIVOT.",
+      how: "Reads the effects recorded for each gadget when the corpus was built. It scans nothing new.",
+      when: "After rop.scan_live, to see whether the module offers the building blocks a chain needs.",
+      args: [],
+      example: "dx @$osed().rop.capabilities()",
+      output: "One line per capability with its gadget count. A zero means that kind of step needs another module or another approach.",
+      report: "Summarised the gadget corpus by capability with rop.capabilities to confirm the primitives needed for the chain were available."
+    },
+    {
+      name: "rop.query",
+      summary: "Filter corpus gadgets by capability or effect",
+      what: "Lists the corpus gadgets that match one field, such as capability LOAD_REGISTER or preserves eax.",
+      how: "Filters the effects recorded for each gadget: the registers it reads, writes or keeps, its terminator and its stack change.",
+      when: "Chain building, when you need one specific gadget, for example one that writes memory without touching EAX.",
+      args: [
+        { name: "field", meaning: "Field to filter on.", values: { capability: "what the gadget does.", reads: "registers it reads.", writes: "registers it writes.", preserves: "registers it leaves unchanged.", terminator: "how it ends.", stackDelta: "how far it moves ESP." } },
+        { name: "value", meaning: "Value the field must have, such as LOAD_REGISTER or eax." },
+        EXEC_ONLY,
+        { name: "verbose", meaning: "true prints each gadget's full effects.", optional: true }
+      ],
+      example: 'dx @$osed().rop.query("capability", "LOAD_REGISTER")',
+      output: "Address, instruction sequence, main capability, stack change and score for each match.",
+      report: "Queried the corpus with rop.query for gadgets where <field> is <value> to select the chain gadgets."
+    },
+    {
+      name: "rop.corpus.lookup",
+      summary: "Look up one address in the corpus",
+      what: "Shows what the corpus recorded for the gadget at <address>.",
+      how: "Looks the address up in the corpus only. NOT_FOUND means the scan did not record it; memory is not scanned again.",
+      when: "Checking one gadget you picked, for example from a write-up or an earlier run.",
+      args: [{ name: "address", meaning: "Gadget address.", kind: "address" }],
+      example: "dx @$osed().rop.corpus.lookup(0x10154112)",
+      output: "The instructions and effects of that gadget, or NOT_FOUND.",
+      report: "Confirmed the gadget at <address> and its side effects with rop.corpus.lookup."
+    },
+    {
+      name: "rop.pivots",
+      summary: "Rank corpus stack pivots",
+      what: "Ranks the stack pivot gadgets in the corpus, optionally for one source <register> or a minimum ESP move.",
+      how: "Selects corpus gadgets whose recorded effect writes ESP and orders them by how cleanly they move it.",
+      when: "When the chain must start somewhere other than ESP, such as a buffer that a register points to.",
+      args: [
+        { name: "register", meaning: "Register that holds the new stack address.", optional: true },
+        { name: "minDelta", meaning: "Smallest ESP change to accept.", optional: true, kind: "number" },
+        { name: "verbose", meaning: "true prints the full effects.", optional: true }
+      ],
+      example: 'dx @$osed().rop.pivots("eax")',
+      output: "Ranked pivots with address, instructions and stack effect.",
+      report: "Selected a stack pivot through <register> with rop.pivots to move ESP onto the controlled buffer."
+    },
+    // Register loading
+    {
+      name: "rop.construct",
+      summary: "Load a value that contains bad characters",
+      what: "Builds a short gadget sequence that puts <value> in <register> even when the raw value contains bad characters, for example 0x201 holds 00.",
+      how: "Tries recipes from the corpus in order: a direct pop, neg, not, two values that add up, two that subtract, then xor combinations. Every word it would put on the stack is checked against <badchars>, so the result can be sent as is.",
+      when: "DEP bypass: sizes and protection values such as 0x201 or 0x40 usually contain 00 and must be computed at run time.",
+      args: [
+        { name: "register", meaning: "Register to load, such as ebx." },
+        { name: "value", meaning: "Value to load.", kind: "address" },
+        BADCHARS(),
+        { name: "preserve", meaning: "Registers the recipe must not change.", optional: true }
+      ],
+      example: 'dx @$osed().rop.construct("ebx", 0x201, "00 0A 0D")',
+      output: "The recipe name, the registers it changes, and Python pack() lines ready to paste.",
+      report: "Generated a bad-character-free gadget sequence with rop.construct that loads <value> into <register> at run time, avoiding <badchars>."
+    },
+    {
+      name: "rop.setup",
+      summary: "Load several registers in a safe order",
+      what: "Loads several registers at once, in an order where no gadget overwrites a register that is already set.",
+      how: "Picks a gadget for each register from the corpus and orders them using each gadget's recorded side effects. It reports a conflict when no order works. The values must already be free of bad characters.",
+      when: "Before the PUSHAD of a DEP bypass chain, to stage every register.",
+      args: [{ name: "targets", meaning: 'Pairs such as "edi=0x10001000 ebx=0x40".' }, BADCHARS()],
+      example: 'dx @$osed().rop.setup("edi=0x10001000 ebx=0x40", "00 0A 0D")',
+      output: "The gadget order with pack() lines, or the conflict that blocks it.",
+      report: "Staged the registers <targets> with rop.setup in an order that keeps each loaded value intact."
+    },
+    {
+      name: "rop.chain",
+      summary: "Chain that sets registers from the corpus",
+      what: "Builds a chain that puts values in one or more registers.",
+      how: "Uses xor reg, reg for zero, multi-pop gadgets where they fit, and pop reg ; ret otherwise, all from the corpus.",
+      when: "Small register-setup chains, or a first draft before rop.setup.",
+      args: [
+        { name: "register", meaning: "First register." },
+        { name: "value", meaning: "Value for it.", kind: "address" },
+        { name: "more", meaning: "Further register and value pairs.", optional: true, rest: true }
+      ],
+      example: 'dx @$osed().rop.chain("eax", 0xDEADBEEF, "ebx", 0x1000)',
+      output: "A Python layout and the list of registers it could not set.",
+      report: "Built a register-setup chain with rop.chain that loads <value> into <register>."
+    },
+    // DEP bypass chains and frames
+    {
+      name: "rop.chain_vp",
+      summary: "VirtualProtect PUSHAD chain",
+      what: "Builds a VirtualProtect chain that uses PUSHAD to write the whole call frame in one instruction.",
+      how: "Fills the registers so that PUSHAD pushes them in the order VirtualProtect reads its frame: EDI a ret, ESI VirtualProtect, EBX the size, EDX 0x40 (execute-read-write), ECX a writable address; the saved ESP becomes lpAddress. Gadgets come from the corpus.",
+      when: "DEP bypass, when VirtualProtect is reachable and the stack is where the shellcode lives.",
+      args: [
+        { name: "virtualProtect", meaning: "Address of VirtualProtect or its IAT pointer.", optional: true, kind: "address" },
+        { name: "retGadget", meaning: "Address of a plain ret.", optional: true, kind: "address" },
+        { name: "returnAddress", meaning: "Where VirtualProtect returns to, the shellcode.", optional: true, kind: "address" },
+        { name: "lpAddress", meaning: "Start of the memory to change.", optional: true, kind: "address" },
+        { name: "dwSize", meaning: "Bytes to change.", optional: true, default: "0x201", kind: "address" },
+        { name: "writable", meaning: "Writable address for the old protection.", optional: true, kind: "address" },
+        { name: "flNewProtect", meaning: "New protection.", optional: true, default: "0x40", kind: "address" },
+        { name: "mode", meaning: "Chain layout.", optional: true, default: "ret-slide" }
+      ],
+      example: "dx @$osed().rop.chain_vp(0x7C801AD0, 0x62501010, 0x625011AF)",
+      output: "The register plan, the chain as Python, and named placeholders for values still missing.",
+      report: "Built a VirtualProtect PUSHAD chain with rop.chain_vp using <virtualProtect> to mark <dwSize> bytes of the stack as executable before returning into the shellcode."
+    },
+    {
+      name: "rop.chain_va",
+      summary: "VirtualAlloc PUSHAD chain",
+      what: "Builds a VirtualAlloc chain that uses PUSHAD to write the call frame.",
+      how: "Stages the registers so PUSHAD lays out VirtualAlloc's frame, with flAllocationType 0x1000 (commit) and flProtect 0x40 (execute-read-write) by default. It warns that the saved ESP lands in dwSize.",
+      when: "DEP bypass, when VirtualAlloc is the reachable API.",
+      args: [
+        { name: "virtualAlloc", meaning: "Address of VirtualAlloc or its IAT pointer.", optional: true, kind: "address" },
+        { name: "returnAddress", meaning: "Where VirtualAlloc returns to.", optional: true, kind: "address" },
+        { name: "lpAddress", meaning: "Address to commit as executable.", optional: true, kind: "address" },
+        { name: "flAllocationType", meaning: "Allocation type.", optional: true, default: "0x1000", kind: "address" },
+        { name: "flProtect", meaning: "Protection.", optional: true, default: "0x40", kind: "address" }
+      ],
+      example: "dx @$osed().rop.chain_va(0x7C809AE1)",
+      output: "The register plan, the chain as Python, and placeholders for missing values.",
+      report: "Built a VirtualAlloc PUSHAD chain with rop.chain_va using <virtualAlloc> to make the shellcode region executable."
+    },
+    {
+      name: "rop.chain_wpm",
+      summary: "WriteProcessMemory PUSHAD chain",
+      what: "Builds a WriteProcessMemory chain that copies the shellcode into memory that is already executable.",
+      how: "Stages the registers so PUSHAD lays out WriteProcessMemory's frame. hProcess is 0xFFFFFFFF, the current process. It warns that the saved ESP becomes lpBaseAddress.",
+      when: "DEP bypass, when the target has a writable and executable area, such as a code cave, and WriteProcessMemory is reachable.",
+      args: [
+        { name: "writeProcessMemory", meaning: "Address of WriteProcessMemory or its IAT pointer.", optional: true, kind: "address" },
+        { name: "returnAddress", meaning: "Where the call returns to, the copied shellcode.", optional: true, kind: "address" },
+        { name: "lpBuffer", meaning: "Source of the shellcode.", optional: true, kind: "address" },
+        { name: "nSize", meaning: "Bytes to copy.", optional: true, kind: "address" },
+        { name: "writable", meaning: "Writable address for the byte count.", optional: true, kind: "address" }
+      ],
+      example: "dx @$osed().rop.chain_wpm(0x7C802213, 0x625011AF, 0x0012F800, 0x200)",
+      output: "The register plan, the chain as Python, and placeholders for missing values.",
+      report: "Built a WriteProcessMemory chain with rop.chain_wpm using <writeProcessMemory> to copy <nSize> bytes of shellcode from <lpBuffer> into executable memory."
+    },
+    {
+      name: "rop.frame_vp",
+      summary: "Flat VirtualProtect frame, no gadgets",
+      what: "Prints the VirtualProtect stack frame as flat words, without gadgets.",
+      how: "Lays out [VirtualProtect][return][lpAddress][dwSize][flNewProtect][lpflOldProtect] and checks every word against <badchars>. A flagged word must be built at run time with rop.construct.",
+      when: "DEP bypass planning, to see which frame values contain bad characters.",
+      args: [
+        { name: "virtualProtect", meaning: "API address.", optional: true, kind: "address" },
+        { name: "returnAddress", meaning: "Return address.", optional: true, kind: "address" },
+        { name: "lpAddress", meaning: "Memory to change.", optional: true, kind: "address" },
+        { name: "dwSize", meaning: "Size.", optional: true, kind: "address" },
+        { name: "flNewProtect", meaning: "New protection.", optional: true, kind: "address" },
+        { name: "writable", meaning: "Writable address for the old protection.", optional: true, kind: "address" },
+        BADCHARS()
+      ],
+      example: 'dx @$osed().rop.frame_vp(0x7C801AD0, 0x625011AF, 0x0012F800, 0x201, 0x40, 0x62506000, "00 0A 0D")',
+      output: "Python pack() lines and a table; words with bad characters are flagged.",
+      report: "Laid out the VirtualProtect frame with rop.frame_vp and identified the arguments that contain bad characters <badchars>."
+    },
+    {
+      name: "rop.frame_va",
+      summary: "Flat VirtualAlloc frame, no gadgets",
+      what: "Prints the VirtualAlloc stack frame as flat words, without gadgets.",
+      how: "Lays out the API address, the return address and the four arguments, with defaults dwSize 0x201, flAllocationType 0x1000 and flProtect 0x40, and flags words with bad characters.",
+      when: "DEP bypass planning with VirtualAlloc.",
+      args: [
+        { name: "virtualAlloc", meaning: "API address.", optional: true, kind: "address" },
+        { name: "returnAddress", meaning: "Return address.", optional: true, kind: "address" },
+        { name: "lpAddress", meaning: "Address to commit.", optional: true, kind: "address" },
+        { name: "dwSize", meaning: "Size.", optional: true, default: "0x201", kind: "address" },
+        { name: "flAllocationType", meaning: "Allocation type.", optional: true, default: "0x1000", kind: "address" },
+        { name: "flProtect", meaning: "Protection.", optional: true, default: "0x40", kind: "address" },
+        BADCHARS()
+      ],
+      example: 'dx @$osed().rop.frame_va(0x7C809AE1, 0x625011AF, 0, 0x201, 0x1000, 0x40, "00 0A 0D")',
+      output: "Python pack() lines and a table with flagged words.",
+      report: "Laid out the VirtualAlloc frame with rop.frame_va and identified the arguments that contain bad characters <badchars>."
+    },
+    {
+      name: "rop.frame_wpm",
+      summary: "Flat WriteProcessMemory frame, no gadgets",
+      what: "Prints the WriteProcessMemory stack frame as flat words, without gadgets.",
+      how: "Lays out the API address, the return address and the arguments, with hProcess 0xFFFFFFFF by default, and flags words with bad characters.",
+      when: "DEP bypass planning with WriteProcessMemory.",
+      args: [
+        { name: "writeProcessMemory", meaning: "API address.", optional: true, kind: "address" },
+        { name: "returnAddress", meaning: "Return address.", optional: true, kind: "address" },
+        { name: "hProcess", meaning: "Process handle.", optional: true, default: "0xFFFFFFFF", kind: "address" },
+        { name: "lpBaseAddress", meaning: "Destination.", optional: true, kind: "address" },
+        { name: "lpBuffer", meaning: "Source.", optional: true, kind: "address" },
+        { name: "nSize", meaning: "Bytes to copy.", optional: true, kind: "address" },
+        { name: "writable", meaning: "Writable address for the byte count.", optional: true, kind: "address" },
+        BADCHARS()
+      ],
+      example: 'dx @$osed().rop.frame_wpm(0x7C802213, 0x625011AF, 0xFFFFFFFF, 0x62502000, 0x0012F800, 0x200, 0x62506000, "00")',
+      output: "Python pack() lines and a table with flagged words.",
+      report: "Laid out the WriteProcessMemory frame with rop.frame_wpm to copy the shellcode to <lpBaseAddress>."
+    },
+    {
+      name: "rop.frame_write",
+      summary: "Write a stdcall frame into a buffer, then pivot",
+      what: "Builds a stdcall frame inside a writable buffer one word at a time, then moves ESP onto it, without PUSHAD.",
+      how: "For each word of <words> it emits gadgets that write it to <buf>; a word with bad characters is computed in ECX first. A final pivot makes ESP point at the frame, so the API runs with exactly those words.",
+      when: "DEP bypass when PUSHAD does not fit, or when frame values must be computed.",
+      args: [
+        { name: "buf", meaning: "Writable, stable buffer address, or BUF." },
+        { name: "words", meaning: "API address, return address, then the arguments." },
+        BADCHARS()
+      ],
+      example: 'dx @$osed().rop.frame_write("0x00420000", "[0x1005D060] 0x10017260 0x0 0x1000 0x3000 0x40", "00 0A 0D")',
+      output: "The write gadgets per word, the pivot, and the Python layout.",
+      report: "Constructed the API call frame in the writable buffer <buf> with rop.frame_write and pivoted the stack onto it."
+    },
+    {
+      name: "rop.slot_call",
+      summary: "Call an API through its IAT slot",
+      what: "Calls an API through a fixed IAT slot, so the API's own randomised address never appears in the payload.",
+      how: "The chain loads <iatSlot>, reads the live API address stored there, and jumps to it with the arguments from <args> laid out in <buf>. The slot sits in a module without ASLR, so its address is fixed while the API address it holds changes per boot.",
+      when: "DEP bypass on a system where the system DLLs use ASLR but the application module does not.",
+      args: [
+        { name: "buf", meaning: "Writable buffer for the frame." },
+        { name: "iatSlot", meaning: "Address of the IAT entry, from sc.iat_ptr." },
+        { name: "args", meaning: "Return address, then the arguments." },
+        BADCHARS(),
+        { name: "entrySkew", meaning: "Bytes to add to the API address.", optional: true, kind: "number" }
+      ],
+      example: 'dx @$osed().rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")',
+      output: "The chain with comments, and a warning for any gadget whose address moves between runs.",
+      report: "Called the API through the fixed IAT slot <iatSlot> with rop.slot_call, which reads the live API address at run time and so works despite ASLR on the system DLLs."
+    },
+    {
+      name: "rop.api_plan",
+      summary: "Ways to get an API address into a register",
+      what: "Lists the ways to get the address of <target> into a register: a direct IAT slot, or another export of the same module plus a known distance.",
+      how: "Reads the import tables of loaded modules and the export table of the API's module, then checks each candidate address against live memory and against <badchars>. It builds no chain.",
+      when: "DEP bypass, before choosing how the chain finds VirtualProtect, VirtualAlloc or WriteProcessMemory.",
+      args: [{ name: "target", meaning: "API as MODULE!Symbol or just the name." }, BADCHARS()],
+      example: 'dx @$osed().rop.api_plan("KERNEL32!WriteProcessMemory", "00 0A 0D")',
+      output: "One row per candidate with its kind, owner module, slot or anchor, and the bytes that collide with bad characters.",
+      report: "Enumerated the options for resolving <target> with rop.api_plan and selected an IAT-based candidate whose address is free of <badchars>."
+    },
+    {
+      name: "rop.api_build",
+      summary: "Chain that loads an API address into EAX",
+      what: "Builds a short chain that loads the address of <target> into EAX from one rop.api_plan candidate, then continues at <continuation>.",
+      how: "Uses corpus gadgets to read the IAT slot or to add the export distance to an anchor, checking every word against <badchars>. It never calls the API.",
+      when: "DEP bypass, right before the call frame, when the API address must be read at run time.",
+      args: [
+        { name: "target", meaning: "API as MODULE!Symbol." },
+        BADCHARS(),
+        { name: "continuation", meaning: "Address that runs after EAX holds the API.", kind: "address" },
+        { name: "preserve", meaning: "Registers to keep.", optional: true },
+        { name: "maxGadgets", meaning: "Longest chain to accept.", optional: true, kind: "number" },
+        { name: "owner", meaning: "Module whose candidate to use.", optional: true },
+        { name: "anchor", meaning: "Anchor export to use.", optional: true }
+      ],
+      example: 'dx @$osed().rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10064A0F, "", 12, "libspp.dll", "QueryDosDeviceA")',
+      output: "The gadget list with pack() lines and the register state after each step.",
+      report: "Built a gadget sequence with rop.api_build that resolves <target> into EAX at run time without placing its randomised address in the payload."
+    },
+    // Plan, generate and check
+    {
+      name: "rop.plan",
+      summary: "Strategies the corpus supports for one API",
+      what: "Lists the chain strategies that the corpus can support for <strategy>, without choosing gadget addresses yet.",
+      how: "Matches the capabilities the API call needs against the capabilities recorded in the corpus. Each plan gets an id for rop.emit.",
+      when: "DEP bypass, to compare approaches before committing to one.",
+      args: [
+        { name: "strategy", meaning: "VirtualProtect, VirtualAlloc, WriteProcessMemory, WinExec, Stack Pivot and others." },
+        { name: "apiResolution", meaning: "How to find the API, such as iat.", optional: true }
+      ],
+      example: 'dx @$osed().rop.plan("VirtualProtect", "iat")',
+      output: "One row per plan with its id, the steps it needs, and what is missing.",
+      report: "Evaluated the feasible <strategy> chain strategies with rop.plan based on the gadgets available."
+    },
+    {
+      name: "rop.emit",
+      summary: "Pick concrete gadgets for a plan",
+      what: "Picks real gadget addresses for plan <planId> from rop.plan.",
+      how: "Chooses, for each step of the plan, a corpus gadget whose side effects do not break the earlier steps. The result is an assignment, not yet a laid-out chain.",
+      when: "After rop.plan, before rop.synthesize.",
+      args: [
+        { name: "planId", meaning: "Plan id from rop.plan.", kind: "number" },
+        { name: "strategyId", meaning: "Strategy within the plan.", optional: true, kind: "number" }
+      ],
+      example: "dx @$osed().rop.emit(1)",
+      output: "Each step with the gadget address chosen for it.",
+      report: "Assigned concrete gadgets to plan <planId> with rop.emit."
+    },
+    {
+      name: "rop.synthesize",
+      summary: "Lay out the stack for a plan",
+      what: "Lays out the full stack for plan <planId>: gadget addresses, values and filler words in order.",
+      how: "Uses the gadgets from rop.emit and the crash state that triage() cached, such as the offset and the bad characters.",
+      when: "After rop.emit, to get the stack layout of the chain.",
+      args: [{ name: "planId", meaning: "Plan id.", kind: "number" }],
+      example: "dx @$osed().rop.synthesize(1)",
+      output: "The stack, one word per line, with what each word does.",
+      report: "Synthesised the stack layout for plan <planId> with rop.synthesize."
+    },
+    {
+      name: "rop.export",
+      summary: "Write the chain as a Python stub",
+      what: "Writes the emitted gadgets and stack layout of plan <planId> as a Python stub, to the console or to <path>.",
+      how: "Formats the chain from rop.synthesize as pack() lines with comments.",
+      when: "Once the chain is laid out, to move it into the exploit.",
+      args: [
+        { name: "planId", meaning: "Plan id.", kind: "number" },
+        { name: "path", meaning: "File to write; console when left out.", optional: true }
+      ],
+      example: "dx @$osed().rop.export(1)",
+      output: "A Python stub with one pack() line per word.",
+      report: "Exported the ROP chain of plan <planId> to Python with rop.export."
+    },
+    {
+      name: "rop.generate",
+      summary: "Whole DEP bypass exploit from the corpus",
+      what: "Builds a complete Python exploit for one DEP bypass API from the corpus in one command.",
+      how: "Finds the IAT slot of <api>, a writable buffer and a return gadget, builds a slot_call chain, and encodes the shellcode around <badchars>. auto tries every supported API and keeps the best.",
+      when: "DEP bypass, for a fast first chain that you then check with rop.verify.",
+      args: [
+        { name: "api", meaning: "API to use, or auto." },
+        { name: "shellcode", meaning: "Shellcode as hex.", optional: true },
+        BADCHARS(),
+        { name: "module", meaning: "Module to take gadgets from.", optional: true },
+        { name: "offset", meaning: "Offset to the return address.", optional: true, kind: "number" }
+      ],
+      example: 'dx @$osed().rop.generate("VirtualAlloc", "FC E8 82 00 00 00 60", "00 0A 0D")',
+      output: "The exploit script and the choices it made.",
+      report: "Generated a <api> DEP bypass chain with rop.generate from the gadgets of <module>, avoiding <badchars>."
+    },
+    {
+      name: "rop.verify",
+      summary: "Check a chain for bad bytes and side effects",
+      what: "Checks a chain for bad characters, unresolved placeholders, stack use and register side effects, without running it.",
+      how: "Walks the chain word by word, applies each gadget's recorded effect to a model of ESP and the registers, and checks every word against <badchars>. It never changes the chain.",
+      when: "Before sending a chain, to catch a broken word or a clobbered register.",
+      args: [
+        { name: "chain", meaning: "Hex words; the last rop.generate result when left out.", optional: true },
+        BADCHARS(),
+        { name: "api", meaning: "API the chain calls.", optional: true }
+      ],
+      example: 'dx @$osed().rop.verify("10022D64 1005D060 DEADBEEF", "00 0A 0D")',
+      output: "A static verdict, then a trace of ESP and the registers after each word.",
+      report: "Statically verified the ROP chain with rop.verify against <badchars>, confirming the stack and register effects of each gadget."
+    },
+    {
+      name: "rop.prove",
+      summary: "Step through a chain at predicted checkpoints",
+      what: "Checks a chain in the live debugger, one predicted checkpoint at a time.",
+      how: "Predicts where each gadget should leave EIP, ESP and the registers, sets at most one one-shot breakpoint, and compares the real state when it stops. It never resumes the target; you run g yourself.",
+      when: "After the chain is sent, to prove that each gadget ran and whether the DEP bypass worked.",
+      args: [{ name: "action", meaning: "Session step.", optional: true, values: { guided: "start a guided session.", observe: "start without predictions.", status: "show the session.", cancel: "end the session.", export: "save the evidence." } }],
+      example: 'dx @$osed().rop.prove("guided")',
+      output: "At each stop, predicted against observed state, then a final verdict for the gadgets and for the bypass.",
+      report: "Traced the chain in the debugger with rop.prove, which confirmed at each checkpoint that the gadgets executed as predicted."
+    },
+    {
+      name: "rop.corpus.export",
+      summary: "Save the corpus to JSON",
+      what: "Saves the gadget corpus and a fingerprint of the modules to <path>, or prints it.",
+      how: "Serialises the corpus with each module's name, path, base, size and sampled bytes, so a later import can check it still matches.",
+      when: "Save a long scan to reuse in a later debugger session.",
+      args: [{ name: "path", meaning: "JSON file; console when left out.", optional: true }],
+      example: 'dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")',
+      output: "The file path and the number of gadgets saved.",
+      report: "Saved the gadget corpus with rop.corpus.export to <path>."
+    },
+    {
+      name: "rop.corpus.import",
+      summary: "Load a saved corpus (inactive until validated)",
+      what: "Loads a saved corpus from <path>. It stays inactive until rop.corpus.validate succeeds.",
+      how: "Reads the JSON and keeps it aside, because module addresses may have changed since it was saved.",
+      when: "Start of a new session, to skip a long rescan.",
+      args: [{ name: "path", meaning: "JSON file from rop.corpus.export." }],
+      example: 'dx @$osed().rop.corpus.import("C:\\\\notes\\\\rop-corpus.json")',
+      output: "The number of gadgets read and a reminder to validate.",
+      report: "Loaded the saved corpus from <path> with rop.corpus.import."
+    },
+    {
+      name: "rop.corpus.validate",
+      summary: "Check the imported corpus against memory",
+      what: "Checks the imported corpus against the current modules and gadget bytes, then activates it.",
+      how: "Compares each module's name, path, base, size and sampled bytes with the live process. A mismatch, such as an ASLR module that moved after a reboot, blocks activation.",
+      when: "Right after rop.corpus.import.",
+      args: [],
+      example: "dx @$osed().rop.corpus.validate()",
+      output: "Pass or the list of mismatches.",
+      report: "Validated the imported corpus against live memory with rop.corpus.validate."
+    },
+    {
+      name: "rop.corpus.report",
+      summary: "One line per gadget, or a text file",
+      what: "Prints the corpus as one line per gadget, or writes it to <path>.",
+      how: "Formats what the corpus recorded; unknown values show as ?. It scans nothing new.",
+      when: "Reviewing or archiving the gadgets.",
+      args: [{ name: "path", meaning: "Text file; console when left out.", optional: true }],
+      example: "dx @$osed().rop.corpus.report()",
+      output: "Address, instructions and effects per gadget.",
+      report: "Produced a gadget inventory with rop.corpus.report."
+    },
+    // Format strings
+    {
+      name: "fmt.inspect",
+      aliases: ["fmt_inspect"],
+      summary: "Read the format string of a paused printf call",
+      what: "Reads the format-string argument of a paused printf-family call and lists its conversions.",
+      how: "At the breakpoint, reads the format pointer from the stack at the position <family> uses (cdecl, x86), reads the string, and parses each % conversion. It flags %n, which writes memory.",
+      when: "Format-string bug, at a breakpoint on the call that takes your input.",
+      args: [
+        { name: "family", meaning: "printf, fprintf, sprintf or snprintf.", optional: true, default: "printf" },
+        { name: "formatArgOffset", meaning: "Stack offset of the format pointer.", optional: true, kind: "number" },
+        { name: "max", meaning: "Most bytes to read.", optional: true, kind: "number" }
+      ],
+      example: 'dx @$osed().fmt.inspect("printf")',
+      output: "The format string and one row per conversion; %n is flagged.",
+      report: "Inspected the format string passed to <family> with fmt.inspect, which showed user-controlled conversion specifiers."
+    },
+    {
+      name: "fmt.offset",
+      aliases: ["fmt_offset"],
+      summary: "Which %N$ reaches your buffer",
+      what: "Finds which %N$ parameter reaches your buffer and which stack slots hold pointers worth leaking.",
+      how: "Reads <count> stack slots from the first variable argument and looks for <marker>. Slot N holding the marker means %N$ reads your own bytes. Other slots are classified as pointers into modules or the stack.",
+      when: "Format-string bug, after sending a buffer that starts with a marker such as AAAA.",
+      args: [
+        { name: "marker", meaning: "The 4-byte marker.", optional: true, default: "0x41414141", kind: "address" },
+        { name: "count", meaning: "Slots to read.", optional: true, kind: "number" },
+        { name: "firstArg", meaning: "Bytes from ESP to the first variable argument.", optional: true, default: "8", kind: "number" }
+      ],
+      example: "dx @$osed().fmt.offset(0x41414141, 40)",
+      output: "Controlled parameter index gives N. Slots labelled ptr->module or ptr->stack are leak candidates.",
+      report: "Determined with fmt.offset the format parameter index at which the marker <marker> is read back from the stack."
+    },
+    {
+      name: "fmt.build",
+      aliases: ["fmt_build"],
+      summary: "%n write-what-where payload",
+      what: "Builds a format-string payload that writes <value> to <addr>.",
+      how: "Splits the value into chunks of <width>, orders them by size, and computes the padding that each %n needs, counting the bytes of the address block. It warns when an address contains a byte from <badchars>.",
+      when: "Format-string exploitation, after fmt.offset gave the parameter index.",
+      args: [
+        { name: "addr", meaning: "Address to write.", kind: "address" },
+        { name: "value", meaning: "Value to write.", kind: "address" },
+        { name: "argIndex", meaning: "Parameter index from fmt.offset.", kind: "number" },
+        { name: "width", meaning: "Write size.", optional: true, default: "word", values: { byte: "%hhn, one byte per write.", word: "%hn, two bytes per write.", dword: "%n, four bytes at once." } },
+        BADCHARS(),
+        { name: "prefix", meaning: "Bytes before the address block.", optional: true }
+      ],
+      example: "dx @$osed().fmt.build(0x00402118, 0x625011AF, 6)",
+      output: "The chunk table, the address block, the format string, a Python payload and its hex.",
+      report: "Built a format-string write with fmt.build that writes <value> to <addr> through parameter <argIndex>."
+    },
+    // Shellcode
+    {
+      name: "egghunter",
+      summary: "Egghunter stub for a 4-byte tag",
+      what: "Prints a small egghunter: code that searches memory for the tag <egg> written twice and jumps to what follows it.",
+      how: "Assembles a fixed loop for <mode>. The loop walks memory page by page, asks the kernel through a system call (or an SEH handler in seh mode) whether each page is readable so it never crashes, and compares 8 bytes with the tag twice. The syscall number depends on the Windows build in <os>. Every stub byte and the tag are checked against <badchars>.",
+      when: "Shellcode step, when the space you control is too small for the real payload but the payload sits elsewhere in memory.",
+      args: [
+        { name: "egg", meaning: "The 4-character tag.", optional: true, default: "W00T" },
+        { name: "mode", meaning: "How the stub tests a page.", optional: true, default: "ntaccess", values: { ntaccess: "NtAccessCheckAndAuditAlarm system call.", ntdisplay: "NtDisplayString, Windows 7 and older.", seh: "an SEH handler, no system call." } },
+        { name: "wow64", meaning: "true for a 32-bit process on 64-bit Windows 10 or 11.", optional: true, default: "false" },
+        BADCHARS(),
+        { name: "os", meaning: "Windows build that picks the syscall number, such as win10 or 19041.", optional: true, default: "win10 22H2" },
+        { name: "syscall", meaning: "Syscall number to force; wins over os.", optional: true, kind: "address" }
+      ],
+      results: [
+        { name: "size", meaning: "Stub size in bytes.", field: "size", kind: "number" },
+        { name: "syscallUsed", meaning: "System call number in the stub.", field: "syscallUsed", kind: "address" }
+      ],
+      example: 'dx @$osed().egghunter("W00T", "ntaccess", true, "00 0A 0D", "win10")',
+      output: "Tag, mode, size and syscall, then the stub as hex and as Python bytes. A Badchar line names a stub byte that is a bad character.",
+      report: "Generated a <size>-byte <mode> egghunter for the tag <egg> with egghunter (syscall <syscallUsed>, bad characters <badchars>) and placed the tag twice in front of the second-stage payload.",
+      quick: true
+    },
+    {
+      name: "encode",
+      summary: "XOR-encode a payload around bad characters",
+      what: "XOR-encodes <shellcode> so that it contains none of <badchars>, and prints the decoder stub that restores it at run time.",
+      how: "Tries one-byte keys until every encoded byte and the stub avoid the excluded bytes, or uses <key>. XOR with the same key twice gives the original byte back, so the stub decodes in place.",
+      when: "Shellcode step, when the payload still holds a bad character.",
+      args: [
+        { name: "shellcode", meaning: "Payload bytes as hex." },
+        BADCHARS("Bytes the output must avoid.", "00 0A 0D"),
+        { name: "key", meaning: "XOR key to force.", optional: true, kind: "address" }
+      ],
+      results: [{ name: "keyUsed", meaning: "Key picked.", field: "key", kind: "address" }],
+      example: 'dx @$osed().encode("FC E8 82 00 00 00 60", "00 0A 0D")',
+      output: "The key, the decoder stub, the encoded bytes and the combined payload as Python bytes.",
+      report: "Encoded the shellcode with encode using an XOR key that removes <badchars>, with a decoder stub that restores it in memory.",
+      quick: true
+    },
+    {
+      name: "nop",
+      summary: "NOP sled of a given length",
+      what: "Prints a NOP sled of <length> bytes.",
+      how: "Repeats <byte>, 0x90 by default, which the CPU executes as no operation, so landing anywhere in the sled slides into the code after it.",
+      when: "Shellcode step, as padding in front of the payload or to give a decoder room.",
+      args: [
+        { name: "length", meaning: "Number of bytes.", kind: "number" },
+        { name: "byte", meaning: "Byte to repeat.", optional: true, default: "0x90", kind: "address" }
+      ],
+      example: "dx @$osed().nop(16)",
+      output: "The sled as hex and as Python bytes.",
+      report: "Prepended a <length>-byte NOP sled generated with nop in front of the shellcode.",
+      quick: true
+    },
+    {
+      name: "sc.push_string",
+      aliases: ["sc_push_string"],
+      summary: "Null-free pushes that build a string on the stack",
+      what: "Prints x86 instructions that build the string <text> on the stack, ending with a zero byte, without any 00 or bad byte in the code.",
+      how: "Splits the text into 4-byte little-endian pieces and pushes the last piece first, so ESP ends at the first character. A piece with a 00 or bad byte is built in a scratch register with not, neg, xor or add. It reads nothing from the target.",
+      when: "Custom shellcode, for command lines and DLL or API names.",
+      args: [
+        { name: "text", meaning: "The string to build." },
+        BADCHARS("Bytes the code must avoid; 00 is always avoided."),
+        { name: "register", meaning: "Register that receives ESP, the string address, at the end.", optional: true }
+      ],
+      example: 'dx @$osed().sc.push_string("calc.exe")',
+      output: "Each instruction with its bytes and the 4 characters it pushes, then the same lines as a Keystone CODE string.",
+      report: "Generated null-free stack pushes for the string <text> with sc.push_string, avoiding <badchars>.",
+      quick: true
+    },
+    {
+      name: "sc.call_frame",
+      aliases: ["sc_call_frame"],
+      summary: "Pushes and call for one API through the resolver",
+      what: "Prints the pushes and calls for one call of <api> through the sc.template resolver, with the ROR13 hash of its name.",
+      how: "Pushes <args> in reverse order, as stdcall expects, then the ROR13 hash of the export name and the module base, calls the resolver at [ebp-0x04], and calls EAX. It reads nothing from the target.",
+      when: "Custom shellcode, to add one API call to code built on sc.template.",
+      args: [
+        { name: "api", meaning: "Export name, case-sensitive." },
+        { name: "args", meaning: 'Arguments in prototype order; "bad=list" sets bad characters.', optional: true, rest: true }
+      ],
+      results: [{ name: "hash", meaning: "ROR13 hash of the name.", field: "hash" }],
+      example: 'dx @$osed().sc.call_frame("WinExec", "<ptr to cmd>", "1")',
+      output: "One line per instruction with its bytes and a comment naming the argument.",
+      report: "Generated the call frame for <api> with sc.call_frame, which resolves the API by its ROR13 hash <hash> at run time.",
+      quick: true
+    },
+    {
+      name: "sc.template",
+      aliases: ["sc_template"],
+      summary: "build_sc.py for custom position-independent shellcode",
+      what: "Prints a complete build_sc.py that assembles custom shellcode with Keystone and reports every bad byte. The shellcode finds its own APIs, so it works at any address.",
+      how: "The assembly finds kernel32 by walking the PEB loader list (fs:[0x30], Ldr, InInitializationOrderModuleList), resolves each API by walking kernel32's export name table and comparing ROR13 hashes, then runs one call frame per task. The Python part assembles every line, checks each one alone at its final offset, and reports each bad byte with its line.",
+      when: "Shellcode step, when you write the payload yourself instead of using msfvenom.",
+      args: [{ name: "tasks", meaning: "Tasks in the order they run.", optional: true, default: "winexec=calc.exe, exit", rest: true, values: TEMPLATE_TASKS }],
+      example: 'dx @$osed().sc.template("show=0", "winexec=cmd.exe /c whoami > C:\\\\out.txt", "terminate", "bad=00 0A 0D 20")',
+      output: "The script. Save it from the #!/usr/bin/env python3 line down as build_sc.py and run it: it prints the size, each bad byte with its line, writes shellcode.bin and prints a Python literal.",
+      report: "Generated custom position-independent shellcode with sc.template for the tasks <tasks>; it locates kernel32 through the PEB and resolves APIs by ROR13 hash, and the generated Keystone script assembled it and reported any bad characters."
+    },
+    {
+      name: "sc.builder",
+      aliases: ["sc_builder"],
+      summary: "sc_builder.py: list API calls, get checked shellcode",
+      what: "Prints sc_builder.py, a Python builder where you list API calls in its CONFIG block and get shellcode checked for bad bytes, size and forward calls.",
+      how: "Fills CONFIG from <tasks> (the same tasks as sc.template, plus xor and max=). The script resolves each API once through the PEB walk and a ROR13 export lookup, builds each argument with the shortest clean instruction form, and assembles and checks the result with Keystone.",
+      when: "Shellcode step, for any API sequence beyond the sc.template tasks.",
+      args: [{ name: "tasks", meaning: "Tasks and options that fill CONFIG.", optional: true, rest: true, values: TEMPLATE_TASKS }],
+      example: 'dx @$osed().sc.builder("winexec=calc.exe", "exit", "bad=00 0A 0D", "xor", "max=400")',
+      output: "The script. Save it as sc_builder.py and run it: it prints the ROR13 table, the code, each bad byte or forward call, the size, and writes shellcode.bin. Exit code 1 means a check failed.",
+      report: "Built the shellcode with sc.builder for the tasks <tasks>; the generated sc_builder.py assembled it and checked it for bad characters, size and call encodings."
+    },
+    // Strings
+    {
+      name: "str.find",
+      aliases: ["str_find"],
+      summary: "Find a string in the loaded modules",
+      what: "Finds <text> in the sections of the loaded modules, as ASCII, UTF-16LE or both.",
+      how: "Encodes the text the way <encoding> says and scans each section of each module, or only <module>. A hit is an exact byte match in the live process.",
+      when: "Reverse engineering the target, like the Strings window of a disassembler, for example to find a command keyword.",
+      args: [
+        { name: "text", meaning: "String to find." },
+        { name: "module", meaning: "Limit the search to one module.", optional: true },
+        { name: "encoding", meaning: "Encoding.", optional: true, default: "both", values: { ascii: "one byte per character.", utf16le: "two bytes per character.", both: "both forms." } },
+        MAX_RESULTS
+      ],
+      results: [{ name: "count", meaning: "Number of hits.", field: "#count", kind: "number" }],
+      example: 'dx @$osed().str.find("cmd.exe", "target", "ascii", 25)',
+      output: "One row per hit with the address and the module section.",
+      report: "Located the string <text> in memory with str.find; number of hits: <count>."
+    },
+    {
+      name: "str.refs",
+      aliases: ["str_refs"],
+      summary: "Code that references a string's address",
+      what: "Finds code that holds the absolute address of a string, like a cross reference in a disassembler.",
+      how: "Takes <target> as an address, or finds the string first, then scans executable sections for the 4-byte address in little-endian order. It does not disassemble.",
+      when: "Reverse engineering, to go from a string to the code that uses it.",
+      args: [
+        { name: "target", meaning: "A string or its address." },
+        { name: "module", meaning: "Module to search.", optional: true },
+        { name: "encoding", meaning: "Encoding when target is text.", optional: true },
+        MAX_RESULTS
+      ],
+      example: 'dx @$osed().str.refs(0x00403080, "target", "ascii", 25)',
+      output: "One row per reference with its address and the bytes around it.",
+      report: "Found the code that references <target> with str.refs, which led to the function that handles it."
+    },
+    {
+      name: "str.read",
+      aliases: ["str_read"],
+      summary: "Read a string at an address",
+      what: "Reads a zero-terminated ASCII or UTF-16LE string at <address>.",
+      how: "Reads up to <max> bytes and stops at the terminator. It warns when no terminator was found.",
+      when: "Any time you need the text behind a pointer, such as an argument at a breakpoint.",
+      args: [
+        { name: "address", meaning: "Address of the string.", kind: "address" },
+        { name: "max", meaning: "Most bytes to read.", optional: true, kind: "number" },
+        { name: "encoding", meaning: "ascii or utf16le.", optional: true }
+      ],
+      results: [{ name: "string", meaning: "The text read.", field: "text" }],
+      example: "dx @$osed().str.read(0x0019F920)",
+      output: "The text, its length and whether a terminator was found.",
+      report: "Read the string at <address> with str.read.",
+      quick: true
+    },
+    {
+      name: "str.bytes",
+      aliases: ["str_bytes"],
+      summary: "Text as payload bytes, with bad-byte check",
+      what: "Turns <text> into payload bytes and reports any bad characters in it.",
+      how: "Encodes the text, adds the zero terminator when <terminator> is true, and checks each byte against <badchars>.",
+      when: "Building payload strings, such as the egghunter tag or a command line.",
+      args: [
+        { name: "text", meaning: "Text to encode." },
+        { name: "encoding", meaning: "ascii or utf16le.", optional: true, default: "ascii" },
+        { name: "terminator", meaning: "true adds the zero byte.", optional: true, default: "false" },
+        BADCHARS()
+      ],
+      results: [{ name: "hex", meaning: "The bytes.", field: "bytes" }],
+      example: 'dx @$osed().str.bytes("W00T", "ascii", true, "00 0A 0D")',
+      output: "Hex, Python bytes, and each bad byte with its position, such as 0x00@4.",
+      report: "Encoded <text> as payload bytes with str.bytes and checked them against <badchars>.",
+      quick: true
+    },
+    // PE and API
+    {
+      name: "sc.iat_find",
+      summary: "Which modules import an API",
+      what: "Searches the import tables of every loaded module for <symbol>.",
+      how: "Parses each module's import directory in memory and lists each IAT slot that holds that API. A slot in a module without ASLR has a fixed address.",
+      when: "DEP bypass, to find a module without ASLR that imports VirtualProtect, VirtualAlloc or WriteProcessMemory.",
+      args: [{ name: "symbol", meaning: "API name." }],
+      example: 'dx @$osed().sc.iat_find("VirtualAlloc")',
+      output: "One row per importing module with the slot address and the API address in it.",
+      report: "Searched the import tables of all loaded modules for <symbol> with sc.iat_find to find a stable IAT entry.",
+      quick: true
+    },
+    {
+      name: "sc.iat_ptr",
+      summary: "IAT slot of one import and its live value",
+      what: "Gives the IAT slot address of <symbol> in <module> and the API address stored in it.",
+      how: "Walks the module's import directory to the slot. The loader writes the real API address into that slot at startup, so reading it gives the address the program itself calls.",
+      when: "DEP bypass: the slot address is what a ROP chain dereferences.",
+      args: [MODULE("Importing module."), { name: "symbol", meaning: "API name." }],
+      results: [
+        { name: "slot", meaning: "IAT slot address.", field: "slot" },
+        { name: "address", meaning: "API address stored in the slot.", field: "target" }
+      ],
+      example: 'dx @$osed().sc.iat_ptr("app.exe", "VirtualProtect")',
+      output: "The slot address and the API address it holds.",
+      report: "Resolved the IAT slot of <symbol> in <module> at <slot> with sc.iat_ptr; at run time it held <address>.",
+      quick: true
+    },
+    {
+      name: "sc.iat",
+      summary: "Imports of a module",
+      what: "Lists the imports of <module>, optionally filtered by DLL or API name.",
+      how: "Parses the import directory of the PE image in memory: each imported DLL, each API, and the slot the loader filled.",
+      when: "Exploring what a module calls, for example to find a useful API for the chain.",
+      args: [{ name: "module", meaning: "Module; the main image when left out.", optional: true }, { name: "filter", meaning: "Text that the DLL or API name must contain.", optional: true }],
+      example: 'dx @$osed().sc.iat("app.exe", "Virtual")',
+      output: "One row per import with DLL, API, slot and value.",
+      report: "Reviewed the imports of <module> with sc.iat.",
+      quick: true
+    },
+    {
+      name: "sc.resolve",
+      summary: "Address of one exported function",
+      what: "Finds the address of the exported function <api> in the loaded module <module>.",
+      how: "Reads the module's PE header in memory, follows the export directory, searches the export name table for <api>, maps the name to its ordinal and the ordinal to the function RVA, and adds the module base. It is the same walk GetProcAddress does, done on live memory, so the address is the one the process would use.",
+      when: "Shellcode and ROP steps, whenever you need the current address of an API, for example WinExec or VirtualProtect.",
+      args: [MODULE("Module that exports the API, such as kernel32."), { name: "api", meaning: "Exported name, case-sensitive." }],
+      results: [{ name: "address", meaning: "Address of the function.", field: "Address" }],
+      example: 'dx @$osed().sc.resolve("kernel32", "WinExec")',
+      output: "Module, Symbol and Address. Address is the function's address in this process.",
+      report: "Resolved <api> in <module> to <address> with sc.resolve by walking the module's export table in memory.",
+      quick: true
+    },
+    {
+      name: "sc.export",
+      summary: "Ordinal, RVA and address of one export",
+      what: "Gives the ordinal, RVA, address and forwarder of the export <symbol> in <module>.",
+      how: "Walks the export directory like sc.resolve and also reports the RVA, the distance from the module base, which stays the same when ASLR moves the module.",
+      when: "ASLR bypass: the RVA turns a leaked pointer into a module base with leak.base.",
+      args: [MODULE(), { name: "symbol", meaning: "Exported name." }],
+      results: [
+        { name: "rva", meaning: "Offset of the function from the module base.", field: "Function RVA@Property" },
+        { name: "address", meaning: "Function address.", field: "Function VA@Property" }
+      ],
+      example: 'dx @$osed().sc.export("kernel32", "GetProcAddress")',
+      output: "Property and value rows: name, ordinal, function RVA, function VA, and the forwarder if any.",
+      report: "Looked up the export <symbol> of <module> with sc.export: RVA <rva>, address <address>.",
+      quick: true
+    },
+    {
+      name: "sc.exports",
+      summary: "List the exports of a module",
+      what: "Lists the exports of <module>, optionally only those whose name contains <filter>.",
+      how: "Reads the export directory and the name, ordinal and address tables in memory.",
+      when: "Exploring the API surface of a DLL.",
+      args: [MODULE(), { name: "filter", meaning: "Text the name must contain.", optional: true }],
+      example: 'dx @$osed().sc.exports("kernel32", "Virtual")',
+      output: "One row per export with name, ordinal, RVA and address.",
+      report: "Enumerated the exports of <module> with sc.exports.",
+      quick: true
+    },
+    {
+      name: "sc.exportat",
+      summary: "Resolve an export by ordinal index",
+      what: "Resolves the export at position <ordinalIndex> of <module>'s address table.",
+      how: "Indexes the export address table directly, without the name table.",
+      when: "When an API is exported by ordinal only.",
+      args: [MODULE(), { name: "ordinalIndex", meaning: "Index into the address table.", kind: "number" }],
+      results: [{ name: "address", meaning: "Function address.", field: "VA" }],
+      example: 'dx @$osed().sc.exportat("kernel32", 842)',
+      output: "Ordinal, name, RVA, VA and the forwarder if any.",
+      report: "Resolved ordinal index <ordinalIndex> of <module> to <address> with sc.exportat.",
+      quick: true
+    },
+    {
+      name: "sc.exportdir",
+      summary: "Export directory tables of a module",
+      what: "Shows the addresses and sizes of the export directory tables of <module>.",
+      how: "Reads the IMAGE_EXPORT_DIRECTORY: the counts and the RVAs of the address, name and ordinal tables.",
+      when: "Writing or debugging hand-made shellcode that walks these tables.",
+      args: [MODULE()],
+      example: 'dx @$osed().sc.exportdir("kernel32")',
+      output: "Number of functions and names, and the address of each table.",
+      report: "Inspected the export directory of <module> with sc.exportdir to confirm the table addresses used by the shellcode.",
+      quick: true
+    },
+    {
+      name: "sc.exportwalk",
+      summary: "Export lookup step by step",
+      what: "Walks the export tables of <module> step by step for <symbol>, showing every intermediate address.",
+      how: "Follows the same path as shellcode: PE header, export directory, name table, ordinal table, address table, printing each pointer it reads.",
+      when: "Debugging a hand-written export resolver: compare its registers with these steps.",
+      args: [MODULE(), { name: "symbol", meaning: "Exported name.", optional: true }, { name: "verbose", meaning: "true shows every step.", optional: true }],
+      example: 'dx @$osed().sc.exportwalk("kernel32", "GetProcAddress", true)',
+      output: "One row per checkpoint with the address read and its value.",
+      report: "Traced the export resolution of <symbol> in <module> with sc.exportwalk to validate the shellcode's resolver.",
+      quick: true
+    },
+    {
+      name: "sc.hash",
+      summary: "Hash one API name",
+      what: "Computes the hash of the API name <name> with <algorithm>, the value shellcode compares while it searches the export table.",
+      how: "Runs the algorithm over the name's bytes in the script; ROR13 rotates the running value right by 13 bits and adds each character. Shellcode carries this 4-byte hash instead of the full name, which keeps it small and free of the name's bytes.",
+      when: "Writing custom shellcode, to get the constant that the resolver loop must match.",
+      args: [{ name: "name", meaning: "API name, case-sensitive." }, { name: "algorithm", meaning: "Hash algorithm.", optional: true, default: "ROR13", values: { ror13: "rotate right 13 and add.", crc32: "CRC32.", rol7_add: "rotate left 7 and add." } }],
+      results: [{ name: "hash", meaning: "The hash.", field: "Hash" }],
+      example: 'dx @$osed().sc.hash("WinExec", "ROR13")',
+      output: "Input, Algorithm and Hash.",
+      report: "Computed the <algorithm> hash of <name> as <hash> with sc.hash, the value the shellcode's resolver compares.",
+      quick: true
+    },
+    {
+      name: "sc.hashresolve",
+      summary: "Which export matches a hash",
+      what: "Finds the export of <module> whose name hashes to <hashValue>.",
+      how: "Hashes every export name with <algorithm> and keeps the match, the reverse of sc.hash.",
+      when: "Reading someone else's shellcode: turn a constant back into an API name.",
+      args: [MODULE(), { name: "hashValue", meaning: "Hash to look up.", kind: "address" }, { name: "algorithm", meaning: "Hash algorithm.", optional: true, default: "ROR13" }],
+      results: [
+        { name: "symbol", meaning: "Matching export.", field: "Symbol" },
+        { name: "address", meaning: "Its address.", field: "Address" }
+      ],
+      example: 'dx @$osed().sc.hashresolve("kernel32", 0x7c0dfcaa, "ROR13")',
+      output: "Module, Algorithm, Hash, Symbol and Address of the match.",
+      report: "Resolved the <algorithm> hash <hashValue> to <symbol> in <module> with sc.hashresolve.",
+      quick: true
+    },
+    {
+      name: "sc.hashes",
+      summary: "Hash every export of a module",
+      what: "Hashes every export name of <module> with <algorithm>.",
+      how: "Reads the export name table and runs the algorithm on each name.",
+      when: "Building a lookup table for shellcode, or checking for hash collisions.",
+      args: [MODULE(), { name: "algorithm", meaning: "Hash algorithm.", optional: true, default: "ROR13" }],
+      example: 'dx @$osed().sc.hashes("kernel32", "crc32")',
+      output: "One row per export with its hash.",
+      report: "Generated the <algorithm> hashes of the exports of <module> with sc.hashes.",
+      quick: true
+    },
+    {
+      name: "sc.algorithms",
+      summary: "List the hash algorithms",
+      what: "Lists the supported API hash algorithms.",
+      how: "Prints the algorithms built into the script: crc32, metasploit_ror13 (alias ror13) and rol7_add.",
+      when: "Before sc.hash or sc.hashes, to pick the algorithm your shellcode uses.",
+      args: [],
+      example: "dx @$osed().sc.algorithms()",
+      output: "One row per algorithm with its name and aliases.",
+      report: "Listed the supported API hash algorithms with sc.algorithms.",
+      quick: true
+    },
+    {
+      name: "sc.modules",
+      summary: "List loaded modules with base and end",
+      what: "Lists the loaded modules with their base, end and size.",
+      how: "Reads the debugger's module list, which mirrors the PEB loader list of the process.",
+      when: "Quick view of module ranges; use modules() for the protections.",
+      args: [],
+      example: "dx @$osed().sc.modules()",
+      output: "Base, End, Size and Name per module.",
+      report: "Listed the loaded modules and their address ranges with sc.modules.",
+      quick: true
+    },
+    {
+      name: "sc.base",
+      summary: "Base address of a module",
+      what: "Gives the base address of <module>.",
+      how: "Matches the name in the loaded module list and returns where the loader mapped it.",
+      when: "Computing an RVA, or checking where an ASLR module sits this run.",
+      args: [MODULE()],
+      results: [{ name: "base", meaning: "Module base.", field: "Base" }],
+      example: 'dx @$osed().sc.base("kernel32")',
+      output: "Module and Base.",
+      report: "Determined the base address of <module> as <base> with sc.base.",
+      quick: true
+    },
+    {
+      name: "sc.pe",
+      summary: "PE header fields of a module",
+      what: "Prints the PE header fields of <module>.",
+      how: "Parses the DOS header, the NT headers and the optional header in memory: entry point, image size, DllCharacteristics and the data directories.",
+      when: "Checking a module's layout or mitigation flags in detail.",
+      args: [MODULE()],
+      example: 'dx @$osed().sc.pe("kernel32")',
+      output: "Property and value rows for each header field.",
+      report: "Examined the PE headers of <module> with sc.pe.",
+      quick: true
+    },
+    {
+      name: "sc.peb",
+      summary: "PEB address and loader data",
+      what: "Shows the Process Environment Block: its address, Ldr, ProcessParameters, BeingDebugged and ImageBase.",
+      how: "Reads the PEB of the current process. Ldr is the loader data whose module lists position-independent shellcode walks to find kernel32.",
+      when: "Writing or debugging the PEB walk of custom shellcode.",
+      args: [],
+      example: "dx @$osed().sc.peb()",
+      output: "One row per field with its address or value.",
+      report: "Inspected the PEB and its loader data with sc.peb to verify the module list walked by the shellcode.",
+      quick: true
+    },
+    {
+      name: "sc.module_pages",
+      summary: "Module size and number of pages",
+      what: "Gives the size of <module> and how many 4 KiB pages it spans.",
+      how: "Takes the module range from the loaded module list and divides by the page size.",
+      when: "Sizing a scan or a protection change over a module.",
+      args: [MODULE()],
+      results: [{ name: "pages", meaning: "Number of pages.", field: "Pages", kind: "number" }],
+      example: 'dx @$osed().sc.module_pages("kernel32")',
+      output: "Base, End, Size, PageSize and Pages.",
+      report: "Measured <module> as <pages> pages with sc.module_pages.",
+      quick: true
+    },
+    {
+      name: "sc.page_summary",
+      summary: "Pages of a module by protection",
+      what: "Counts the pages of <module> by protection value.",
+      how: "Queries the protection of each page in the module range, as !address does, and groups equal values.",
+      when: "Seeing which parts of a module are executable or writable.",
+      args: [MODULE()],
+      example: 'dx @$osed().sc.page_summary("kernel32")',
+      output: "One row per protection with its page count.",
+      report: "Summarised the page protections of <module> with sc.page_summary."
+    },
+    {
+      name: "sc.api_plan",
+      summary: "Internal snapshot used by rop.api_plan",
+      what: "Returns the raw data that rop.api_plan reads. It is internal and prints nothing.",
+      how: "Collects the IAT and export candidates for <target>. Use rop.api_plan for the readable form.",
+      when: "Only when scripting on top of rop.api_plan.",
+      args: [{ name: "target", meaning: "API as MODULE!Symbol." }, BADCHARS()],
+      example: 'dx @$osed().sc.api_plan("KERNEL32!VirtualProtect")',
+      output: "A structured object; expand it in dx.",
+      report: "Collected the API resolution candidates for <target> with sc.api_plan."
+    },
+    // Leaks
+    {
+      name: "leak.analyze",
+      aliases: ["leak_analyze"],
+      summary: "Classify pointers in text the app printed",
+      what: "Pulls hex pointer values out of text that the application printed and says which module or region each one falls in.",
+      how: "Extracts hex numbers from <text> and compares each with the loaded module ranges and memory regions. It shows where a value points, not that the application leaks it on purpose.",
+      when: "ASLR bypass, after the application printed an address in an error or a response.",
+      args: [{ name: "text", meaning: "Output text from the application." }],
+      example: 'dx @$osed().leak.analyze("Error processing request at 76A31240")',
+      output: "One row per candidate with its module or region.",
+      report: "Analysed the application output with leak.analyze, which identified a disclosed pointer inside a loaded module."
+    },
+    {
+      name: "leak.classify",
+      aliases: ["leak_classify"],
+      summary: "Which module or region a value falls in",
+      what: "Says which module or memory region the value <value> falls in, without reading memory at it.",
+      how: "Compares the number with the loaded module ranges and the memory map.",
+      when: "ASLR bypass, to check a leaked value.",
+      args: [{ name: "value", meaning: "Pointer value.", kind: "address" }],
+      example: "dx @$osed().leak.classify(0x76A31240)",
+      output: "The module or region and the offset inside it.",
+      report: "Classified the value <value> with leak.classify as a pointer into a loaded module.",
+      quick: true
+    },
+    {
+      name: "leak.base",
+      aliases: ["leak_base"],
+      summary: "Module base from a leaked pointer and RVA",
+      what: "Computes a module base from the leaked pointer <pointer> and its RVA <rva>, then checks it against the loaded modules.",
+      how: "Subtracts the RVA from the pointer. The RVA stays fixed when ASLR moves the module, so the result is the base for this run; it is validated only when a loaded module starts there.",
+      when: "ASLR bypass, after a leak, to rebase gadget addresses.",
+      args: [{ name: "pointer", meaning: "The leaked pointer.", kind: "address" }, { name: "rva", meaning: "Its RVA, from sc.export or a test run.", kind: "address" }],
+      results: [{ name: "base", meaning: "Computed base.", field: "base", kind: "address" }],
+      example: "dx @$osed().leak.base(0x76A31240, 0x1240)",
+      output: "The computed base and whether it matches a loaded module.",
+      report: "Calculated the module base <base> from the leaked pointer <pointer> minus the RVA <rva> with leak.base and validated it against the loaded modules.",
+      quick: true
+    },
+    {
+      name: "leak.scan",
+      aliases: ["leak_scan"],
+      summary: "Find pointers in an address range",
+      what: "Scans <length> bytes from <address> for pointer-sized values and classifies each one.",
+      how: "Reads the range (at most 0x10000 bytes) in 4-byte steps and compares each value with the module ranges and the memory map.",
+      when: "Looking for a pointer that a later read primitive could leak.",
+      args: [{ name: "address", meaning: "Start of the range.", kind: "address" }, { name: "length", meaning: "Bytes to scan.", optional: true, kind: "address" }],
+      example: "dx @$osed().leak.scan(0x0014DD28, 0x400)",
+      output: "One row per pointer candidate with its location and target.",
+      report: "Scanned <length> bytes from <address> with leak.scan for pointers into loaded modules."
+    },
+    // Numbers and session
+    {
+      name: "math",
+      summary: "Number as hex, signed, unsigned, bytes",
+      what: "Prints <value> as hex, unsigned, signed, little-endian bytes and two's complement, in <bits> bits.",
+      how: "Computes each form in the script. Two's complement is how the CPU stores negative numbers, which is why -0x201 becomes 0xFFFFFDFF.",
+      when: "ROP chains, for negated values that pass a neg gadget, and any time you write a number into the payload.",
+      args: [{ name: "value", meaning: "The number.", kind: "address" }, { name: "bits", meaning: "Width.", optional: true, default: "32", kind: "number" }],
+      results: [{ name: "hex", meaning: "Hex form.", field: "hex" }],
+      example: "dx @$osed().math(-0x201, 32)",
+      output: "Input, Bits, Hex, Unsigned, Signed, the little-endian bytes and the two's complement.",
+      report: "Converted <value> with math to the <bits>-bit value <hex> used in the payload.",
+      quick: true
+    },
+    {
+      name: "help",
+      summary: "List commands or show one command's help",
+      what: "Lists the commands, or prints the help for <command>.",
+      how: "Reads the built-in help catalog; it does not touch the target.",
+      when: "Any time you forget a command's arguments.",
+      args: [{ name: "command", meaning: "Command, category, all, or ?text to search.", optional: true }, { name: "mode", meaning: "full adds notes and limits.", optional: true }],
+      example: 'dx @$osed().help("sc.iat", "full")',
+      output: "The usage line, examples and notes.",
+      report: "Consulted the built-in help for <command>."
+    },
+    {
+      name: "version",
+      summary: "Version and build of the loaded script",
+      what: "Prints the version, build time and git commit of the loaded bundle.",
+      how: "Reads values written into the file at build time.",
+      when: "Confirming which build is loaded, for example after copying a new one.",
+      args: [],
+      example: "dx @$osed().version()",
+      output: "Version, commit, clean or dirty, and the build time.",
+      report: "Recorded the osed-windbg build in use with version."
+    },
+    {
+      name: "reload",
+      summary: "Re-register every command",
+      what: "Clears the command registry and registers every command again, without reloading the file.",
+      how: "Rebuilds the in-memory command table and the cached state.",
+      when: "After an internal error left the session in a bad state.",
+      args: [],
+      example: "dx @$osed().reload()",
+      output: "A confirmation line.",
+      report: "Reset the osed-windbg session state with reload."
+    },
+    {
+      name: "last_result",
+      summary: "Full structured result of the last command",
+      what: "Returns the full structured result of the last command: its findings, warnings and errors.",
+      how: "Each command stores its result object; this returns it for dx to expand.",
+      when: "When the printed text is not enough and you want the raw fields.",
+      args: [],
+      example: "dx @$osed().last_result()",
+      output: "An object with command, success, findings, warnings and errors.",
+      report: "Reviewed the structured result of the previous command with last_result."
+    },
+    {
+      name: "last_summary",
+      summary: "Counts from the last command",
+      what: "Returns the last command's name and its numbers of findings, warnings and errors.",
+      how: "Counts the fields of the stored result.",
+      when: "Quick check that the last command found something.",
+      args: [],
+      example: "dx @$osed().last_summary()",
+      output: "success, command, findings, warnings and errors.",
+      report: "Checked the outcome of the previous command with last_summary."
+    },
+    {
+      name: "clear_last_result",
+      summary: "Clear the stored last result",
+      what: "Clears the stored last result.",
+      how: "Drops the stored result object.",
+      when: "Before a run whose result you want to read alone.",
+      args: [],
+      example: "dx @$osed().clear_last_result()",
+      output: "true.",
+      report: "Cleared the stored result with clear_last_result."
+    },
+    {
+      name: "exploit.state",
+      summary: "Exploit state that triage cached",
+      what: "Shows the exploit state that triage() cached: the control mechanism, the stack pointer and the bad characters, which rop.synthesize reads.",
+      how: "Returns the cached object, applying <overrides> when given.",
+      when: "Before rop.synthesize, to check or correct the cached state.",
+      args: [{ name: "overrides", meaning: "Fields to change.", optional: true }],
+      example: "dx @$osed().exploit.state()",
+      output: "The cached fields.",
+      report: "Reviewed the cached exploit state with exploit.state."
+    },
+    {
+      name: "exploit.clear",
+      summary: "Clear the cached exploit state",
+      what: "Clears the exploit state that triage() cached.",
+      how: "Drops the cached object.",
+      when: "Starting over with a new crash.",
+      args: [],
+      example: "dx @$osed().exploit.clear()",
+      output: "A confirmation line.",
+      report: "Cleared the cached exploit state with exploit.clear."
+    },
+    {
+      name: "exploit.workflow",
+      summary: "The dx commands for one workflow",
+      what: "Prints a fixed list of dx commands for the workflow <workflow>.",
+      how: "Fills a fixed command list with <tag> and <address>. It reads nothing from the target.",
+      when: "Reminder of the order of commands for a standard step.",
+      args: [
+        { name: "workflow", meaning: "Workflow.", values: { offset: "find the offset.", badchars: "find the bad characters.", egghunter: "build an egghunter." } },
+        { name: "tag", meaning: "Egg tag for the egghunter workflow.", optional: true },
+        { name: "offset", meaning: "Offset, reserved.", optional: true, kind: "number" },
+        { name: "address", meaning: "Start of the test array, for badchars.", optional: true, kind: "address" }
+      ],
+      example: 'dx @$osed().exploit.workflow("egghunter", "W00T")',
+      output: "One dx command per line in order.",
+      report: "Followed the <workflow> workflow listed by exploit.workflow."
+    },
+    {
+      name: "explain",
+      summary: "Explain any command, or list them all",
+      what: "Explains <command> in plain words: what it does, how it works, when to use it, its arguments, how to read its output, and a sentence for a report. With no argument it lists every command.",
+      how: "Reads the explanation catalog built into the script. Extra arguments fill the placeholders; read-only commands are also run silently so their results fill in too.",
+      when: "Any time, and when writing the report.",
+      args: [{ name: "command", meaning: "Command name, such as sc.resolve; all commands when left out.", optional: true }, { name: "args", meaning: "Arguments to fill into the placeholders.", optional: true, rest: true }],
+      example: 'dx @$osed().explain("sc.resolve", "kernel32", "WinExec")',
+      output: "One section per heading. Report is a sentence to paste into the report.",
+      report: "Used explain to document <command>."
+    }
+  ];
+
+  // src/explain/explain.ts
+  var VALUE_COLUMN = 23;
+  var WRAP_WIDTH = 78;
+  var INDENT = " ".repeat(VALUE_COLUMN);
+  var entriesByPath = /* @__PURE__ */ new Map();
+  var _a;
+  for (const entry of EXPLANATIONS) {
+    for (const path of [entry.name, ...(_a = entry.aliases) != null ? _a : []]) entriesByPath.set(path, entry);
+  }
+  function findExplanation(path) {
+    var _a2;
+    return (_a2 = entriesByPath.get(path)) != null ? _a2 : entriesByPath.get(path.toLowerCase());
+  }
+  var Explanation = class {
+    constructor(title, sections) {
+      Object.defineProperty(this, "__title", { value: title, enumerable: false });
+      for (const [label, text] of sections) this[label] = text;
+    }
+    toString() {
+      return `=== explain: ${this.__title} ===`;
+    }
+  };
+  var CommandOutcome = class {
+    constructor(value, success2, explain, field = "success") {
+      const self2 = this;
+      if (typeof value === "boolean" && field === "success") self2.success = value;
+      else {
+        if (success2 !== void 0) self2.success = success2;
+        if (value !== void 0) self2.value = value;
+      }
+      Object.defineProperty(this, "explain", { get: explain, enumerable: false, configurable: true });
+    }
+    toString() {
+      const self2 = this;
+      return "value" in self2 ? String(self2.value) : String(self2.success);
+    }
+  };
+  function hex5(value) {
+    return value < 0 ? `-0x${(-value).toString(16).toUpperCase()}` : `0x${value.toString(16).toUpperCase()}`;
+  }
+  function toPlainNumber(value) {
+    const int64 = value;
+    return typeof value === "object" && value !== null && typeof (int64 == null ? void 0 : int64.asNumber) === "function" ? int64.asNumber() : value;
+  }
+  function formatValue(raw, kind) {
+    const value = toPlainNumber(raw);
+    if (value === void 0 || value === null) return void 0;
+    if (typeof value === "number") {
+      if (kind === "number") return String(value);
+      return kind === "address" || Math.abs(value) > 65535 ? hex5(value) : String(value);
+    }
+    if (typeof value === "bigint") return hex5(Number(value));
+    if (typeof value === "string") return value === "" ? "none" : stripDml(value);
+    if (Array.isArray(value)) {
+      const bytes = value.every((item) => typeof item === "number" && item >= 0 && item <= 255);
+      if (bytes) return value.length === 0 ? "none" : value.map((item) => item.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+      return value.map((item) => {
+        var _a2;
+        return (_a2 = formatValue(item, kind)) != null ? _a2 : "";
+      }).join(", ");
+    }
+    return String(value);
+  }
+  function formatCallArg(raw) {
+    const value = toPlainNumber(raw);
+    if (typeof value === "string") return JSON.stringify(value);
+    if (typeof value === "number") return Math.abs(value) > 65535 ? hex5(value) : String(value);
+    return String(value);
+  }
+  function readPath(source, path) {
+    let current = source;
+    for (const key2 of path.split(".")) {
+      if (current === null || typeof current !== "object") return void 0;
+      current = current[key2];
+    }
+    return current;
+  }
+  function firstRows(value) {
+    if (!(value instanceof DxResult)) return [];
+    const rows = [];
+    for (let index = 0; index < value.length; index += 1) rows.push(value.rows[index]);
+    return rows.filter((row) => !("Error" in row));
+  }
+  function resultValue(result3, call) {
+    var _a2, _b, _c;
+    const rows = firstRows(call.value);
+    const findings = (_b = (_a2 = call.last) == null ? void 0 : _a2.findings) != null ? _b : Array.isArray(call.value) ? call.value : [];
+    if (result3.field === "#count") {
+      if (rows.length > 0) return String(rows.length);
+      return call.last || Array.isArray(call.value) ? String(findings.length) : void 0;
+    }
+    const property = /^(.+)@Property$/.exec(result3.field);
+    if (property) {
+      const row = rows.find((candidate) => candidate.Property === property[1]);
+      return row ? formatValue(row.Value, result3.kind) : void 0;
+    }
+    if (rows.length > 0 && result3.field in rows[0]) return formatValue(rows[0][result3.field], result3.kind);
+    const source = (_c = findings[0]) != null ? _c : call.value instanceof DxResult ? void 0 : call.value;
+    return formatValue(readPath(source, result3.field), result3.kind);
+  }
+  function meaningOf(arg, token) {
+    if (!arg.values) return void 0;
+    const lower = token.toLowerCase();
+    for (const [key2, meaning] of Object.entries(arg.values)) {
+      const prefix = key2.endsWith("=") || key2.endsWith(" ");
+      if (prefix ? lower.startsWith(key2.toLowerCase()) : lower === key2.toLowerCase()) return meaning;
+    }
+    return void 0;
+  }
+  function argumentFills(entry, args, ran) {
+    const fills = /* @__PURE__ */ new Map();
+    const lines = [];
+    entry.args.forEach((arg, index) => {
+      const given = arg.rest ? args.slice(index) : args[index] === void 0 ? [] : [args[index]];
+      const shown = given.map((value) => formatValue(value, arg.kind)).filter((value) => value !== void 0);
+      const optional = arg.optional ? `optional${arg.default ? `, default ${arg.default}` : ""}` : "required";
+      if (shown.length === 0) {
+        if (arg.default && ran) fills.set(arg.name, arg.default);
+        lines.push(`<${arg.name}> (${optional}): ${arg.meaning}`);
+        return;
+      }
+      fills.set(arg.name, shown.join(", "));
+      if (arg.rest) {
+        lines.push(`<${arg.name}>: ${arg.meaning}`);
+        for (const token of shown) {
+          const meaning2 = meaningOf(arg, token);
+          lines.push(`  ${token}${meaning2 ? `: ${meaning2}` : ""}`);
+        }
+        return;
+      }
+      const meaning = meaningOf(arg, shown[0]);
+      lines.push(`<${arg.name}> = ${shown[0]}: ${arg.meaning}${meaning ? ` Here: ${meaning}` : ""}`);
+    });
+    if (lines.length === 0) lines.push("None.");
+    return { fills, lines };
+  }
+  function fill(text, fills) {
+    return text.replace(/<([a-zA-Z][\w-]*)>/g, (match, name) => {
+      var _a2;
+      return (_a2 = fills.get(name)) != null ? _a2 : match;
+    });
+  }
+  function wrap(text) {
+    var _a2, _b;
+    const lines = [];
+    for (const paragraph of text.split("\n")) {
+      const lead = (_b = (_a2 = /^\s*/.exec(paragraph)) == null ? void 0 : _a2[0]) != null ? _b : "";
+      let line = "";
+      for (const word of paragraph.trim().split(/\s+/)) {
+        if (line && line.length + 1 + word.length > WRAP_WIDTH) {
+          lines.push(line);
+          line = `${lead}  ${word}`;
+        } else {
+          line = line ? `${line} ${word}` : `${lead}${word}`;
+        }
+      }
+      lines.push(line);
+    }
+    return lines.join(`
+${INDENT}`);
+  }
+  function buildExplanation(path, entry, call) {
+    var _a2, _b;
+    const { fills, lines } = argumentFills(entry, call.args, call.ran || call.args.length > 0);
+    for (const result3 of (_a2 = entry.results) != null ? _a2 : []) {
+      const value = resultValue(result3, call);
+      if (value !== void 0) fills.set(result3.name, value);
+    }
+    const results = ((_b = entry.results) != null ? _b : []).map((result3) => `<${result3.name}>${fills.has(result3.name) ? ` = ${fills.get(result3.name)}` : ""}: ${result3.meaning}`);
+    const title = call.args.length > 0 ? `${path}(${call.args.map(formatCallArg).join(", ")})` : path;
+    const sections = [
+      ["What it does", wrap(fill(entry.what, fills))],
+      ["How it works", wrap(fill(entry.how, fills))],
+      ["When to use", wrap(fill(entry.when, fills))],
+      ["Arguments", lines.map(wrap).join(`
+${INDENT}`)]
+    ];
+    if (results.length > 0) sections.push(["Results", results.map(wrap).join(`
+${INDENT}`)]);
+    sections.push(
+      ["Example", entry.example],
+      ["Reading output", wrap(fill(entry.output, fills))],
+      ["Report", fill(entry.report, fills)]
+    );
+    return new Explanation(title, sections);
+  }
+  function explanationFor(path, call) {
+    const entry = findExplanation(path);
+    if (!entry) return new Explanation(path, [["What it does", `No explanation is registered for ${path}.`]]);
+    try {
+      return buildExplanation(path, entry, call);
+    } catch (error2) {
+      return buildExplanation(path, entry, { args: call.args, ran: call.ran });
+    }
+  }
+  function withExplain(path, args, value, last) {
+    var _a2;
+    if (value instanceof Explanation) return value;
+    const explain = () => explanationFor(path, { args, ran: true, value, last });
+    if (value !== null && typeof value === "object") {
+      try {
+        Object.defineProperty(value, "explain", { get: explain, enumerable: false, configurable: true });
+        return value;
+      } catch (_error) {
+      }
+    }
+    return new CommandOutcome(value, last == null ? void 0 : last.success, explain, (_a2 = findExplanation(path)) == null ? void 0 : _a2.primitive);
+  }
+  function explainWithArgs(path, args, leaf, state) {
+    const entry = findExplanation(path);
+    if (!entry || !entry.quick || !leaf || args.length === 0) return explanationFor(path, { args, ran: false });
+    const saved = state.getLast();
+    try {
+      const value = quietly(() => leaf(...args));
+      const after = state.getLast();
+      return explanationFor(path, { args, ran: true, value, last: after !== saved ? after : void 0 });
+    } catch (_error) {
+      return explanationFor(path, { args, ran: false });
+    } finally {
+      state.setLast(saved);
+    }
+  }
+  var CATEGORY_ORDER = ["crash", "payload", "target", "seh", "rop", "shellcode", "pe-api", "strings", "format", "tools"];
+  function printIndex() {
+    var _a2, _b;
+    const groups = /* @__PURE__ */ new Map();
+    for (const entry of EXPLANATIONS) {
+      const category = categoryForName(entry.name);
+      groups.set(category, [...(_a2 = groups.get(category)) != null ? _a2 : [], entry]);
+    }
+    section(`explain: ${EXPLANATIONS.length} commands`);
+    print('Append .explain to any call: dx @$osed().sc.resolve("kernel32", "WinExec").explain');
+    print('One command with placeholders: dx @$osed().explain("sc.resolve")');
+    const order = [...CATEGORY_ORDER, ...[...groups.keys()].filter((key2) => !CATEGORY_ORDER.includes(key2))];
+    for (const category of order) {
+      const entries = groups.get(category);
+      if (!entries) continue;
+      print("");
+      print(`[${category}]`);
+      for (const entry of entries) {
+        const aliases = ((_b = entry.aliases) == null ? void 0 : _b.length) ? ` (also ${entry.aliases.join(", ")})` : "";
+        print(`  ${entry.name.padEnd(21)} ${entry.summary}${aliases}`);
+      }
+    }
+    return EXPLANATIONS.length;
+  }
+  function leafAt(api, path) {
+    const value = readPath(api, path);
+    return typeof value === "function" ? value : void 0;
+  }
+  function createExplainCommand(api, state) {
+    return (...args) => {
+      if (args.length === 0 || args[0] === void 0 || args[0] === "") return printIndex() > 0;
+      const path = String(args[0]).trim();
+      const entry = findExplanation(path);
+      if (!entry) {
+        error(`No explanation for '${path}'. Run dx @$osed().explain() for the list.`);
+        return false;
+      }
+      return explainWithArgs(path, args.slice(1), leafAt(api, path), state);
+    };
+  }
+  function isNamespace(value) {
+    return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
+  }
+  function wrapApi(api, state) {
+    const walk = (node, prefix) => {
+      for (const key2 of Object.keys(node)) {
+        const value = node[key2];
+        const path = prefix ? `${prefix}.${key2}` : key2;
+        if (typeof value === "function") {
+          const leaf = value;
+          node[key2] = (...args) => {
+            if (args[0] === "explain") return explainWithArgs(path, args.slice(1), leaf, state);
+            const before = state.getLast();
+            const result3 = leaf(...args);
+            const after = state.getLast();
+            return withExplain(path, args, result3, after !== before ? after : void 0);
+          };
+        } else if (isNamespace(value)) {
+          walk(value, path);
+        }
+      }
+    };
+    walk(api, "");
   }
 
   // src/core/backward_scanner.ts
@@ -17321,11 +19156,11 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     return !mnemonics.some((mnemonic) => dispatchKind(mnemonic) !== void 0);
   }
   function scanBackward(options) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     if (getPointerSize() !== 4) {
       return { gadgets: [], warnings: ["Backward scanning is x86-only."], stats: {} };
     }
-    const maxResults = (_a = options.maxResults) != null ? _a : 500;
+    const maxResults = (_a2 = options.maxResults) != null ? _a2 : 500;
     const maxInsns = (_b = options.maxInstructionsPerGadget) != null ? _b : 3;
     const maxBack = (_c = options.maxBackwardBytes) != null ? _c : 12;
     const scanOpts = {
@@ -17419,10 +19254,10 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
 
   // src/analysis/live_gadgets.ts
   function discoverLiveGadgets(options = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
     const pointerSize = getPointerSize();
     const patterns = knownPatternsForPointerSize(pointerSize);
-    const filter = badcharAddressFilter((_a = options.badchars) != null ? _a : [], pointerSize);
+    const filter = badcharAddressFilter((_a2 = options.badchars) != null ? _a2 : [], pointerSize);
     const maxPerPattern = (_b = options.maxPerPattern) != null ? _b : 40;
     const scanDepth = Math.min(Math.max(maxPerPattern * 20, 1500), 4e3);
     const hits = [];
@@ -17535,10 +19370,10 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
   // src/commands/landing.ts
   function landingDxRows(evidence) {
     return evidence.observations.map((item) => {
-      var _a, _b, _c;
+      var _a2, _b, _c;
       return {
         Observation: item.kind,
-        Address: (_a = item.address) != null ? _a : "",
+        Address: (_a2 = item.address) != null ? _a2 : "",
         Length: (_c = (_b = item.length) == null ? void 0 : _b.toString()) != null ? _c : "",
         Confidence: item.confidence.toFixed(2)
       };
@@ -17564,11 +19399,11 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
             { key: "confidence", header: "Confidence" }
           ],
           evidence.observations.map((item) => {
-            var _a, _b;
+            var _a2, _b;
             return {
               kind: item.kind,
               address: item.address === void 0 ? "" : formatAddress(item.address, 8),
-              length: (_b = (_a = item.length) == null ? void 0 : _a.toString()) != null ? _b : "",
+              length: (_b = (_a2 = item.length) == null ? void 0 : _a2.toString()) != null ? _b : "",
               confidence: item.confidence.toFixed(2)
             };
           })
@@ -17610,8 +19445,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     const text = value.trim().replace(/`/g, "");
     if (/^-?0x[0-9a-f]+$/i.test(text)) {
       const negative = text.startsWith("-");
-      const hex6 = negative ? text.slice(3) : text.slice(2);
-      const parsed = BigInt(`0x${hex6}`);
+      const hex7 = negative ? text.slice(3) : text.slice(2);
+      const parsed = BigInt(`0x${hex7}`);
       return negative ? -parsed : parsed;
     }
     if (/^-?[0-9]+$/.test(text)) {
@@ -17632,7 +19467,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     const signed = (unsigned & signBit) !== BigInt(0) ? unsigned - modulus : unsigned;
     const width = bits / 4;
     const byteCount = bits / 8;
-    const hex6 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
+    const hex7 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
     const littleEndianBytes = [];
     for (let i = 0; i < byteCount; i += 1) {
       const byte = Number(unsigned >> BigInt(i * 8) & BigInt(255));
@@ -17641,11 +19476,11 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     return {
       input: typeof rawValue === "string" ? rawValue : value.toString(),
       bits,
-      hex: hex6,
+      hex: hex7,
       unsigned: unsigned.toString(),
       signed: signed.toString(),
       littleEndianBytes: littleEndianBytes.join(" "),
-      twosComplement: hex6
+      twosComplement: hex7
     };
   }
 
@@ -18045,12 +19880,12 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
           }
         }
         const rows = findings.map((finding) => {
-          var _a;
+          var _a2;
           return {
             ref: addressRow(finding.refAddress, pointerSize),
             string: addressRow(finding.stringAddress, pointerSize),
             module: finding.moduleOffset,
-            encoding: (_a = finding.encoding) != null ? _a : "address",
+            encoding: (_a2 = finding.encoding) != null ? _a2 : "address",
             context: finding.contextBytes
           };
         });
@@ -18092,11 +19927,11 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         exclude: { type: "array", elementType: "number", default: [0, 10, 13] }
       },
       execute(options) {
-        var _a;
+        var _a2;
         const text = options.text;
         const encoding = normalizeEncoding(options.encoding);
         const terminator = options.terminator;
-        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : [0, 10, 13]);
+        const normalizedExclude = normalizeByteArray((_a2 = options.exclude) != null ? _a2 : [0, 10, 13]);
         const exclude = new Set(normalizedExclude.values);
         const bytes = encodeText(text, encoding, terminator);
         const badchars = bytes.map((byte, offset) => ({ byte, offset })).filter((entry) => exclude.has(entry.byte));
@@ -18179,7 +20014,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         stackBytes: { type: "number", min: 16, max: 1048576 }
       },
       execute(options) {
-        var _a;
+        var _a2;
         const bytes = options.bytes;
         if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
           throw new Error("bytes must contain 0x00..0xFF integers.");
@@ -18210,7 +20045,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         const pattern = Uint8Array.from(bytes);
         const offsets = findPattern(buffer, pattern, options.maxResults);
         section("Find Stack Bytes");
-        info(`Start: ${formatAddress(regs.sp, pointerSize)} (${((_a = regs.spName) != null ? _a : "sp").toUpperCase()})`);
+        info(`Start: ${formatAddress(regs.sp, pointerSize)} (${((_a2 = regs.spName) != null ? _a2 : "sp").toUpperCase()})`);
         if (bounds.base !== void 0) {
           info(`StackBase: ${formatAddress(bounds.base, pointerSize)}`);
         }
@@ -18554,7 +20389,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         patternLength: { type: "number", min: 256, max: 1e5, default: 1e4 }
       },
       execute(options) {
-        var _a, _b;
+        var _a2, _b;
         const pointerSize = getPointerSize();
         const regs = readRegisters(pointerSize);
         const depth = options.depth;
@@ -18572,7 +20407,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         }
         const result3 = mapStack(
           regs.sp,
-          (_a = regs.spName) != null ? _a : pointerSize === 8 ? "RSP" : "ESP",
+          (_a2 = regs.spName) != null ? _a2 : pointerSize === 8 ? "RSP" : "ESP",
           regs.ip,
           (_b = regs.ipName) != null ? _b : pointerSize === 8 ? "RIP" : "EIP",
           depth,
@@ -18591,9 +20426,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     };
   }
   function renderStackMap(result3) {
-    var _a, _b, _c, _d;
+    var _a2, _b, _c, _d;
     const { pointerSize, slots, spName } = result3;
-    const ipLabel = (_a = result3.ipName) != null ? _a : pointerSize === 8 ? "RIP" : "EIP";
+    const ipLabel = (_a2 = result3.ipName) != null ? _a2 : pointerSize === 8 ? "RIP" : "EIP";
     const spLabel = spName.toUpperCase();
     section("CALL STACK MAP");
     info(
@@ -18780,9 +20615,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     return value;
   }
   function classificationLabel(result3) {
-    var _a;
+    var _a2;
     if (result3.kind === "module_pointer" && result3.module) {
-      return `${(_a = result3.module.name.split(/[\\/]/).pop()) != null ? _a : result3.module.name}+0x${result3.module.rva.toString(16).toUpperCase()}`;
+      return `${(_a2 = result3.module.name.split(/[\\/]/).pop()) != null ? _a2 : result3.module.name}+0x${result3.module.rva.toString(16).toUpperCase()}`;
     }
     if (result3.kind === "memory_pointer") return "Mapped memory";
     if (result3.kind === "reserved") return "Reserved memory";
@@ -18798,7 +20633,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       examples: ["dx @$osed().leak_classify(0x76A31240)"],
       schema: { value: { type: ["number", "string"], required: true } },
       execute(options) {
-        var _a;
+        var _a2;
         const pointerSize = getPointerSize();
         const value = normalizeAddress(options.value);
         const result3 = classifyPointer(value, pointerSize, findModuleByAddress, memoryRegion);
@@ -18810,7 +20645,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         if (result3.module || result3.memory) print("TARGET");
         print("  Classification: " + (result3.kind === "module_pointer" ? "Loaded module" : result3.kind === "memory_pointer" ? "Mapped memory" : result3.kind === "reserved" ? "Reserved memory" : result3.kind === "unmapped" ? "Unmapped" : result3.kind === "null" ? "Null pointer" : "Unknown"));
         if (result3.module) {
-          print("  Module: " + ((_a = result3.module.name.split(/[\\\\/]/).pop()) != null ? _a : result3.module.name));
+          print("  Module: " + ((_a2 = result3.module.name.split(/[\\\\/]/).pop()) != null ? _a2 : result3.module.name));
           print("  Module RVA: 0x" + result3.module.rva.toString(16).toUpperCase().padStart(pointerSize * 2, "0"));
           print("  ASLR: " + result3.module.aslr);
         }
@@ -18863,8 +20698,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         if (unreadable > 0) warnings.push(`${unreadable} pointer-sized cells could not be read.`);
         const modulePointers = rows.filter((row) => row.result.kind === "module_pointer").length;
         const aslrPointers = rows.filter((row) => {
-          var _a;
-          return ((_a = row.result.module) == null ? void 0 : _a.aslr) === "enabled";
+          var _a2;
+          return ((_a2 = row.result.module) == null ? void 0 : _a2.aslr) === "enabled";
         }).length;
         section("POINTER CANDIDATES");
         table(
@@ -18875,12 +20710,12 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
             { key: "aslr", header: "ASLR", width: 8 }
           ],
           rows.map((row) => {
-            var _a, _b, _c;
+            var _a2, _b, _c;
             return {
               source: formatAddress(row.source, pointerSize),
               value: formatAddress(row.value, pointerSize),
               target: classificationLabel(row.result),
-              aslr: (_c = (_b = (_a = row.result.module) == null ? void 0 : _a.aslr) == null ? void 0 : _b.toUpperCase()) != null ? _c : "n/a"
+              aslr: (_c = (_b = (_a2 = row.result.module) == null ? void 0 : _a2.aslr) == null ? void 0 : _b.toUpperCase()) != null ? _c : "n/a"
             };
           })
         );
@@ -18912,8 +20747,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         }));
         const modulePointers = findings.filter((finding) => finding.kind === "module_pointer").length;
         const aslrPointers = findings.filter((finding) => {
-          var _a;
-          return ((_a = finding.module) == null ? void 0 : _a.aslr) === "enabled";
+          var _a2;
+          return ((_a2 = finding.module) == null ? void 0 : _a2.aslr) === "enabled";
         }).length;
         section("OUTPUT POINTER ANALYSIS");
         table(
@@ -18923,11 +20758,11 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
             { key: "aslr", header: "ASLR", width: 8 }
           ],
           findings.map((finding) => {
-            var _a, _b, _c;
+            var _a2, _b, _c;
             return {
               value: formatAddress(finding.value, pointerSize),
               target: classificationLabel(finding),
-              aslr: (_c = (_b = (_a = finding.module) == null ? void 0 : _a.aslr) == null ? void 0 : _b.toUpperCase()) != null ? _c : "n/a"
+              aslr: (_c = (_b = (_a2 = finding.module) == null ? void 0 : _a2.aslr) == null ? void 0 : _b.toUpperCase()) != null ? _c : "n/a"
             };
           })
         );
@@ -18946,7 +20781,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       examples: ["dx @$osed().leak.base(0x76A31240, 0x1240)"],
       schema: { pointer: { type: ["number", "string"], required: true }, rva: { type: ["number", "string"], required: true } },
       execute(options) {
-        var _a, _b, _c;
+        var _a2, _b, _c;
         const pointerSize = getPointerSize();
         const result3 = deriveModuleBase(normalizeAddress(options.pointer), normalizeAddress(options.rva), pointerSize, findModuleByAddress);
         section("LEAKED POINTER");
@@ -18956,7 +20791,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         print(`  ${result3.base === void 0 ? "unavailable" : formatAddress(result3.base, pointerSize)}`);
         section("VALIDATION");
         print(`  PE alignment: ${result3.alignmentPlausible ? "plausible" : "not plausible"}`);
-        print(`  Module mapping: ${result3.moduleMatched ? `matched (${(_b = (_a = result3.module) == null ? void 0 : _a.name.split(/[\\/]/).pop()) != null ? _b : "module"})` : "not matched in current target"}`);
+        print(`  Module mapping: ${result3.moduleMatched ? `matched (${(_b = (_a2 = result3.module) == null ? void 0 : _a2.name.split(/[\\/]/).pop()) != null ? _b : "module"})` : "not matched in current target"}`);
         if (result3.reason) print(`  Note: ${result3.reason}`);
         section("PROVENANCE");
         print("  leak_derived");
@@ -18977,17 +20812,17 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     return normalizedIdentity(value).replace(/\.(dll|exe|ocx|sys)$/i, "");
   }
   function matchingModule(modules, name) {
-    var _a;
+    var _a2;
     const identity = normalizedIdentity(name);
-    return (_a = modules.find((module) => normalizedIdentity(module.name) === identity)) != null ? _a : modules.find((module) => normalizedStem(module.name) === normalizedStem(name));
+    return (_a2 = modules.find((module) => normalizedIdentity(module.name) === identity)) != null ? _a2 : modules.find((module) => normalizedStem(module.name) === normalizedStem(name));
   }
   function capabilityLabel(gadget) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a2, _b, _c, _d, _e, _f, _g, _h;
     const capabilities = gadget.capabilities;
     const pivot = capabilities.find((cap) => cap.kind === "STACK_PIVOT");
     if (pivot) {
       const instructionText = gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ");
-      const register2 = gadget.instructions.some((instruction) => instruction.mnemonic === "leave") ? "ebp" : (_a = instructionText.match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)) == null ? void 0 : _a[1];
+      const register2 = gadget.instructions.some((instruction) => instruction.mnemonic === "leave") ? "ebp" : (_a2 = instructionText.match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)) == null ? void 0 : _a2[1];
       return "PIVOT(" + ((_b = register2 == null ? void 0 : register2.toUpperCase()) != null ? _b : "?") + ")";
     }
     const loads = [...new Set(capabilities.filter((cap) => cap.kind === "LOAD_REGISTER" && cap.register).map((cap) => cap.register.toUpperCase()))];
@@ -19006,7 +20841,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     const value = [...field.values.exact][0];
     return value > 0 ? "+" + value : String(value);
   }
-  function hex5(value, width) {
+  function hex6(value, width) {
     return "0x" + value.toString(16).toUpperCase().padStart(width, "0");
   }
   function pad2(value, width) {
@@ -19019,15 +20854,15 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     return origin === "live" ? "LIVE" : origin === "imported" ? "IMPORTED" : "RP++";
   }
   function formatCorpusReport(index, options) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     const addressWidth = options.pointerSize * 2;
-    const modules = (_a = options.modules) != null ? _a : [];
+    const modules = (_a2 = options.modules) != null ? _a2 : [];
     const groups = /* @__PURE__ */ new Map();
     for (const gadget of index.gadgets) {
       gadget.locations.forEach((location, locationIndex) => {
-        var _a2;
+        var _a3;
         const key2 = normalizedIdentity(location.module);
-        const group = (_a2 = groups.get(key2)) != null ? _a2 : [];
+        const group = (_a3 = groups.get(key2)) != null ? _a3 : [];
         group.push({ gadget, locationIndex });
         groups.set(key2, group);
       });
@@ -19058,11 +20893,11 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
           esp: espDelta(gadget)
         };
       }).sort((left, right) => {
-        var _a2, _b2, _c2, _d, _e, _f, _g, _h;
-        return ((_b2 = (_a2 = left.rva) != null ? _a2 : left.va) != null ? _b2 : BigInt(-1)) < ((_d = (_c2 = right.rva) != null ? _c2 : right.va) != null ? _d : BigInt(-1)) ? -1 : ((_f = (_e = left.rva) != null ? _e : left.va) != null ? _f : BigInt(-1)) > ((_h = (_g = right.rva) != null ? _g : right.va) != null ? _h : BigInt(-1)) ? 1 : left.instructions < right.instructions ? -1 : left.instructions > right.instructions ? 1 : 0;
+        var _a3, _b2, _c2, _d, _e, _f, _g, _h;
+        return ((_b2 = (_a3 = left.rva) != null ? _a3 : left.va) != null ? _b2 : BigInt(-1)) < ((_d = (_c2 = right.rva) != null ? _c2 : right.va) != null ? _d : BigInt(-1)) ? -1 : ((_f = (_e = left.rva) != null ? _e : left.va) != null ? _f : BigInt(-1)) > ((_h = (_g = right.rva) != null ? _g : right.va) != null ? _h : BigInt(-1)) ? 1 : left.instructions < right.instructions ? -1 : left.instructions > right.instructions ? 1 : 0;
       });
       const rendered = rows.map((row) => ({
-        va: row.va === void 0 ? "?" : hex5(row.va, addressWidth),
+        va: row.va === void 0 ? "?" : hex6(row.va, addressWidth),
         rva: row.rva === void 0 ? "?" : "+" + row.rva.toString(16).toUpperCase().padStart(Math.max(1, addressWidth - 2), "0"),
         instructions: row.instructions,
         capability: row.capability,
@@ -19078,7 +20913,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       lines.push(
         "",
         "MODULE: " + moduleName,
-        "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex5(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length,
+        "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex6(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length,
         "",
         pad2("VA", widths.va) + "  " + pad2("RVA", widths.rva) + "  " + pad2("INSTRUCTIONS", widths.instructions) + "  " + pad2("CAPABILITY", widths.capability) + "  ESP",
         "-".repeat(widths.va) + "  " + "-".repeat(widths.rva) + "  " + "-".repeat(widths.instructions) + "  " + "-".repeat(widths.capability) + "  " + "-".repeat(widths.esp),
@@ -19108,7 +20943,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
   var NO_ROP_CORPUS_MESSAGE = "No active ROP corpus. Run rop.scan(...) or rop.scan_live(...), or validate an imported corpus with rop.corpus.validate().";
   var NO_EXPLOIT_STATE_MESSAGE = "No exploit state available. Run triage() first to capture crash state.";
   function buildExploitStateFromTriage(findings) {
-    var _a, _b;
+    var _a2, _b;
     const control = findings.control;
     const stack = findings.stack;
     const seh = findings.seh;
@@ -19123,7 +20958,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     const spValue = sp !== void 0 && sp !== null ? Number(sp) : void 0;
     const landing2 = stack == null ? void 0 : stack.landing;
     const landingBytes = landing2 == null ? void 0 : landing2.bytes;
-    const controlledAfterEsp = (_a = landingBytes == null ? void 0 : landingBytes.length) != null ? _a : 0;
+    const controlledAfterEsp = (_a2 = landingBytes == null ? void 0 : landingBytes.length) != null ? _a2 : 0;
     const registers = {};
     const regEntries = control == null ? void 0 : control.registers;
     if (Array.isArray(regEntries)) {
@@ -19190,7 +21025,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     return merged;
   }
   function diagnoseModuleBadchars(moduleName, badchars) {
-    var _a;
+    var _a2;
     try {
       const modules = listModulesWithMitigations(moduleName);
       const mod = modules.find((m) => m.name.toLowerCase().includes(moduleName.toLowerCase()));
@@ -19208,14 +21043,14 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       const packed = baseBytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
       const byByte = /* @__PURE__ */ new Map();
       for (const entry of offending) {
-        const list = (_a = byByte.get(entry.byte)) != null ? _a : [];
+        const list = (_a2 = byByte.get(entry.byte)) != null ? _a2 : [];
         list.push(entry.position);
         byByte.set(entry.byte, list);
       }
       const badSummary = [...byByte.entries()].map(([byte, positions]) => {
-        const hex6 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        const hex7 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
         const posStr = positions.length === 1 ? `offset ${positions[0]}` : positions.length === positions[positions.length - 1] - positions[0] + 1 ? `offsets ${positions[0]}-${positions[positions.length - 1]}` : `offsets ${positions.join(",")}`;
-        return `${hex6} (${posStr})`;
+        return `${hex7} (${posStr})`;
       }).join(", ");
       return `${mod.name} base ${baseHex} | packed: ${packed} | bad bytes: ${badSummary}. No usable gadget addresses.`;
     } catch (e) {
@@ -19232,19 +21067,19 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
   }
   function corpusReportModules() {
     return corpusModules.map((module) => {
-      var _a;
+      var _a2;
       return {
         name: module.name,
         base: module.base,
-        aslr: (_a = module.aslr) != null ? _a : "unknown"
+        aslr: (_a2 = module.aslr) != null ? _a2 : "unknown"
       };
     });
   }
   function moduleInfoByName(name) {
-    var _a;
+    var _a2;
     if (!name || name === "<all>") return void 0;
     const matches = listModulesWithMitigations(name);
-    return (_a = matches.find((m) => m.name.toLowerCase() === name.toLowerCase())) != null ? _a : matches[0];
+    return (_a2 = matches.find((m) => m.name.toLowerCase() === name.toLowerCase())) != null ? _a2 : matches[0];
   }
   function buildStableAddressPredicate() {
     const relocated = [];
@@ -19256,14 +21091,14 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     return (address) => !relocated.some(([lo, hi]) => address >= lo && address < hi);
   }
   function corpusStaleModules() {
-    var _a;
+    var _a2;
     const tracked = corpusModules.filter((entry) => entry.base !== void 0);
     if (tracked.length === 0) return [];
     const live = listModulesWithMitigations();
     const stale = [];
     for (const entry of tracked) {
       const needle = entry.name.toLowerCase();
-      const match = (_a = live.find((m) => m.name.toLowerCase() === needle)) != null ? _a : live.find((m) => m.name.toLowerCase().includes(needle) || m.path.toLowerCase().includes(needle));
+      const match = (_a2 = live.find((m) => m.name.toLowerCase() === needle)) != null ? _a2 : live.find((m) => m.name.toLowerCase().includes(needle) || m.path.toLowerCase().includes(needle));
       const now = match == null ? void 0 : match.base;
       if (now === void 0 || now !== entry.base) {
         stale.push({ name: entry.name, was: entry.base, now });
@@ -19287,9 +21122,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     }
   }
   function writeProofText(path, content) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a2, _b, _c, _d, _e, _f;
     const hostAny = host;
-    const raw = (_e = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem) == null ? void 0 : _d.CreateFile) == null ? void 0 : _e.call(_d, path, "CreateAlways");
+    const raw = (_e = (_d = (_c = (_b = (_a2 = hostAny.namespace) == null ? void 0 : _a2.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem) == null ? void 0 : _d.CreateFile) == null ? void 0 : _e.call(_d, path, "CreateAlways");
     if (!raw) throw new Error("WinDbg host filesystem is unavailable.");
     const file = raw;
     if (typeof file.WriteBytes !== "function") throw new Error("WinDbg host file does not support WriteBytes.");
@@ -19328,9 +21163,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     return length;
   }
   function readText(path) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a2, _b, _c, _d, _e, _f, _g;
     const hostAny = host;
-    const fs = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem;
+    const fs = (_c = (_b = (_a2 = hostAny.namespace) == null ? void 0 : _a2.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem;
     const raw = (_f = (_d = fs == null ? void 0 : fs.OpenFile) == null ? void 0 : _d.call(fs, path)) != null ? _f : (_e = fs == null ? void 0 : fs.CreateFile) == null ? void 0 : _e.call(fs, path, "OpenExisting");
     const file = raw;
     if (!file || typeof file.ReadBytes !== "function") throw new Error("WinDbg host filesystem read support is unavailable.");
@@ -19473,9 +21308,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return value > 0 ? `+${value}` : String(value);
     };
     const primaryCapability = (gadget) => {
-      var _a, _b, _c, _d;
+      var _a2, _b, _c, _d;
       if (gadget.categories.includes("STACK_PIVOT")) return "STACK_PIVOT";
-      return (_d = (_c = (_a = gadget.capabilities.find((capability2) => capability2.kind === "MEMORY_WRITE")) == null ? void 0 : _a.kind) != null ? _c : (_b = gadget.capabilities[0]) == null ? void 0 : _b.kind) != null ? _d : "?";
+      return (_d = (_c = (_a2 = gadget.capabilities.find((capability2) => capability2.kind === "MEMORY_WRITE")) == null ? void 0 : _a2.kind) != null ? _c : (_b = gadget.capabilities[0]) == null ? void 0 : _b.kind) != null ? _d : "?";
     };
     const queryRows = (query, verbose = false) => {
       if (!currentRopCorpus) {
@@ -19484,7 +21319,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       const gadgets = currentRopCorpus.query(query);
       const pointerSize = getPointerSize();
       return gadgets.map((gadget) => {
-        var _a;
+        var _a2;
         const location = gadget.locations[0];
         const compact = {
           Address: (location == null ? void 0 : location.virtualAddress) !== void 0 ? formatAddress(BigInt(location.virtualAddress), pointerSize) : "n/a",
@@ -19495,7 +21330,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         };
         if (!verbose) return compact;
         return __spreadProps(__spreadValues({}, compact), {
-          Module: (_a = location == null ? void 0 : location.module) != null ? _a : "n/a",
+          Module: (_a2 = location == null ? void 0 : location.module) != null ? _a2 : "n/a",
           Terminator: [...gadget.semanticSummary.summary.flowEffects.values.exact].join(", ") || "none",
           Reads: formatSemanticField(gadget.semanticSummary.summary.reads),
           Writes: formatSemanticField(gadget.semanticSummary.summary.writes),
@@ -19576,7 +21411,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       ]);
     };
     const scanLiveCorpus = (modules, options, append) => {
-      var _a;
+      var _a2;
       pendingImportedCorpus = void 0;
       corpusOrigin = "live";
       corpusValidation = "sampled";
@@ -19590,13 +21425,13 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       const capRows = summarizeCapabilities(currentRopCorpus);
       const stats = discoveries.reduce(
         (total, discovery) => {
-          var _a2, _b, _c, _d, _e, _f, _g, _h;
+          var _a3, _b, _c, _d, _e, _f, _g, _h;
           return {
             patterns: total.patterns + discovery.stats.patterns,
             scanned: total.scanned + discovery.stats.scanned,
             discovered: total.discovered + discovery.stats.discovered,
             rejected: total.rejected + discovery.stats.rejected,
-            backwardTerminators: total.backwardTerminators + ((_a2 = discovery.stats.backwardTerminators) != null ? _a2 : 0),
+            backwardTerminators: total.backwardTerminators + ((_a3 = discovery.stats.backwardTerminators) != null ? _a3 : 0),
             backwardDispatch: total.backwardDispatch + ((_b = discovery.stats.backwardDispatch) != null ? _b : 0),
             backwardNonSequentialRejected: total.backwardNonSequentialRejected + ((_c = discovery.stats.backwardNonSequentialRejected) != null ? _c : 0),
             backwardGadgets: total.backwardGadgets + ((_d = discovery.stats.backwardGadgets) != null ? _d : 0),
@@ -19645,7 +21480,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       }
       section("Module Scan");
       for (let i = 0; i < modules.length; i++) {
-        const mod = (_a = modules[i]) != null ? _a : "<all>";
+        const mod = (_a2 = modules[i]) != null ? _a2 : "<all>";
         const disc = discoveries[i];
         const accepted = disc.stats.discovered;
         const rejected = disc.stats.rejected;
@@ -19711,7 +21546,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       );
     };
     const executeRopScan = (...args) => {
-      var _a, _b, _c;
+      var _a2, _b, _c;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.scan");
       }
@@ -19732,7 +21567,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         return scanCorpus(args[0], {}, Array.isArray(scanBadchars) ? scanBadchars : void 0);
       }
       const options = isPlainObject(args[0]) ? args[0] : {};
-      const text = (_c = (_b = (_a = options.text) != null ? _a : options.output) != null ? _b : options.value) != null ? _c : args[0];
+      const text = (_c = (_b = (_a2 = options.text) != null ? _a2 : options.output) != null ? _b : options.value) != null ? _c : args[0];
       if (typeof text !== "string" || text.trim().length === 0) {
         const rows = [{ Error: "rop.scan requires a text property containing RP++ output." }];
         setResult({
@@ -19899,8 +21734,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         Writes: formatSemanticField(gadget.semanticSummary.summary.writes),
         Capabilities: gadget.capabilities.map((capability2) => capability2.kind).join(", "),
         Locations: gadget.locations.map((location) => {
-          var _a;
-          return (_a = location.module) != null ? _a : "unknown";
+          var _a2;
+          return (_a2 = location.module) != null ? _a2 : "unknown";
         }).join(", "),
         Validation: corpusValidation
       }));
@@ -19945,7 +21780,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         memoryread: "memoryRead"
       };
       if (isPlainObject(args[0])) {
-        const _a = args[0], { verbose: requestedVerbose } = _a, queryFields = __objRest(_a, ["verbose"]);
+        const _a2 = args[0], { verbose: requestedVerbose } = _a2, queryFields = __objRest(_a2, ["verbose"]);
         verbose = requestedVerbose === true;
         query = queryFields;
       } else if (typeof args[0] === "string" && args[1] !== void 0) {
@@ -20022,7 +21857,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return toDxResult("ROP Capabilities", rows);
     };
     const executeRopPlan = (...args) => {
-      var _a, _b, _c;
+      var _a2, _b, _c;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.plan");
       }
@@ -20032,7 +21867,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         return toDxResult("ROP Plan", rows2);
       }
       const options = isPlainObject(args[0]) ? args[0] : { strategy: args[0], apiResolution: args[1] };
-      const strategy = normalizeExploitStrategy(String((_a = options.strategy) != null ? _a : ""));
+      const strategy = normalizeExploitStrategy(String((_a2 = options.strategy) != null ? _a2 : ""));
       if (!strategy) {
         const rows2 = [{ Error: "Unsupported strategy. Use VirtualProtect, VirtualAlloc, WriteProcessMemory, VirtualProtectEx, VirtualAllocEx, WinExec, or Stack Pivot." }];
         renderRows("ROP Plan", rows2);
@@ -20062,7 +21897,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return toDxResult(`ROP Plan ${plan.id}`, rows);
     };
     const executeRopEmit = (...args) => {
-      var _a, _b;
+      var _a2, _b;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.emit");
       }
@@ -20074,7 +21909,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       const emitStale = staleCorpusGuard("ROP Emit", "rop.emit");
       if (emitStale) return emitStale;
       const options = isPlainObject(args[0]) ? args[0] : { planId: args[0], strategyId: args[1] };
-      const planId = Number((_a = options.planId) != null ? _a : options.plan_id);
+      const planId = Number((_a2 = options.planId) != null ? _a2 : options.plan_id);
       const strategyId = (_b = options.strategyId) != null ? _b : options.strategy_id;
       const entry = ropPlans.get(planId);
       if (!entry) {
@@ -20105,7 +21940,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return toDxResult(`ROP Emit ${entry.plan.id}.${result3.strategyId}`, rows);
     };
     const executeRopSynthesize = (...args) => {
-      var _a, _b;
+      var _a2, _b;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.synthesize");
       }
@@ -20117,7 +21952,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       const synthStale = staleCorpusGuard("ROP Synthesize", "rop.synthesize");
       if (synthStale) return synthStale;
       const options = isPlainObject(args[0]) ? args[0] : __spreadValues({ planId: args[0] }, isPlainObject(args[1]) ? args[1] : {});
-      const planId = Number((_b = (_a = options.planId) != null ? _a : options.plan_id) != null ? _b : args[0]);
+      const planId = Number((_b = (_a2 = options.planId) != null ? _a2 : options.plan_id) != null ? _b : args[0]);
       const entry = ropPlans.get(planId);
       if (!entry) {
         const rows2 = [{ Error: `ROP plan ${Number.isFinite(planId) ? planId : "<invalid>"} does not exist. Run rop.plan(...) first.` }];
@@ -20184,7 +22019,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return toDxResult(title, rows);
     };
     const executeRopExport = (...args) => {
-      var _a, _b, _c, _d, _e, _f, _g, _h;
+      var _a2, _b, _c, _d, _e, _f, _g, _h;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.export");
       }
@@ -20196,7 +22031,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       const exportStale = staleCorpusGuard("ROP Export", "rop.export");
       if (exportStale) return exportStale;
       const options = isPlainObject(args[0]) ? args[0] : { planId: args[0], path: args[1] };
-      const planId = Number((_b = (_a = options.planId) != null ? _a : options.plan_id) != null ? _b : args[0]);
+      const planId = Number((_b = (_a2 = options.planId) != null ? _a2 : options.plan_id) != null ? _b : args[0]);
       const filePath = (_d = (_c = options.path) != null ? _c : options.file) != null ? _d : typeof args[1] === "string" ? args[1] : void 0;
       const entry = ropPlans.get(planId);
       if (!entry) {
@@ -20384,7 +22219,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return toDxResult("Exploit State", rows);
     };
     const executeRopPivots = (...args) => {
-      var _a, _b;
+      var _a2, _b;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.pivots");
       }
@@ -20410,7 +22245,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         const addr = firstKnownAddress(gadget);
         const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
         const seq = gadgetSequence(gadget);
-        const module = (_b = (_a = gadget.locations.find((l) => l.virtualAddress !== void 0)) == null ? void 0 : _a.module) != null ? _b : "unknown";
+        const module = (_b = (_a2 = gadget.locations.find((l) => l.virtualAddress !== void 0)) == null ? void 0 : _a2.module) != null ? _b : "unknown";
         if (filterRegister && sourceRegister !== filterRegister) continue;
         if (minDelta !== void 0 && source === "esp-adjust") {
           if (adjustment === void 0 || Math.abs(adjustment) < minDelta) continue;
@@ -20450,8 +22285,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     const parseChainTargets = (spec) => {
       if (Array.isArray(spec)) {
         return spec.filter((entry) => isPlainObject(entry)).map((entry) => {
-          var _a, _b;
-          return { register: String((_a = entry.register) != null ? _a : ""), value: Number((_b = entry.value) != null ? _b : 0) };
+          var _a2, _b;
+          return { register: String((_a2 = entry.register) != null ? _a2 : ""), value: Number((_b = entry.value) != null ? _b : 0) };
         }).filter((target) => target.register.length > 0);
       }
       if (isPlainObject(spec)) {
@@ -20480,9 +22315,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         warn(warning);
       }
       const rows = plan.steps.map((step) => {
-        var _a;
+        var _a2;
         return {
-          Word: (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Word: (_a2 = step.placeholder) != null ? _a2 : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
           Meaning: step.comment
         };
       });
@@ -20498,7 +22333,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return toDxResult(title, rows);
     };
     const executeRopChain = (...args) => {
-      var _a, _b;
+      var _a2, _b;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.chain");
       }
@@ -20517,7 +22352,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
           }
         }
       }
-      const targets = positionalTargets.length > 0 ? positionalTargets : parseChainTargets((_b = (_a = options.set) != null ? _a : options.targets) != null ? _b : options);
+      const targets = positionalTargets.length > 0 ? positionalTargets : parseChainTargets((_b = (_a2 = options.set) != null ? _a2 : options.targets) != null ? _b : options);
       if (targets.length === 0) {
         const rows2 = [{ Error: 'rop.chain requires register/value pairs, e.g. rop.chain("eax", 0xDEADBEEF).' }];
         renderRows("ROP Chain", rows2);
@@ -20593,10 +22428,10 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         print(line);
       }
       const rows = recipe.steps.map((step) => {
-        var _a;
+        var _a2;
         return {
           Type: step.kind,
-          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a = step.placeholder) != null ? _a : "",
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a2 = step.placeholder) != null ? _a2 : "",
           Meaning: step.comment
         };
       });
@@ -20643,10 +22478,10 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         for (const item of plan.unresolved) warn(`  ${item.register}: ${item.reason}`);
       }
       const rows = plan.steps.map((step) => {
-        var _a;
+        var _a2;
         return {
           Type: step.kind,
-          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a = step.placeholder) != null ? _a : "",
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a2 = step.placeholder) != null ? _a2 : "",
           Meaning: step.comment
         };
       });
@@ -20715,9 +22550,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         warn(warning);
       }
       const rows = plan.steps.map((step) => {
-        var _a;
+        var _a2;
         return {
-          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a2 = step.placeholder) != null ? _a2 : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
           Meaning: step.comment
         };
       });
@@ -20779,9 +22614,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         warn(warning);
       }
       const rows = plan.steps.map((step) => {
-        var _a;
+        var _a2;
         return {
-          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a2 = step.placeholder) != null ? _a2 : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
           Meaning: step.comment
         };
       });
@@ -20843,9 +22678,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         warn(warning);
       }
       const rows = plan.steps.map((step) => {
-        var _a;
+        var _a2;
         return {
-          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a2 = step.placeholder) != null ? _a2 : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
           Meaning: step.comment
         };
       });
@@ -20946,7 +22781,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return { placeholder: t.toUpperCase(), comment: t };
     };
     const executeRopFrameWrite = (...args) => {
-      var _a;
+      var _a2;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.frame_write");
       }
@@ -20980,8 +22815,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         if (plan.placeholders.length > 0) info(`Define before use: ${plan.placeholders.join(", ")}`);
         info("Frame layout (built in BUF, then ESP pivots onto it):");
         words2.forEach((w, i) => {
-          var _a2;
-          const shown = w.derefSlot !== void 0 ? `*${hex32(w.derefSlot)}` : (_a2 = w.placeholder) != null ? _a2 : hex32(w.value);
+          var _a3;
+          const shown = w.derefSlot !== void 0 ? `*${hex32(w.derefSlot)}` : (_a3 = w.placeholder) != null ? _a3 : hex32(w.value);
           print(`  BUF+0x${(i * 4).toString(16).padStart(2, "0")} = ${shown}  (${i === 0 ? "API (ret dispatches here)" : i === 1 ? "post-call target \u2014 MUST be executable" : `arg${i - 1}`})`);
         });
         const python = formatChainPython({ steps: plan.steps });
@@ -20990,14 +22825,14 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       for (const u of plan.unsatisfied) warn(u);
       if (!plan.success && plan.unsatisfied.length === 0) warn("No frame produced.");
       const rows = plan.steps.map((step) => {
-        var _a2;
+        var _a3;
         return {
           Type: step.kind,
-          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a2 = step.placeholder) != null ? _a2 : "",
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a3 = step.placeholder) != null ? _a3 : "",
           Meaning: step.comment
         };
       });
-      if (rows.length === 0) rows.push({ Type: "none", Value: "", Meaning: (_a = plan.unsatisfied[0]) != null ? _a : "no frame" });
+      if (rows.length === 0) rows.push({ Type: "none", Value: "", Meaning: (_a2 = plan.unsatisfied[0]) != null ? _a2 : "no frame" });
       renderRows("ROP Write Frame", rows);
       setResult({
         command: "rop.frame_write",
@@ -21010,7 +22845,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return toDxResult("ROP Write Frame", rows);
     };
     const executeRopSlotCall = (...args) => {
-      var _a, _b, _c;
+      var _a2, _b, _c;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.slot_call");
       }
@@ -21050,7 +22885,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       }
       if (plan.success) {
         const d = plan.dispatch;
-        const pr = (_a = d.ptrReg) != null ? _a : "reg";
+        const pr = (_a2 = d.ptrReg) != null ? _a2 : "reg";
         const vr = (_b = d.valReg) != null ? _b : "reg";
         info(`Deref preamble: pop ${pr} ${d.popPtr !== void 0 ? hex32(d.popPtr) : "?"} -> [${hex32(BigInt(d.slot))}] via mov ${vr},[${pr}] ${d.deref !== void 0 ? hex32(d.deref) : "?"} -> jmp ${vr} ${d.jmp !== void 0 ? hex32(d.jmp) : "?"}`);
         if (d.unstable.length > 0) warn(`Preamble gadget(s) at a NON-stable address (will break if the module relocates): ${d.unstable.join(", ")}`);
@@ -21061,8 +22896,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         print(`  BUF+0x08 = ${hex32(BigInt(Number(d.deref)))}  (mov ${vr},[${pr}] ; ret -> ${vr} = live API)`);
         print(`  BUF+0x0c = ${hex32(BigInt(Number(d.jmp)))}  (jmp ${vr} -> dispatch)`);
         frame.forEach((w, i) => {
-          var _a2;
-          const shown = w.derefSlot !== void 0 ? `*${hex32(w.derefSlot)}` : (_a2 = w.placeholder) != null ? _a2 : hex32(w.value);
+          var _a3;
+          const shown = w.derefSlot !== void 0 ? `*${hex32(w.derefSlot)}` : (_a3 = w.placeholder) != null ? _a3 : hex32(w.value);
           const role = i === 0 ? "API return target \u2014 MUST be executable" : `arg${i}`;
           print(`  BUF+0x${((i + 4) * 4).toString(16).padStart(2, "0")} = ${shown}  (${role})`);
         });
@@ -21072,10 +22907,10 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       for (const u of plan.unsatisfied) warn(u);
       if (!plan.success && plan.unsatisfied.length === 0) warn("No chain produced.");
       const rows = plan.steps.map((step) => {
-        var _a2;
+        var _a3;
         return {
           Type: step.kind,
-          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a2 = step.placeholder) != null ? _a2 : "",
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a3 = step.placeholder) != null ? _a3 : "",
           Meaning: step.comment
         };
       });
@@ -21092,7 +22927,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return toDxResult("ROP Slot Call", rows);
     };
     const executeRopApiPlan = (...args) => {
-      var _a;
+      var _a2;
       if (args.length === 1 && args[0] === "help") return helperHelp("rop.api_plan");
       const target = typeof args[0] === "string" ? args[0].trim() : "";
       const badchars = parseBadcharsOption(args[1]);
@@ -21104,7 +22939,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       }
       const snapshot = sc.api_plan(target, badchars);
       if (snapshot.error || !snapshot.target || !snapshot.targetIdentity) {
-        const message = (_a = snapshot.error) != null ? _a : "No target export was resolved.";
+        const message = (_a2 = snapshot.error) != null ? _a2 : "No target export was resolved.";
         const rows2 = [{ Error: message }];
         renderRows("ROP API Resolution Planner", rows2);
         setResult({ command: "rop.api_plan", args: { target, badchars }, success: false, findings: [snapshot], warnings: [], errors: [message] });
@@ -21117,14 +22952,14 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       info(`Snapshot provenance: stopped-debugger reads; target path ${identity.path || "<unknown>"}`);
       info(`Badchars: ${badchars.length > 0 ? badchars.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ") : "none specified"}`);
       const rows = snapshot.candidates.map((candidate) => {
-        var _a2, _b;
+        var _a3, _b;
         return {
           Strategy: candidate.strategy,
           State: candidate.state,
           Owner: candidate.ownerModule,
           Slot: hex32(candidate.slot),
           Pointer: hex32(candidate.pointer),
-          Anchor: (_b = (_a2 = candidate.anchor) == null ? void 0 : _a2.symbol) != null ? _b : "",
+          Anchor: (_b = (_a3 = candidate.anchor) == null ? void 0 : _a3.symbol) != null ? _b : "",
           Delta: candidate.anchor ? hex32(candidate.anchor.delta) : "",
           "Slot bytes": candidate.slotPayloadSafe ? "safe" : "contains badchar",
           "Address evidence": candidate.exportRvaVerified ? "validated" : "incomplete",
@@ -21151,7 +22986,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return toDxResult("ROP API Resolution Planner", rows);
     };
     const executeRopApiBuild = (...args) => {
-      var _a, _b, _c;
+      var _a2, _b, _c;
       if (args.length === 1 && args[0] === "help") return helperHelp("rop.api_build");
       const options = isPlainObject(args[0]) ? args[0] : {
         target: args[0],
@@ -21190,8 +23025,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       }
       const matchesName = (actual, requested) => actual.toLowerCase().replace(/\.dll$/, "") === requested.replace(/\.dll$/, "");
       const constrainedCandidates = snapshot.candidates.filter((candidate) => {
-        var _a2;
-        return (!requestedOwner || matchesName(candidate.ownerModule, requestedOwner)) && (!requestedAnchor || ((_a2 = candidate.anchor) == null ? void 0 : _a2.symbol.toLowerCase()) === requestedAnchor);
+        var _a3;
+        return (!requestedOwner || matchesName(candidate.ownerModule, requestedOwner)) && (!requestedAnchor || ((_a3 = candidate.anchor) == null ? void 0 : _a3.symbol.toLowerCase()) === requestedAnchor);
       });
       if ((requestedOwner || requestedAnchor) && constrainedCandidates.length === 0) {
         const rows2 = [{ Error: `No Phase 1 candidate matches owner="${requestedOwner || "*"}" anchor="${requestedAnchor || "*"}".` }];
@@ -21205,9 +23040,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       const selected = buildBestApiResolution(currentRopCorpus, constrainedCandidates, { output, preserve, maxGadgets, badchars, continuation });
       if (!selected.candidate || !selected.plan) {
         const rows2 = selected.attempts.map((attempt) => {
-          var _a2, _b2;
+          var _a3, _b2;
           return {
-            Error: `${attempt.candidate.strategy} ${(_b2 = (_a2 = attempt.candidate.anchor) == null ? void 0 : _a2.symbol) != null ? _b2 : attempt.candidate.target.symbol}: ${attempt.rejectionReasons.join(" ")}`
+            Error: `${attempt.candidate.strategy} ${(_b2 = (_a3 = attempt.candidate.anchor) == null ? void 0 : _a3.symbol) != null ? _b2 : attempt.candidate.target.symbol}: ${attempt.rejectionReasons.join(" ")}`
           };
         });
         if (rows2.length === 0) rows2.push({ Error: "No address-validated Phase 1 resolution candidate is available. Run rop.api_plan to inspect unresolved imports, thunks, or forwarding." });
@@ -21231,7 +23066,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         info(`Candidate evaluation: ${selected.attempts.length} considered; ${rejected.length} rejected.`);
         const groups = /* @__PURE__ */ new Map();
         for (const attempt of rejected) {
-          const label = (_b = (_a = attempt.candidate.anchor) == null ? void 0 : _a.symbol) != null ? _b : attempt.candidate.target.symbol;
+          const label = (_b = (_a2 = attempt.candidate.anchor) == null ? void 0 : _a2.symbol) != null ? _b : attempt.candidate.target.symbol;
           for (const reason of attempt.rejectionReasons.filter((reason2) => !globalFailures.includes(reason2))) {
             groups.set(reason, [...(_c = groups.get(reason)) != null ? _c : [], label]);
           }
@@ -21243,11 +23078,11 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         }
       }
       const rows = plan.steps.map((step, index) => {
-        var _a2;
+        var _a3;
         return {
           Index: String(index),
           Type: step.kind,
-          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(BigInt(step.value)) : (_a2 = step.placeholder) != null ? _a2 : "",
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(BigInt(step.value)) : (_a3 = step.placeholder) != null ? _a3 : "",
           Meaning: step.comment
         };
       });
@@ -21279,7 +23114,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       WinExec: "WinExec"
     };
     const executeRopGenerate = (...args) => {
-      var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+      var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.generate");
       }
@@ -21294,7 +23129,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       const SUPPORTED_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "WinExec", "VirtualProtectEx", "VirtualAllocEx"];
       const DEP_BYPASS_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "VirtualProtectEx", "VirtualAllocEx"];
       const discoverIatSlot = (apiName) => {
-        var _a2;
+        var _a3;
         const iatName = API_IAT_NAMES[apiName];
         if (!iatName) return void 0;
         try {
@@ -21303,7 +23138,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
             const dxResult = scNs.iat_find(iatName);
             if ((dxResult == null ? void 0 : dxResult.rows) && dxResult.rows.length > 0) {
               const firstRow = dxResult.rows[0];
-              const slotStr = String((_a2 = firstRow.Slot) != null ? _a2 : "");
+              const slotStr = String((_a3 = firstRow.Slot) != null ? _a3 : "");
               const match = /0x([0-9a-fA-F]+)/i.exec(slotStr);
               if (match) return parseInt(match[1], 16) >>> 0;
             }
@@ -21320,7 +23155,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         return true;
       };
       const badchars = parseBadcharsOption(options.badchars);
-      const isAutoApi = String((_a = options.api) != null ? _a : "").toLowerCase() === "auto";
+      const isAutoApi = String((_a2 = options.api) != null ? _a2 : "").toLowerCase() === "auto";
       let strategyName;
       if (isAutoApi) {
         section("API Auto-Selection");
@@ -21637,7 +23472,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return toDxResult("Exploit Builder", rows);
     };
     const executeRopProve = (...args) => {
-      var _a;
+      var _a2;
       if (args.length === 1 && args[0] === "help") return helperHelp("rop.prove");
       const controller = new ProofController({
         adapter: new WinDbgProofAdapter(),
@@ -21683,18 +23518,18 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         args: options != null ? options : {},
         success: outcome.success,
         findings: [outcome],
-        warnings: ((_a = outcome.session) == null ? void 0 : _a.executionStatus) === "UNVERIFIED" ? ["Execution remains UNVERIFIED."] : [],
+        warnings: ((_a2 = outcome.session) == null ? void 0 : _a2.executionStatus) === "UNVERIFIED" ? ["Execution remains UNVERIFIED."] : [],
         errors
       });
       return toDxResult("ROP Proof", rows);
     };
     const executeRopVerify = (...args) => {
-      var _a, _b, _c, _d, _e, _f;
+      var _a2, _b, _c, _d, _e, _f;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.verify");
       }
       const options = isPlainObject(args[0]) ? args[0] : { chain: typeof args[0] === "string" ? args[0] : void 0, badchars: args[1], api: args[2] };
-      const badchars = parseBadcharsOption((_b = options.badchars) != null ? _b : (_a = lastResult == null ? void 0 : lastResult.args) == null ? void 0 : _a.badchars);
+      const badchars = parseBadcharsOption((_b = options.badchars) != null ? _b : (_a2 = lastResult == null ? void 0 : lastResult.args) == null ? void 0 : _a2.badchars);
       let steps;
       let sourceLabel;
       if (typeof options.chain === "string" && options.chain.trim().length > 0) {
@@ -21971,9 +23806,9 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return lastResult == null ? void 0 : lastResult.findings[0];
     };
     api.can_execute = (address) => {
-      var _a;
+      var _a2;
       const evidence = api.memory(address);
-      return (_a = evidence == null ? void 0 : evidence.executable) != null ? _a : null;
+      return (_a2 = evidence == null ? void 0 : evidence.executable) != null ? _a2 : null;
     };
     api.landing = (address) => {
       invoke("landing", address === void 0 ? [] : [commandAddress(address)]);
@@ -21984,6 +23819,14 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       invoke("math", args);
       return lastResult == null ? void 0 : lastResult.findings[0];
     };
+    const explainState = {
+      getLast: () => lastResult,
+      setLast: (result3) => {
+        lastResult = result3;
+      }
+    };
+    api.explain = createExplainCommand(api, explainState);
+    wrapApi(api, explainState);
     return api;
   }
   function parseScanLivePositionalArgs(args) {
