@@ -33,6 +33,7 @@ Case.__new__.__defaults__ = ((), {})
 
 BAD_A = r'b"\x00\x0a\x0d\x20\x2f"'
 BAD_LAB = r'b"\x00\x0a\x0d\x2e\x3a\x5c"'  # the OSED Lab14 and Lab15 transport: '.', ':' and '\' are bad
+BAD_EBP = r'b"\x00\x0a\x0d\x45"'  # 45 is the ModRM of every [ebp-disp8] store, so the body needs the encoder
 FILE_C = r"C:\\Users\\Public\\sc_builder_c.txt"
 CASES = {
     "a": Case(rf'''BADCHARS = {BAD_A}
@@ -117,6 +118,14 @@ XOR_ENCODER = True
 
 k32.WinExec(s("cmd.exe /c echo ok > C:\\Users\\Public\\sc_builder_d.txt"), SW_HIDE)
 ''', ["[!] XOR_ENCODER:", "page must be writable"]),
+    "xor_needed": Case(rf'''BADCHARS = {BAD_EBP}
+MAX_SIZE = None
+EXIT = "terminate"
+XOR_ENCODER = True
+
+k32.WinExec(s("cmd.exe /c echo ok > C:\\Users\\Public\\sc_builder_f.txt"), SW_HIDE)
+k32.Sleep(2000)
+''', ["[!] XOR_ENCODER:", "which is what the encoder is for"]),
 }
 SAME_BYTES = [("a", "a_literal"), ("c", "c_literal")]
 REJECTED = {
@@ -130,6 +139,13 @@ XOR_ENCODER = False
 
 k32.WinExec(s("notepad.exe"), SW_HIDE)
 ''', "CONFIG mixes both call forms"),
+    "xor_impossible": (rf'''BADCHARS = b"\x00\x0a\x0d\x45\xc3"
+MAX_SIZE = None
+EXIT = "terminate"
+XOR_ENCODER = True
+
+k32.WinExec(s("calc.exe"), SW_HIDE)
+''', "no XOR key keeps both the stub and the encoded body clean"),
 }
 TEMPLATE_A = ["show=0", "winexec=cmd.exe /c echo ok > C:\\Users\\Public\\sc_builder_a.txt", "terminate", "bad=00 0A 0D 20 2F"]
 

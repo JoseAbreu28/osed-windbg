@@ -492,8 +492,12 @@ def resolver(frame, roles):
 
 
 def choose_roles():
-    """The role assignment whose PEB walk and resolver hold no bad byte, shortest first."""
-    best = None
+    """The role assignment with the fewest bad bytes in the PEB walk and the resolver, shortest first.
+
+    With the encoder on, the body never runs as written, so fewest wins and the build goes on.
+    With it off, nothing can hide a bad byte there and a tie at zero is the only acceptable one.
+    """
+    ranked = []
     for roles in role_assignments():
         frame = Frame()
         frame.slot("resolver")
@@ -501,15 +505,16 @@ def choose_roles():
             placed = place(find_kernel32(frame, roles) + resolver(frame, roles))
         except BuildError:
             continue
-        if any(BAD.intersection(encoding) for _, _, encoding in placed):
-            continue
-        size = sum(len(encoding) for _, _, encoding in placed)
-        if best is None or size < best[0]:
-            best = (size, roles)
-    if best is None:
+        hits = sum(1 for _, _, encoding in placed for byte in encoding if byte in BAD)
+        ranked.append((hits, sum(len(encoding) for _, _, encoding in placed), roles))
+    if not ranked:
+        raise BuildError("neither the PEB walk nor the resolver assembles; keystone may be broken")
+    hits, _, roles = min(ranked, key=lambda row: row[:2])
+    if hits and not XOR_ENCODER:
         raise BuildError("no register assignment keeps the PEB walk and the resolver clear of "
-                         + " ".join(f"{b:02x}" for b in sorted(BAD)) + "; try XOR_ENCODER = True")
-    return best[1]
+                         + " ".join(f"{b:02x}" for b in sorted(BAD))
+                         + f" ({hits} bad byte(s) at best); try XOR_ENCODER = True")
+    return roles
 
 
 # ---------------------------------------------------------------- the plan
@@ -736,14 +741,21 @@ def listing(placed, base_offset=0):
     return problems
 
 
-def check(placed, base_offset=0, encoded_with=None):
-    """Bad bytes (after XOR when encoded_with is a key) and forward calls with a 00 in the rel32."""
+def bad_bytes(placed, base_offset=0, encoded_with=None):
+    """Bad bytes in bytes that reach the transport, after XOR when encoded_with is a key."""
     problems = []
     for offset, op, encoding in placed:
         output = bytes(b ^ encoded_with for b in encoding) if encoded_with is not None else encoding
         for i, byte in enumerate(output):
             if byte in BAD:
                 problems.append(f"bad byte 0x{byte:02x} at offset 0x{base_offset + offset + i:04x} in: {line_text(op)}")
+    return problems
+
+
+def forward_calls(placed, base_offset=0):
+    """Calls whose rel32 runs forward or holds a 00 byte. The encoder cannot hide these."""
+    problems = []
+    for offset, op, encoding in placed:
         if encoding[:1] == b"\xe8":
             rel = int.from_bytes(encoding[1:5], "little", signed=True)
             if rel >= 0 or 0 in encoding[1:5]:
@@ -774,20 +786,29 @@ def main():
 
     print(f"[+] code, {len(plain)} bytes:")
     problems += listing(placed)
-    problems += check(placed)
+    problems += forward_calls(placed)
+    plain_bad = bad_bytes(placed)
     code = plain
-    if XOR_ENCODER:
+    if not XOR_ENCODER:
+        problems += plain_bad
+    else:
         stub = xor_stub(plain)
         if stub is None:
+            problems += plain_bad
             problems.append("no XOR key keeps both the stub and the encoded body clean")
         else:
             key, _, stub_placed = stub
             stub_bytes = b"".join(encoding for _, _, encoding in stub_placed)
             code = stub_bytes + bytes(b ^ key for b in plain)
             print(f"[!] XOR_ENCODER: {len(stub_bytes)}-byte stub, key 0x{key:02x}. It decodes in place, so the page must be writable.")
+            if plain_bad:
+                print(f"[i] the body holds {len(plain_bad)} bad byte(s) as written, which is what the encoder is for."
+                      " The stub decodes them before they run, so they are not problems:")
+                for problem in plain_bad:
+                    print(f"    {problem}")
             problems += listing(stub_placed)
-            problems += check(stub_placed)
-            problems += check(placed, len(stub_bytes), key)
+            problems += bad_bytes(stub_placed) + forward_calls(stub_placed)
+            problems += bad_bytes(placed, len(stub_bytes), key)
             print(f"    {len(stub_bytes):04x}  ... {len(plain)} encoded bytes, the code listed above")
 
     for problem in problems:
