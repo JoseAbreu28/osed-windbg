@@ -3,7 +3,10 @@
   python check.py [--bundle ../../../dist/osed-legacy.js] [--out DIR]
 
 Each case gets its own CONFIG block, must exit 0, print 0 bad bytes and 0 problems,
-and leave a shellcode.bin with no bad byte. SAME_BYTES names the pairs that must
+and leave a shellcode.bin with no bad byte. A case also names the text its output must
+hold, must not hold, and, in `distinct`, how many different captures a pattern may have,
+which is how one frame offset per buffer is checked without naming the offset.
+SAME_BYTES names the pairs that must
 assemble to identical bytes, which is how the fluent form and the older literal
 CALLS form are kept equivalent. REJECTED names the configs that must fail, with the
 message each one has to print. With --bundle, sc.builder from that bundle must print
@@ -25,8 +28,8 @@ BUILDER = (HERE / "../../../tools/sc_builder.py").resolve()
 RUN_DIST = HERE / "../sc_writer/run_dist.js"
 CONFIG = re.compile(r"(# >>> CONFIG\n).*?(# <<< CONFIG\n)", re.S)
 
-Case = collections.namedtuple("Case", "config expect absent")
-Case.__new__.__defaults__ = ((),)
+Case = collections.namedtuple("Case", "config expect absent distinct")
+Case.__new__.__defaults__ = ((), {})
 
 BAD_A = r'b"\x00\x0a\x0d\x20\x2f"'
 FILE_C = r"C:\\Users\\Public\\sc_builder_c.txt"
@@ -82,6 +85,22 @@ handle = k32.CreateFileA(s("{FILE_C}"), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, F
 k32.WriteFile(handle, s("builder ok"), 10, buf(4), NULL)
 k32.CloseHandle(handle)
 ''', ["ref(2) = CreateFileA result", "arg1 = ref(2)"], ["CreateDirectoryA result", "ref(1)"]),
+    "buffers": Case(rf'''BADCHARS = b"\x00\x0a\x0d\x20"
+MAX_SIZE = None
+EXIT = "ret"
+XOR_ENCODER = False
+
+path = buf(260)
+k32.GetTempPathA(260, path)
+k32.lstrcatA(path, s("sc_builder_e.txt"))
+handle = k32.CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+k32.WriteFile(handle, s("builder buffers ok"), 18, buf(4), NULL)
+k32.CloseHandle(handle)
+''', ["buf(260) #1", "buf(4) #2"], (), {
+        r"= buf\(260\) #1, scratch at (ebp-0x[0-9a-f]+)": 1,
+        r"= buf\(4\) #2, scratch at (ebp-0x[0-9a-f]+)": 1,
+        r"scratch at (ebp-0x[0-9a-f]+)": 2,
+    }),
     "d": Case(rf'''BADCHARS = {BAD_A}
 MAX_SIZE = None
 EXIT = "terminate"
@@ -151,6 +170,11 @@ def main():
             for piece in case.absent:
                 if piece in result.stdout:
                     failures.append(f"case {name}: output still holds {piece!r}")
+            for pattern, wanted in case.distinct.items():
+                found = set(re.findall(pattern, result.stdout))
+                print(f"case {name}: {pattern} -> {sorted(found)}")
+                if len(found) != wanted:
+                    failures.append(f"case {name}: {pattern} matched {sorted(found)}, wanted {wanted} distinct")
             binaries[name] = code
 
         for left, right in SAME_BYTES:

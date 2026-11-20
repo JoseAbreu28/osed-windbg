@@ -11886,10 +11886,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-20T13:31:57.196Z" : globalThis[key2];
+        value = true ? "2026-11-20T14:15:37.986Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "c10bf663ed3a" : globalThis[key2];
+        value = true ? "b38da38110f4" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15227,9 +15227,27 @@ def ref(n):
     return Arg("ref", n)
 
 
+class Buffer:
+    """One scratch area in the frame, below the slots and not zeroed.
+
+    Every buf() call makes its own, so a buffer bound to a name is one address at every
+    call that takes it, and an inline buf() is space nothing else touches.
+    """
+
+    count = 0
+
+    def __init__(self, size):
+        Buffer.count += 1
+        self.number = Buffer.count
+        self.size = size
+
+    def __repr__(self):
+        return f"buf({self.size}) #{self.number}"
+
+
 def buf(size):
     """Address of \`size\` bytes of scratch space below EBP (not zeroed), for out-parameters."""
-    return Arg("buf", size)
+    return Arg("buf", Buffer(size))
 
 
 def base(dll):
@@ -15524,6 +15542,7 @@ class Frame:
 
     def __init__(self):
         self.slots = {}
+        self.buffers = {}
         self.next_disp = -4
         self.buffer_end = 0x80
 
@@ -15537,9 +15556,12 @@ class Frame:
             self.next_disp -= 4
         return frame_operand(self.slots[name])
 
-    def buffer(self, size):
-        self.buffer_end += (size + 3) & ~3
-        return self.buffer_end
+    def buffer(self, handle):
+        """The offset of one buf() result, allocated the first time it is used."""
+        if handle.number not in self.buffers:
+            self.buffer_end += (handle.size + 3) & ~3
+            self.buffers[handle.number] = self.buffer_end
+        return self.buffers[handle.number]
 
     def reserve(self):
         """Move esp below every slot and buffer: \`add esp, -n\` when clean, else n through eax."""
@@ -15673,8 +15695,10 @@ def parse_config():
                 raise BuildError(f"call {number} {api}: {arg} does not fit in a dword")
             if isinstance(arg, Arg) and arg.kind == "ref" and not (isinstance(arg.value, int) and 1 <= arg.value < number):
                 raise BuildError(f"call {number} {api}: ref({arg.value!r}) must name an earlier call, 1 to {number - 1}")
-            if isinstance(arg, Arg) and arg.kind == "buf" and not (isinstance(arg.value, int) and 0 < arg.value <= 0x4000):
-                raise BuildError(f"call {number} {api}: buf({arg.value!r}) needs a size from 1 to 0x4000")
+            if isinstance(arg, Arg) and arg.kind == "buf" and not (
+                    isinstance(arg.value, Buffer) and isinstance(arg.value.size, int)
+                    and not isinstance(arg.value.size, bool) and 0 < arg.value.size <= 0x4000):
+                raise BuildError(f"call {number} {api}: buf() needs a size from 1 to 0x4000, not {arg.value!r}")
             if isinstance(arg, Arg) and arg.kind == "s":
                 try:
                     str(arg.value).encode("latin-1")
@@ -15682,6 +15706,15 @@ def parse_config():
                     raise BuildError(f"call {number} {api}: s() takes single-byte text, use w() for {arg.value!r}")
         calls.append(Call(number, dll_key(dll), str(api), list(args)))
     return calls
+
+
+def arg_label(index, arg):
+    """How one argument reads in the listing, as the CONFIG line wrote it."""
+    if isinstance(arg, int):
+        return f"arg{index + 1} = {arg if -10 < arg < 10 else hex(arg)}"
+    if arg.kind == "buf":
+        return f"arg{index + 1} = {arg.value!r}"
+    return f"arg{index + 1} = {arg.kind}({arg.value!r})"
 
 
 def text_bytes(arg):
@@ -15743,7 +15776,7 @@ def build_body(calls):
                 body.append(Op(f"mov {text_slots[index]}, esp", f"-> {describe(data[:-1] if arg.kind == 's' else data[:-2])}"))
         for index in range(len(call.args) - 1, -1, -1):
             arg = call.args[index]
-            label = f"arg{index + 1} = {arg if -10 < arg < 10 else hex(arg)}" if isinstance(arg, int) else f"arg{index + 1} = {arg.kind}({arg.value!r})"
+            label = arg_label(index, arg)
             if isinstance(arg, int):
                 body += push_const(arg, label)
             elif arg.kind in ("s", "w"):
