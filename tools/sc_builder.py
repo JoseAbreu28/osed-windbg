@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """sc_builder.py from osed-windbg: config-driven 32-bit Windows shellcode.
 
-Edit the CONFIG block below, then run:  python sc_builder.py
+Edit the CONFIG block below, one line per API call, then run:  python sc_builder.py
 Needs Python 3 and keystone-engine (pip install keystone-engine).
 capstone (pip install capstone) is optional; when present the result is disassembled.
 
@@ -43,49 +43,111 @@ def base(dll):
     return Arg("base", dll)
 
 
+_RECORDED = []
+CALLS = _RECORDED
+
+
+class _Dll:
+    """Records calls to one DLL: each call returns its own result handle."""
+
+    def __init__(self, name):
+        self._name = name
+
+    def __getattr__(self, api):
+        if api.startswith("_"):
+            raise AttributeError(api)
+
+        def call(*args):
+            _RECORDED.append((self._name, api, list(args)))
+            return Arg("ref", len(_RECORDED))
+        return call
+
+
+def dll(name):
+    """Recorder for one DLL, for example dll("user32.dll").MessageBoxA(...)."""
+    return _Dll(name)
+
+
+k32 = dll("kernel32.dll")
+
+# Win32 constants, under their MSDN names, for use as call arguments.
+NULL = 0
+GENERIC_READ = 0x80000000
+GENERIC_WRITE = 0x40000000
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_WRITE = 0x00000002
+CREATE_NEW = 1
+CREATE_ALWAYS = 2
+OPEN_EXISTING = 3
+OPEN_ALWAYS = 4
+TRUNCATE_EXISTING = 5
+FILE_ATTRIBUTE_NORMAL = 0x80
+SW_HIDE = 0
+SW_SHOWNORMAL = 1
+SW_SHOW = 5
+MB_OK = 0
+MEM_COMMIT = 0x1000
+MEM_RESERVE = 0x2000
+PAGE_READWRITE = 0x04
+PAGE_EXECUTE_READWRITE = 0x40
+
 # ==============================================================================
 # CONFIG: the only part you edit.
 #
 # BADCHARS     Bytes the output may not contain. 00 is always added.
 # MAX_SIZE     None, or the most bytes the shellcode may take.
-# CALLS        (dll, api, [args]) in execution order. Export names are case-sensitive.
-#              Each arg is an int (a dword), s("text"), w("text"), ref(n), buf(size)
-#              or base("dll"), listed in prototype order; the builder pushes them in
-#              reverse. A DLL other than kernel32.dll is loaded once with LoadLibraryA.
 # EXIT         "terminate" = TerminateProcess(-1, 0), "exit" = ExitProcess(0),
 #              "ret" = restore the registers and return to the caller.
 # XOR_ENCODER  True prepends a XOR decoder stub, as plan B when a bad byte remains.
 #              The stub decodes in place, so the shellcode page must be writable.
 #
+# Write one call per line, in execution order. k32 is kernel32.dll:
+#
+#   k32.WinExec(s("calc.exe"), SW_SHOWNORMAL)
+#
+# For any other DLL use dll("name"). The builder loads it once with LoadLibraryA:
+#
+#   dll("user32.dll").MessageBoxA(NULL, s("text"), s("caption"), MB_OK)
+#
+# Export names are case-sensitive. Arguments go in prototype order and the builder
+# pushes them in reverse. An argument is an int, one of the Win32 constants above,
+# s("text"), w("text"), buf(size), base("dll"), or the result of an earlier call.
+#
+# A call returns its result, the value the API leaves in EAX. Give it a name to
+# pass it to a later call:
+#
+#   handle = k32.CreateFileA(...)
+#   k32.WriteFile(handle, ...)
+#
+# The name holds the call's position, captured when the call ran. Inserting
+# another call above it cannot move it.
+#
 # Example 1: run a command, then end the process.
-#   CALLS = [
-#       ("kernel32.dll", "WinExec", [s("cmd.exe /c whoami > C:\\Users\\Public\\w.txt"), 0]),
-#   ]
+#   k32.WinExec(s("cmd.exe /c whoami > C:\\Users\\Public\\w.txt"), SW_HIDE)
 #   EXIT = "terminate"
 #
 # Example 2: a message box. user32.dll is loaded with LoadLibraryA first.
-#   CALLS = [
-#       ("user32.dll", "MessageBoxA", [0, s("Hello from sc_builder"), s("OSED"), 0]),
-#   ]
+#   dll("user32.dll").MessageBoxA(NULL, s("Hello from sc_builder"), s("OSED"), MB_OK)
 #   EXIT = "exit"
 #
-# Example 3: write a file. ref(1) is the handle CreateFileA returned; buf(4)
-# receives the count WriteFile writes back.
-#   CALLS = [
-#       ("kernel32.dll", "CreateFileA", [s("C:\\Users\\Public\\out.txt"), 0x40000000, 0, 0, 2, 0x80, 0]),
-#       ("kernel32.dll", "WriteFile", [ref(1), s("hello"), 5, buf(4), 0]),
-#       ("kernel32.dll", "CloseHandle", [ref(1)]),
-#   ]
+# Example 3: write a file. buf(4) receives the count WriteFile writes back.
+#   handle = k32.CreateFileA(s("C:\\Users\\Public\\out.txt"), GENERIC_WRITE, 0, NULL,
+#                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+#   k32.WriteFile(handle, s("hello"), 5, buf(4), NULL)
+#   k32.CloseHandle(handle)
 #   EXIT = "ret"
+#
+# The older form still works: a literal CALLS = [(dll, api, [args])] list, with
+# ref(n) for the result of call n, counted from 1. Use one form or the other. A
+# CONFIG block that holds both fails to build.
 # ==============================================================================
 # >>> CONFIG
 BADCHARS = b"\x00"
 MAX_SIZE = None
-CALLS = [
-    ("kernel32.dll", "WinExec", [s("calc.exe"), 1]),
-]
 EXIT = "terminate"
 XOR_ENCODER = False
+
+k32.WinExec(s("calc.exe"), SW_SHOWNORMAL)
 # <<< CONFIG
 # Nothing below needs editing.
 
@@ -397,6 +459,8 @@ def dll_key(dll):
 
 def parse_config():
     """Check CONFIG and return the calls with numbered, normalized entries."""
+    if CALLS is not _RECORDED and _RECORDED:
+        raise BuildError("CONFIG mixes both call forms. Keep either the literal CALLS list or the recorded k32 and dll() calls")
     if EXIT not in ("terminate", "exit", "ret"):
         raise BuildError(f'EXIT must be "terminate", "exit" or "ret", not {EXIT!r}')
     if MAX_SIZE is not None and (not isinstance(MAX_SIZE, int) or MAX_SIZE <= 0):

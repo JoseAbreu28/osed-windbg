@@ -218,7 +218,7 @@ describe("sc.builder", () => {
     const text = output();
     expect(text).toContain("Save everything below this line as sc_builder.py");
     expect(text).toContain("#!/usr/bin/env python3\n");
-    expect(text).toContain('CALLS = [\n    ("kernel32.dll", "WinExec", [s("calc.exe"), 1]),\n]');
+    expect(text).toContain('k32.WinExec(s("calc.exe"), SW_SHOWNORMAL)');
   });
 
   test("fills only the CONFIG block from sc.template tasks, xor and max", () => {
