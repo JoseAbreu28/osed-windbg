@@ -219,7 +219,7 @@ dx @$osed().str.bytes("W00T", "ascii", true, "00 0A 0D")
 
 `encode` gives a XOR decoder stub and the encoded bytes as one Python string without the excluded bytes. `sc.hash` gives the API hash for hand-written shellcode. `str.bytes` turns a string into payload bytes and lists the bad characters in it.
 
-For custom shellcode, `sc.push_string`, `sc.call_frame`, and `sc.template` print null-free assembly and a Keystone `build_sc.py` that flags each bad byte; see [Write custom shellcode](Documentation/commands/shellcode.md#write-custom-shellcode). `sc.builder` prints `sc_builder.py`: list the API calls in its `CONFIG`, run it, and get checked shellcode. Write one shellcode by hand first, with the PEB walk, the export walk, and the hash loop, before you rely on the generator.
+For custom shellcode, `sc.push_string`, `sc.call_frame`, and `sc.template` print null-free assembly and a Keystone `build_sc.py` that flags each bad byte; see [Write custom shellcode](Documentation/commands/shellcode.md#write-custom-shellcode). `sc.builder` prints `sc_builder.py`: write one API call per line in its `CONFIG`, run it, and get checked shellcode. Write one shellcode by hand first, with the PEB walk, the export walk, and the hash loop, before you rely on the generator.
 
 ### 12. Reverse the target (IDA-style helpers)
 

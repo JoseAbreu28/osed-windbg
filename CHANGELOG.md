@@ -7,6 +7,13 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-20 - A call's result by name in sc_builder
+
+- `tools/sc_builder.py` records the calls you write instead of taking a hand-written list. You write one call per line in `CONFIG`, `k32.WinExec(s("calc.exe"), SW_SHOWNORMAL)` for kernel32.dll and `dll("user32.dll").MessageBoxA(NULL, s("text"), s("caption"), MB_OK)` for a DLL the builder loads once with `LoadLibraryA`. A call returns its result, so `handle = k32.CreateFileA(...)` and then `k32.WriteFile(handle, ...)` passes the handle by name. The name holds the position captured when the call ran. Before this change, a call inserted above the `CreateFileA` shifted every later `ref(n)` onto the call before the one you meant, and the build still reported 0 bad bytes and 0 problems.
+- The builder defines the Win32 constants a call needs under their MSDN names, so an argument reads `SW_HIDE` instead of `0`: `NULL`, `GENERIC_READ`, `GENERIC_WRITE`, `FILE_SHARE_READ`, `FILE_SHARE_WRITE`, `CREATE_NEW`, `CREATE_ALWAYS`, `OPEN_EXISTING`, `OPEN_ALWAYS`, `TRUNCATE_EXISTING`, `FILE_ATTRIBUTE_NORMAL`, `SW_HIDE`, `SW_SHOWNORMAL`, `SW_SHOW`, `MB_OK`, `MEM_COMMIT`, `MEM_RESERVE`, `PAGE_READWRITE`, `PAGE_EXECUTE_READWRITE`.
+- The older literal `CALLS = [(dll, api, [args])]` list with `ref(n)` still builds the same bytes, and a `CONFIG` block that holds both forms fails with `CONFIG mixes both call forms`. `tests/manual/sc_builder/check.py` now builds seven configs. It keeps the command and the file write in both forms and requires each pair to assemble to identical bytes, and it builds the file write with a `CreateDirectoryA` call inserted above the `CreateFileA`, where the handle has to come out as `ref(2)`.
+- `sc.builder` with task arguments emits the four settings, a blank line, and one call per task. A `loadlibrary=` task binds `hmod`, then `hmod2` and `hmod3`, a `getprocaddress=` task reads the most recent of those names or `base("kernel32.dll")`, and the block carries a comment that the builder loads DLLs and resolves exports on its own.
+
 ### 2026-11-20 - Explain any command
 
 - Every call reachable from `@$osed()` returns an object with an `explain` property. `dx @$osed().sc.resolve("kernel32", "WinExec").explain` prints what the command does, how it works, when to use it, its arguments, how to read the output, and a report sentence, with the call's arguments and results filled into the placeholders. `explain()` lists all 106 explanations, and `explain("name", args...)` or `"explain"` as the first argument explains a command without running it. Read-only lookups run silently to fill their results.

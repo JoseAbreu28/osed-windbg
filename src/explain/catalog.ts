@@ -1060,9 +1060,9 @@ export const EXPLANATIONS: ExplainEntry[] = [
   {
     name: "sc.builder",
     aliases: ["sc_builder"],
-    summary: "sc_builder.py: list API calls, get checked shellcode",
-    what: "Prints sc_builder.py, a Python builder where you list API calls in its CONFIG block and get shellcode checked for bad bytes, size and forward calls.",
-    how: "Fills CONFIG from <tasks> (the same tasks as sc.template, plus xor and max=). The script resolves each API once through the PEB walk and a ROR13 export lookup, builds each argument with the shortest clean instruction form, and assembles and checks the result with Keystone.",
+    summary: "sc_builder.py, one API call per line, checked shellcode",
+    what: "Prints sc_builder.py, a Python builder where you write one API call per line in its CONFIG block and get shellcode checked for bad bytes, size and forward calls.",
+    how: "Fills CONFIG from <tasks> (the same tasks as sc.template, plus xor and max=). In CONFIG you write one call per line, k32 for kernel32.dll and dll(\"name\") for a DLL the builder loads with LoadLibraryA, and you bind a call to a name to pass its result to a later call. The script resolves each API once through the PEB walk and a ROR13 export lookup, builds each argument with the shortest clean instruction form, and assembles and checks the result with Keystone.",
     when: "Shellcode step, for any API sequence beyond the sc.template tasks.",
     args: [{ name: "tasks", meaning: "Tasks and options that fill CONFIG.", optional: true, rest: true, values: TEMPLATE_TASKS }],
     example: "dx @$osed().sc.builder(\"winexec=calc.exe\", \"exit\", \"bad=00 0A 0D\", \"xor\", \"max=400\")",
