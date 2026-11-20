@@ -12,7 +12,7 @@ Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../CO
 | [`sc.push_string`](#scpush_string) | Print x86 pushes that build a NUL-terminated string on the stack with no `00` or bad byte. |
 | [`sc.call_frame`](#sccall_frame) | Print the pushes and calls for one stdcall API call through the `sc.template` resolver, with the ROR13 hash. |
 | [`sc.template`](#sctemplate) | Print a complete `build_sc.py` that assembles custom shellcode with Keystone and reports every bad byte. |
-| [`sc.builder`](#scbuilder) | Print `sc_builder.py`: write one API call per line in its `CONFIG`, run it, and get shellcode checked for bad bytes, size, and forward calls. |
+| [`sc.builder`](#scbuilder) | Print `sc_builder.py`: write one API call per line in its `CONFIG`, run it, and get shellcode checked for bad bytes, size, and forward calls. It picks the resolver's registers, each argument's instruction form, and the cdecl cleanup against `BADCHARS`. |
 
 ### egghunter
 
@@ -256,7 +256,7 @@ dx @$osed().sc.builder("show=0", "winexec=cmd.exe /c whoami > C:\\out.txt", "ter
 dx @$osed().sc.builder("winexec=calc.exe", "exit", "bad=00 0A 0D", "xor", "max=400")
 ```
 
-With no argument the command prints the script exactly as `tools/sc_builder.py` in this repository. `npm run build` regenerates the embedded copy, and a test fails when the two differ. Arguments take the `sc.template` tasks and fill the `CONFIG` block from them, so `winexec=`, `loadlibrary=`, `getprocaddress=`, `exit`, `terminate`, `show=`, and `bad=` work as above. `xor` sets `XOR_ENCODER = True` and `max=<bytes>` sets `MAX_SIZE`. The filled block holds the four settings, a blank line, and one statement per task. A `loadlibrary=` task binds the module handle to `hmod`. A second such task binds `hmod2`, and a third binds `hmod3`. A `getprocaddress=` task reads the most recent of those names, or `base("kernel32.dll")` when no `loadlibrary=` task came before it. For any other API sequence, save the script and edit `CONFIG`. It needs Python 3 and `keystone-engine`. `capstone` is optional.
+With no argument the command prints the script exactly as `tools/sc_builder.py` in this repository. `npm run build` regenerates the embedded copy, and a test fails when the two differ. Arguments take the `sc.template` tasks and fill the `CONFIG` block from them, so `winexec=`, `loadlibrary=`, `getprocaddress=`, `exit`, `terminate`, `show=`, and `bad=` work as above. `xor` sets `XOR_ENCODER = True` and `max=<bytes>` sets `MAX_SIZE`. The filled block holds the six settings, a blank line, and one statement per task. A `loadlibrary=` task binds the module handle to `hmod`. A second such task binds `hmod2`, and a third binds `hmod3`. A `getprocaddress=` task reads the most recent of those names, or `base("kernel32.dll")` when no `loadlibrary=` task came before it. For any other API sequence, save the script and edit `CONFIG`. It needs Python 3 and `keystone-engine`. `capstone` is optional.
 
 `sc.builder("loadlibrary=user32.dll", "getprocaddress=MessageBoxA", "bad=00 0A 0D")` fills `CONFIG` with:
 
@@ -265,6 +265,8 @@ BADCHARS = b"\x00\x0a\x0d"
 MAX_SIZE = None
 EXIT = "ret"
 XOR_ENCODER = False
+CDECL = ()
+DEBUG = False
 
 # The builder loads DLLs and resolves exports itself: dll("user32.dll").MessageBoxA(NULL, s("text"), s("caption"), MB_OK) needs neither call.
 hmod = k32.LoadLibraryA(s("user32.dll"))
@@ -279,6 +281,8 @@ k32.GetProcAddress(hmod, s("MessageBoxA"))
 | `MAX_SIZE` | `None`, or the most bytes the shellcode may take. |
 | `EXIT` | `"terminate"` for `TerminateProcess(-1, 0)`, `"exit"` for `ExitProcess(0)`, `"ret"` to restore the registers and return. |
 | `XOR_ENCODER` | `True` prepends a XOR decoder stub, as plan B when a bad byte remains. |
+| `CDECL` | Export names the caller must clean up after, beyond the ones the builder knows. |
+| `DEBUG` | `True` puts an `int3` after every name lookup, taken only when the lookup came back 0. |
 | `k32.<Api>(args)` | One call to kernel32.dll. Write one call per line, in execution order. Export names are case-sensitive. |
 | `dll("name").<Api>(args)` | One call to another DLL, which the builder loads once with `LoadLibraryA`. |
 
@@ -291,6 +295,16 @@ k32.WriteFile(handle, ...)
 
 The name holds the call's position, captured when the call ran, so another call inserted above it cannot move it.
 
+`buf(size)` binds the same way. Bind it to a name, and every call that takes the name gets one address, so one API can fill the buffer and the next can read it:
+
+```python
+path = buf(260)
+k32.GetTempPathA(260, path)
+k32.lstrcatA(path, s("out.txt"))
+```
+
+A `buf(size)` written inline is its own space, for an out-parameter that nothing else reads. The listing names each one, as in `arg1 = buf(260) #1, scratch at ebp-0x184`, and the number after the hash is the buffer's identity. Two lines that report the same offset are the same buffer.
+
 Each argument is listed in prototype order and pushed in reverse:
 
 | Argument | Pushed value |
@@ -300,13 +314,13 @@ Each argument is listed in prototype order and pushed in reverse:
 | `s("text")` | The address of the NUL-terminated string, pushed on the stack before the arguments. |
 | `w("text")` | The same for a UTF-16LE string, for W APIs. |
 | the name of an earlier call | That call's return value, such as a handle. |
-| `buf(size)` | The address of `size` bytes of scratch space below EBP, for out-parameters. The space is not zeroed. |
+| `buf(size)` | The address of `size` bytes of scratch space below EBP, for out-parameters. The space is not zeroed. Every call that takes one `buf()` result gets one address. |
 | `base("dll")` | The base address of kernel32.dll or of a DLL the builder loads. |
 | `ref(n)` | The return value of call `n`, counted from 1. The older literal form below uses it. |
 
 The builder defines these Win32 constants under their MSDN names: `NULL`, `GENERIC_READ`, `GENERIC_WRITE`, `FILE_SHARE_READ`, `FILE_SHARE_WRITE`, `CREATE_NEW`, `CREATE_ALWAYS`, `OPEN_EXISTING`, `OPEN_ALWAYS`, `TRUNCATE_EXISTING`, `FILE_ATTRIBUTE_NORMAL`, `SW_HIDE`, `SW_SHOWNORMAL`, `SW_SHOW`, `MB_OK`, `MEM_COMMIT`, `MEM_RESERVE`, `PAGE_READWRITE`, `PAGE_EXECUTE_READWRITE`. Any other constant goes in as its number.
 
-Three configs:
+Four configs:
 
 ```python
 # Run a command, then end the process.
@@ -323,20 +337,66 @@ handle = k32.CreateFileA(s("C:\\Users\\Public\\out.txt"), GENERIC_WRITE, 0, NULL
 k32.WriteFile(handle, s("hello"), 5, buf(4), NULL)
 k32.CloseHandle(handle)
 EXIT = "ret"
+
+# Format text into a buffer, then write that buffer. wsprintfA is cdecl and
+# returns the length, which WriteFile takes as the count.
+text = buf(64)
+pid = k32.GetCurrentProcessId()
+written = dll("user32.dll").wsprintfA(text, s("pid=%u"), pid)
+handle = k32.CreateFileA(s("C:\\Users\\Public\\pid.txt"), GENERIC_WRITE, 0, NULL,
+                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+k32.WriteFile(handle, text, written, buf(4), NULL)
+k32.CloseHandle(handle)
+EXIT = "exit"
 ```
 
+#### Calling conventions
+
+Win32 is stdcall, where the API drops its own arguments, so the generated call needs no cleanup. A cdecl export leaves that to the caller. The builder carries a table of the exports that are cdecl and drops their arguments itself: `wsprintfA`, `wsprintfW`, `sprintf`, `swprintf`, `_snprintf`, `_snwprintf`, `_vsnprintf`, `_vsnwprintf`, `printf`, `sscanf`, `swscanf`, `memcpy`, `memmove`, `memset`, `strcpy`, `strcat`, `strlen`, `strcmp`, `wcscpy`, `wcscat`, `wcslen`, `malloc`, `free`, `atoi`, `_itoa`, `system`, and `exit`. The varargs formatters cannot know their own argument count, and the C runtime in msvcrt.dll and in ntdll.dll is cdecl throughout.
+
+For any other cdecl export, name it in `CDECL` or call it through `.cdecl`:
+
+```python
+CDECL = ("MyPrintf",)
+dll("mine.dll").MyPrintf(buf(64), s("%u"), 1)
+dll("mine.dll").OtherPrintf.cdecl(buf(64), s("%u"), 1)
+```
+
+Both routes add the name to one registry, which the emitter reads once per call. The literal `CALLS` form has no call site to mark, so it uses `CDECL`. A cdecl call is followed by the shortest clean way off those pushes: `add esp, N`, `sub esp, -N`, `lea esp, [esp+N]`, or `pop ecx` once per argument. Forbidding `0x10` turns `add esp, 0x10` into `sub esp, -0x10` rather than planting a bad byte. `CDECL` holding one string instead of a sequence of names fails the build.
+
 The older literal form still works. `CALLS = [(dll, api, [args])]`, with `ref(n)` for the result of call `n`, assembles the same bytes as the same calls written one per line, and `tests/manual/sc_builder/check.py` checks that for the command and for the file write. The one-call-per-line form exists because `ref(n)` is a position, not a call. Insert a call above the `CreateFileA` and every later `ref(n)` names the call before the one you meant, while the build still reports 0 bad bytes and 0 problems. A name is bound when its call runs, so a call inserted above it cannot move it. A `CONFIG` block that holds both forms fails to build and prints `CONFIG mixes both call forms. Keep either the literal CALLS list or the recorded k32 and dll() calls`.
+
+#### The registers the fixed code runs on
+
+The PEB walk and the resolver are fixed code, but which register fills each role in them is not. The module base, the export-name counter, the running hash, and the pointer into module data take EBX, ECX, EDX, and EDI in whichever order assembles clean, and the builder keeps the shortest such order. EAX and ESI never move: EAX is the resolver's return value and the destination `lodsb` writes, ESI the address it reads.
+
+The choice matters because a register decides a ModRM byte. `mov ebx, dword ptr [esp+0x18]`, the line that reads the resolver's first argument, is `8b 5c 24 18`, and `5c` is a bad character in the OSED Lab14 and Lab15 transport, which forbids `00 0A 0D 2E 3A 5C`. Against that set only 2 of the 24 orders are clean, so no single swap would do. `mov ecx, dword ptr [esp+0x18]` is `8b 4c 24 18`, which is why the builder reports `base ecx` there. Against a set the course order already survives, it reports `base ebx, counter ecx` and assembles the same bytes as before.
+
+The counter keeps `jecxz` when it sits in ECX, which is two bytes shorter than the `test` and `jz` the other registers need, so the shortest-first rule prefers ECX for it. When no order is clean and `XOR_ENCODER` is `False`, the build fails with `no register assignment keeps the PEB walk and the resolver clear of <bytes>`. With the encoder on, the order with the fewest bad bytes wins and the stub covers them.
+
+#### Trap a failed lookup
+
+A wrong hash or a misspelled export leaves the resolver returning 0. The slot holds 0, and the shellcode calls address 0 several instructions later, far from the mistake. `DEBUG = True` puts a `test` and an `int3` after every lookup, the `LoadLibraryA` bases included, so you stop at the lookup that failed instead. The jump clears its own `int3`, so it is two bytes however far apart the lookups sit and cannot plant a bad byte of its own.
+
+It costs five bytes per lookup. A Lab15 config with seven calls goes from 485 to 525 bytes with eight lookups, so leave `DEBUG` at `False` for the payload you deliver. With `0xcc` in `BADCHARS` the build fails with `DEBUG needs the int3 byte 0xcc, which BADCHARS forbids`.
+
+Each `int3` names its lookup in the listing, as in `int3  ; DEBUG: user32.dll!wsprintfA came back 0`. Under a debugger, the address you stop at names the lookup. Without a debugger, the exception address does the same. A Lab15 config with `wsprintfA` misspelled as `wsprintfQ` reported `excecao 0x80000003 em 0BCC0838` from a load address of `0BCC0738`, so offset `0x100`, which the listing gives as the `wsprintfQ` trap. The same config with `DEBUG = False` reported `excecao 0xc0000005 em 00000000`, which says a call went to 0 but not which one.
+
+#### What the generated code does
 
 The generated code has the same prologue, PEB walk, and backward-call resolver as `sc.template`. Then it resolves each API once: `LoadLibraryA` first when a DLL needs loading, each DLL base into its own slot, then every API address into a slot next to EBP, so a call is `call dword ptr [ebp-0x..]`. Before each call it pushes the call's strings, last dword first, and saves each address in a slot. A dword that holds a bad character is loaded as `mov eax, value ^ key ; xor eax, key`, with a key byte chosen so that both bytes are clean, and falls back to `not`, `neg`, or an `add`/`sub` split. The arguments follow in reverse, then the call. The call's result goes to a slot when a later call reads it, through a bound name or through `ref()`. Slot offsets that are bad characters are skipped.
 
 The script prints the ROR13 table, which you can check against `dx @$osed().sc.hash("<api>", "ROR13")`. It assembles each line alone at its final offset with Keystone and compares the result with one whole assembly. It lists the code, disassembled by Capstone when it is installed (and checked to decode line by line) or as the assembler input otherwise. It reports every bad byte with its offset and line, every `call` with a forward or `00`-holding rel32, and the size against `MAX_SIZE`. It writes `shellcode.bin` and prints a `shellcode += b"\x.."` literal. Exit code 1 means a check failed.
 
-With `XOR_ENCODER = True` the script prepends a stub of about 20 bytes, 22 for the 277-byte command above. A forward `jmp` to a backward `call` gives the encoded body's address, the stub XORs each byte in place with one key, and `ret` jumps into the decoded code. The key is the first one that keeps both the stub and the encoded body clean. The stub writes over the code, so the page must be writable, and the script prints that warning.
+With `XOR_ENCODER = True` the script prepends a stub of about 20 bytes, 22 for the 277-byte command above, for 299 bytes in all. A forward `jmp` to a backward `call` gives the encoded body's address, the stub XORs each byte in place with one key, and `ret` jumps into the decoded code. The key is the first one that keeps both the stub and the encoded body clean. The stub writes over the code, so the page must be writable, and the script prints that warning.
+
+The encoder changes what counts as a problem. The body never reaches the transport as written, so its bad bytes are printed as information under `[i] the body holds N bad byte(s) as written, which is what the encoder is for` and the build still exits 0. What must be clean is what the transport carries, which is the stub plus the encoded body. A forward `call` stays a problem either way, because the decoded body executes it. When no key works, the body's bad bytes become problems again, since then nothing decodes them.
 
 The run of `python sc_builder.py` for the first config, with `BADCHARS = b"\x00\x0a\x0d\x20\x2f"`, starts and ends like this:
 
 ```text
 [+] 1 call(s), exit terminate, bad chars 00 0a 0d 20 2f
+[+] PEB walk and resolver registers: base ebx, counter ecx, hash edx, exports edi, eax result, esi name cursor
 [+] ROR13 hashes; check one in WinDbg with dx @$osed().sc.hash("<api>", "ROR13")
     api                      dll              hash
     WinExec                  kernel32.dll     0x0e8afe98
@@ -353,4 +413,20 @@ The run of `python sc_builder.py` for the first config, with `BADCHARS = b"\x00\
 [+] wrote shellcode.bin
 ```
 
-`tests/manual/sc_builder/check.py` builds seven configs: the command above, the same command as a literal `CALLS` list, the message box, the file write, the file write as a literal list, the file write with a `CreateDirectoryA` call inserted above the `CreateFileA`, and the command with `XOR_ENCODER = True`. Each must exit 0 with no bad byte. Each literal config must assemble to the same bytes as the one-call-per-line config it mirrors, and the config with the inserted call must report the handle as `ref(2)`, with no `ref(1)` and no stored result for the inserted call. An eighth config holds both call forms and must fail. With `--bundle dist/osed-legacy.js` it also checks that `sc.builder` with the matching tasks builds the same bytes as the command. The command, the file write, and the XOR-encoded command ran in the `tests/manual/sc_writer/loader.c` loader in a 32-bit process on Windows 10 build 19045 and wrote their files.
+`tests/manual/sc_builder/check.py` builds 12 configs, each of which must exit 0 with no bad byte:
+
+| Config | What it pins |
+| --- | --- |
+| `a`, `a_literal` | The command above, written one call per line and as a literal `CALLS` list. |
+| `b` | The message box, which loads user32.dll. |
+| `c`, `c_literal` | The file write, in both forms. |
+| `c_inserted` | The file write with a `CreateDirectoryA` call inserted above the `CreateFileA`. |
+| `lab_badchars` | The Lab14 command against `00 0A 0D 2E 3A 5C`, which must not leave the module base on EBX. |
+| `buffers` | A named `buf(260)` passed to three calls, plus an inline `buf(4)`, which must report two frame offsets and no more. |
+| `cdecl` | `wsprintfA` from the table, one name from `CDECL`, and one marked with `.cdecl`, against two stdcall calls that get no cleanup. |
+| `xor_needed`, `d` | `XOR_ENCODER = True`, over a body that needs it and over one that does not. |
+| `debug` | `DEBUG = True`, which must plant one named `int3` per lookup. |
+
+Each literal config must assemble to the same bytes as the one-call-per-line config it mirrors, and `c_inserted` must report the handle as `ref(2)`, with no `ref(1)` and no stored result for the inserted call. Four more configs must fail: one that holds both call forms, one whose bad characters leave no usable XOR key, one that asks for `DEBUG` with `0xcc` forbidden, and one whose `CDECL` is a single string. With `--bundle dist/osed-legacy.js` it also checks that `sc.builder` with the matching tasks builds the same bytes as the command.
+
+The command, the file write, and the XOR-encoded command ran in the `tests/manual/sc_writer/loader.c` loader in a 32-bit process on Windows 10 build 19045 and wrote their files. The Lab14 command, the Lab15 formatter, a buffer composed by `GetTempPathA` and `lstrcatA`, and an encoded body ran against the Lab14 and Lab15 benches on the OSED-DEV clone. `lab/v2/prove_sc_builder.py` in the OSED lab tree rebuilds and reruns all of them.

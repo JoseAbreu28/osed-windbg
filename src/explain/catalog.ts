@@ -1062,11 +1062,11 @@ export const EXPLANATIONS: ExplainEntry[] = [
     aliases: ["sc_builder"],
     summary: "sc_builder.py, one API call per line, checked shellcode",
     what: "Prints sc_builder.py, a Python builder where you write one API call per line in its CONFIG block and get shellcode checked for bad bytes, size and forward calls.",
-    how: "Fills CONFIG from <tasks> (the same tasks as sc.template, plus xor and max=). In CONFIG you write one call per line, k32 for kernel32.dll and dll(\"name\") for a DLL the builder loads with LoadLibraryA, and you bind a call to a name to pass its result to a later call. The script resolves each API once through the PEB walk and a ROR13 export lookup, builds each argument with the shortest clean instruction form, and assembles and checks the result with Keystone.",
+    how: "Fills CONFIG from <tasks> (the same tasks as sc.template, plus xor and max=). In CONFIG you write one call per line, k32 for kernel32.dll and dll(\"name\") for a DLL the builder loads with LoadLibraryA, and you bind a call or a buf(size) to a name to pass the same result or the same address to a later call. The script resolves each API once through the PEB walk and a ROR13 export lookup, builds each argument with the shortest clean instruction form, and assembles and checks the result with Keystone. Every choice is made against BADCHARS, the registers the PEB walk and the resolver run on included, so a bad character in a ModRM byte moves the register instead of failing the build. It drops the arguments after a cdecl call, which it knows for the varargs formatters and the C runtime and takes from CDECL or .cdecl for anything else.",
     when: "Shellcode step, for any API sequence beyond the sc.template tasks.",
     args: [{ name: "tasks", meaning: "Tasks and options that fill CONFIG.", optional: true, rest: true, values: TEMPLATE_TASKS }],
     example: "dx @$osed().sc.builder(\"winexec=calc.exe\", \"exit\", \"bad=00 0A 0D\", \"xor\", \"max=400\")",
-    output: "The script. Save it as sc_builder.py and run it: it prints the ROR13 table, the code, each bad byte or forward call, the size, and writes shellcode.bin. Exit code 1 means a check failed.",
+    output: "The script. Save it as sc_builder.py and run it: it prints the ROR13 table, the registers it chose, the code, each bad byte or forward call, the size, and writes shellcode.bin. Exit code 1 means a check failed. Set DEBUG = True in CONFIG while you debug, for an int3 after every name lookup that came back 0.",
     report: "Built the shellcode with sc.builder for the tasks <tasks>; the generated sc_builder.py assembled it and checked it for bad characters, size and call encodings.",
   },
 

@@ -11757,17 +11757,17 @@ var osed_bundle = (() => {
     },
     {
       name: "sc.builder",
-      description: 'Prints sc_builder.py, a Python 3 builder for custom x86 shellcode driven by the CONFIG block at its top: BADCHARS, MAX_SIZE, EXIT, XOR_ENCODER, and one API call per line in execution order, written as k32.Api(args) for kernel32.dll or dll("name").Api(args) for a DLL the builder loads. It prints the ROR13 hash of each API, walks the PEB to kernel32, loads other DLLs once with LoadLibraryA, caches each API address next to EBP, and pushes strings and constants without bad bytes. Keystone assembles it line by line; the script reports the size, every bad byte with its offset and line, and forward calls, and Capstone (when installed) disassembles the result. It writes shellcode.bin and prints a Python literal. Exit code 1 means a check failed.',
+      description: 'Prints sc_builder.py, a Python 3 builder for custom x86 shellcode driven by the CONFIG block at its top: BADCHARS, MAX_SIZE, EXIT, XOR_ENCODER, CDECL, DEBUG, and one API call per line in execution order, written as k32.Api(args) for kernel32.dll or dll("name").Api(args) for a DLL the builder loads. It prints the ROR13 hash of each API, walks the PEB to kernel32, loads other DLLs once with LoadLibraryA, caches each API address next to EBP, and pushes strings and constants without bad bytes. Nothing is chosen without being checked against BADCHARS: the registers the PEB walk and the resolver run on, the form of every constant and string push, and the stack cleanup after a cdecl call. Keystone assembles it line by line; the script reports the size, every bad byte with its offset and line, and forward calls, and Capstone (when installed) disassembles the result. It writes shellcode.bin and prints a Python literal. Exit code 1 means a check failed.',
       usage: 'dx @$osed().sc.builder(task..., "bad=<list>"?, "xor"?, "max=<bytes>"?)',
       examples: [
         { label: "The script with its default CONFIG", command: "dx @$osed().sc.builder()" },
         { label: "Hidden command, space and slash are bad", command: 'dx @$osed().sc.builder("show=0", "winexec=cmd.exe /c whoami > C:\\\\out.txt", "terminate", "bad=00 0A 0D 20 2F")' },
         { label: "Plan B: XOR decoder stub and a size limit", command: 'dx @$osed().sc.builder("winexec=calc.exe", "exit", "bad=00 0A 0D", "xor", "max=400")' }
       ],
-      details: 'With no arguments the script prints exactly as shipped (tools/sc_builder.py in the repository). Arguments take the sc.template tasks (winexec=, loadlibrary=, getprocaddress=, exit, terminate, show=, bad=) and fill CONFIG from them, plus xor and max=<bytes>. For any other API sequence, write one call per line. Each arg is an int, a Win32 constant the builder defines (NULL, GENERIC_WRITE, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, SW_HIDE, MB_OK and others), s("text"), w("text") for W APIs, buf(size) for scratch space below EBP, base("dll"), or a name bound to an earlier call, as in handle = k32.CreateFileA(...) followed by k32.WriteFile(handle, ...). A name is bound when its call runs, so a call inserted above it cannot move it. The older literal CALLS = [(dll, api, [args])] list with ref(n) for the result of call n (counted from 1) still builds the same bytes, and a CONFIG block that holds both forms fails. EXIT is terminate, exit or ret.',
-      limitations: [`32-bit only. Forwarded exports (an export whose address is a "DLL.Name" string) are not followed; call the target DLL's export instead. buf() space is not zeroed.`],
+      details: `With no arguments the script prints exactly as shipped (tools/sc_builder.py in the repository). Arguments take the sc.template tasks (winexec=, loadlibrary=, getprocaddress=, exit, terminate, show=, bad=) and fill CONFIG from them, plus xor and max=<bytes>. For any other API sequence, write one call per line. Each arg is an int, a Win32 constant the builder defines (NULL, GENERIC_WRITE, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, SW_HIDE, MB_OK and others), s("text"), w("text") for W APIs, buf(size) for scratch space below EBP, base("dll"), or a name bound to an earlier call, as in handle = k32.CreateFileA(...) followed by k32.WriteFile(handle, ...). A name is bound when its call runs, so a call inserted above it cannot move it. buf(size) binds the same way: bind it to a name and every call that takes the name gets one address, so GetTempPathA can fill it and lstrcatA can append to it, while an inline buf(size) is its own space. Win32 is stdcall; the builder knows the varargs formatters (wsprintfA and the sprintf family) and the C runtime are cdecl and drops their arguments itself, and CDECL or .cdecl at the call site adds any other cdecl export. DEBUG = True puts an int3 after every name lookup, taken only when the lookup came back 0, at five bytes per lookup. With XOR_ENCODER = True the body's bad bytes are information, not problems, because the stub decodes them before they run. The older literal CALLS = [(dll, api, [args])] list with ref(n) for the result of call n (counted from 1) still builds the same bytes, and a CONFIG block that holds both forms fails. EXIT is terminate, exit or ret.`,
+      limitations: [`32-bit only. Forwarded exports (an export whose address is a "DLL.Name" string) are not followed; call the target DLL's export instead. buf() space is not zeroed. DEBUG needs the int3 byte 0xcc to be allowed.`],
       seeAlso: ["sc.template", "sc.hash", "sc.push_string"],
-      keywords: ["shellcode", "keystone", "capstone", "builder", "custom shellcode", "config", "ror13", "xor encoder"]
+      keywords: ["shellcode", "keystone", "capstone", "builder", "custom shellcode", "config", "ror13", "xor encoder", "cdecl", "wsprintfA", "buffer", "int3", "debug"]
     },
     {
       name: "sc.algorithms",
@@ -11886,10 +11886,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-20T14:25:08.260Z" : globalThis[key2];
+        value = true ? "2026-11-20T14:36:03.690Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "7353c05d3485" : globalThis[key2];
+        value = true ? "d61ed5b7a759" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -18887,11 +18887,11 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       aliases: ["sc_builder"],
       summary: "sc_builder.py, one API call per line, checked shellcode",
       what: "Prints sc_builder.py, a Python builder where you write one API call per line in its CONFIG block and get shellcode checked for bad bytes, size and forward calls.",
-      how: 'Fills CONFIG from <tasks> (the same tasks as sc.template, plus xor and max=). In CONFIG you write one call per line, k32 for kernel32.dll and dll("name") for a DLL the builder loads with LoadLibraryA, and you bind a call to a name to pass its result to a later call. The script resolves each API once through the PEB walk and a ROR13 export lookup, builds each argument with the shortest clean instruction form, and assembles and checks the result with Keystone.',
+      how: 'Fills CONFIG from <tasks> (the same tasks as sc.template, plus xor and max=). In CONFIG you write one call per line, k32 for kernel32.dll and dll("name") for a DLL the builder loads with LoadLibraryA, and you bind a call or a buf(size) to a name to pass the same result or the same address to a later call. The script resolves each API once through the PEB walk and a ROR13 export lookup, builds each argument with the shortest clean instruction form, and assembles and checks the result with Keystone. Every choice is made against BADCHARS, the registers the PEB walk and the resolver run on included, so a bad character in a ModRM byte moves the register instead of failing the build. It drops the arguments after a cdecl call, which it knows for the varargs formatters and the C runtime and takes from CDECL or .cdecl for anything else.',
       when: "Shellcode step, for any API sequence beyond the sc.template tasks.",
       args: [{ name: "tasks", meaning: "Tasks and options that fill CONFIG.", optional: true, rest: true, values: TEMPLATE_TASKS }],
       example: 'dx @$osed().sc.builder("winexec=calc.exe", "exit", "bad=00 0A 0D", "xor", "max=400")',
-      output: "The script. Save it as sc_builder.py and run it: it prints the ROR13 table, the code, each bad byte or forward call, the size, and writes shellcode.bin. Exit code 1 means a check failed.",
+      output: "The script. Save it as sc_builder.py and run it: it prints the ROR13 table, the registers it chose, the code, each bad byte or forward call, the size, and writes shellcode.bin. Exit code 1 means a check failed. Set DEBUG = True in CONFIG while you debug, for an int3 after every name lookup that came back 0.",
       report: "Built the shellcode with sc.builder for the tasks <tasks>; the generated sc_builder.py assembled it and checked it for bad characters, size and call encodings."
     },
     // Strings

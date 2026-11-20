@@ -140,7 +140,7 @@ This page lists every command that the script registers. Each name links to its 
 | [`sc.push_string`](commands/shellcode.md#scpush_string) | [Shellcode](commands/shellcode.md) | Print x86 pushes that build a NUL-terminated string on the stack with no `00` or bad byte. |
 | [`sc.resolve`](commands/pe-api.md#scresolve) | [PE and API](commands/pe-api.md) | Give the address of one exported function. |
 | [`sc.template`](commands/shellcode.md#sctemplate) | [Shellcode](commands/shellcode.md) | Print a complete `build_sc.py` that assembles custom shellcode with Keystone and reports every bad byte. |
-| [`sc.builder`](commands/shellcode.md#scbuilder) | [Shellcode](commands/shellcode.md) | Print `sc_builder.py`, a config-driven builder that turns a list of API calls into checked shellcode. |
+| [`sc.builder`](commands/shellcode.md#scbuilder) | [Shellcode](commands/shellcode.md) | Print `sc_builder.py`, a config-driven builder that turns one API call per line into shellcode checked against `BADCHARS`. |
 | `sc_builder` | [Shellcode](commands/shellcode.md) | Same as [`sc.builder`](commands/shellcode.md#scbuilder). |
 | `sc_call_frame` | [Shellcode](commands/shellcode.md) | Same as [`sc.call_frame`](commands/shellcode.md#sccall_frame). |
 | `sc_push_string` | [Shellcode](commands/shellcode.md) | Same as [`sc.push_string`](commands/shellcode.md#scpush_string). |
