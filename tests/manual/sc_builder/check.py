@@ -32,6 +32,7 @@ Case = collections.namedtuple("Case", "config expect absent distinct")
 Case.__new__.__defaults__ = ((), {})
 
 BAD_A = r'b"\x00\x0a\x0d\x20\x2f"'
+BAD_LAB = r'b"\x00\x0a\x0d\x2e\x3a\x5c"'  # the OSED Lab14 and Lab15 transport: '.', ':' and '\' are bad
 FILE_C = r"C:\\Users\\Public\\sc_builder_c.txt"
 CASES = {
     "a": Case(rf'''BADCHARS = {BAD_A}
@@ -85,6 +86,14 @@ handle = k32.CreateFileA(s("{FILE_C}"), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, F
 k32.WriteFile(handle, s("builder ok"), 10, buf(4), NULL)
 k32.CloseHandle(handle)
 ''', ["ref(2) = CreateFileA result", "arg1 = ref(2)"], ["CreateDirectoryA result", "ref(1)"]),
+    "lab_badchars": Case(rf'''BADCHARS = {BAD_LAB}
+MAX_SIZE = None
+EXIT = "terminate"
+XOR_ENCODER = False
+
+k32.WinExec(s("cmd.exe /c echo ok> C:\\Users\\Public\\sc_builder_lab.txt"), SW_HIDE)
+k32.Sleep(2000)
+''', ["PEB walk and resolver registers:", "(xor key"], ["base ebx,"]),
     "buffers": Case(rf'''BADCHARS = b"\x00\x0a\x0d\x20"
 MAX_SIZE = None
 EXIT = "ret"

