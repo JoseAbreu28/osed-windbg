@@ -629,6 +629,8 @@ export function builderConfig(plan: BuilderPlan): string[] {
     `MAX_SIZE = ${plan.maxSize ?? "None"}`,
     `EXIT = "${exit}"`,
     `XOR_ENCODER = ${plan.xor ? "True" : "False"}`,
+    "CDECL = ()",
+    "DEBUG = False",
     "",
     ...direct,
     ...calls,

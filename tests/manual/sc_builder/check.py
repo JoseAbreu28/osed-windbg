@@ -145,6 +145,18 @@ XOR_ENCODER = True
 k32.WinExec(s("cmd.exe /c echo ok > C:\\Users\\Public\\sc_builder_f.txt"), SW_HIDE)
 k32.Sleep(2000)
 ''', ["[!] XOR_ENCODER:", "which is what the encoder is for"]),
+    "debug": Case(rf'''BADCHARS = {BAD_LAB}
+MAX_SIZE = None
+EXIT = "terminate"
+XOR_ENCODER = False
+DEBUG = True
+
+k32.WinExec(s("cmd.exe /c echo ok > C:\\Users\\Public\\sc_builder_g.txt"), SW_HIDE)
+k32.Sleep(2000)
+''', ["DEBUG: kernel32.dll!WinExec came back 0",
+      "DEBUG: kernel32.dll!Sleep came back 0",
+      "DEBUG: kernel32.dll!TerminateProcess came back 0"], (),
+        {r"int3 +; DEBUG: (\S+) came back 0": 3}),
 }
 SAME_BYTES = [("a", "a_literal"), ("c", "c_literal")]
 REJECTED = {
@@ -165,6 +177,22 @@ XOR_ENCODER = True
 
 k32.WinExec(s("calc.exe"), SW_HIDE)
 ''', "no XOR key keeps both the stub and the encoded body clean"),
+    "debug_needs_int3": (rf'''BADCHARS = b"\x00\x0a\x0d\xcc"
+MAX_SIZE = None
+EXIT = "terminate"
+XOR_ENCODER = False
+DEBUG = True
+
+k32.WinExec(s("calc.exe"), SW_HIDE)
+''', "DEBUG needs the int3 byte 0xcc, which BADCHARS forbids"),
+    "cdecl_one_string": (rf'''BADCHARS = {BAD_A}
+MAX_SIZE = None
+EXIT = "terminate"
+XOR_ENCODER = False
+CDECL = "MyPrintf"
+
+k32.WinExec(s("calc.exe"), SW_HIDE)
+''', "CDECL takes export names"),
 }
 TEMPLATE_A = ["show=0", "winexec=cmd.exe /c echo ok > C:\\Users\\Public\\sc_builder_a.txt", "terminate", "bad=00 0A 0D 20 2F"]
 

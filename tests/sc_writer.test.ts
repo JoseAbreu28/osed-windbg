@@ -229,6 +229,8 @@ describe("sc.builder", () => {
       "MAX_SIZE = 512",
       'EXIT = "terminate"',
       "XOR_ENCODER = True",
+      "CDECL = ()",
+      "DEBUG = False",
       "",
       'k32.WinExec(s("cmd.exe /c echo \\"ok\\" > C:\\\\o.txt"), 0)',
       "",
