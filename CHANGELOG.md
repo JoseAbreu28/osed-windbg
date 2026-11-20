@@ -7,6 +7,13 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-20 - Explain any command
+
+- Every call reachable from `@$osed()` returns an object with an `explain` property. `dx @$osed().sc.resolve("kernel32", "WinExec").explain` prints what the command does, how it works, when to use it, its arguments, how to read the output, and a report sentence, with the call's arguments and results filled into the placeholders. `explain()` lists all 106 explanations, and `explain("name", args...)` or `"explain"` as the first argument explains a command without running it. Read-only lookups run silently to fill their results.
+- Commands that returned `true` or `false` now return an object whose `success` field holds that value. `can_execute` keeps its answer in `value`.
+- The explanations live in `src/explain/catalog.ts`. `tests/explain.test.ts` fails when a reachable command has no entry or an entry uses an undeclared placeholder.
+- Classic WinDbg 10.0.19041 cannot call a property or read one on a function, so `.explain()` and `sc.resolve.explain` do not work there; the docs say so.
+
 ### 2026-11-19 - Config-driven shellcode builder
 
 - `sc.builder(task..., "bad=<list>"?, "xor"?, "max=<bytes>"?)` prints `sc_builder.py`, kept in the repository as `tools/sc_builder.py`. `npm run build` embeds it, and a test fails when the copies differ. Its `CONFIG` block takes `BADCHARS`, `MAX_SIZE`, `CALLS` as `(dll, api, [args])` with int, `s()`, `w()`, `ref(n)`, `buf(size)` and `base()` arguments, `EXIT` and `XOR_ENCODER`. Arguments fill `CONFIG` from the `sc.template` tasks.

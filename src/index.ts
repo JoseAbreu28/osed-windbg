@@ -47,6 +47,7 @@ import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCom
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
+import { createExplainCommand, wrapApi, type ExplainState } from "./explain/explain";
 import { buildBestApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, dwordIsByteSafe, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { buildExploitFrame } from "./rop/exploit_frame";
 import { verifyChain, parseManualChain, type VerificationReport } from "./rop/chain_verifier";
@@ -3294,6 +3295,14 @@ function bindApi(): OsedApi {
     return lastResult?.findings[0];
   };
 
+  const explainState = {
+    getLast: () => lastResult,
+    setLast: (result: CommandResult | undefined) => {
+      lastResult = result;
+    },
+  };
+  api.explain = createExplainCommand(api, explainState as ExplainState);
+  wrapApi(api, explainState as ExplainState);
   return api;
 }
 

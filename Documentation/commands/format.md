@@ -2,7 +2,7 @@
 
 Use these commands at a breakpoint on a `printf`-family call that takes your input as the format string. They decode x86 cdecl arguments only.
 
-Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../COMMANDS.md#conventions) explains byte lists, addresses, and optional arguments. `dx @$osed().help("<command>", "full")` prints the built-in help.
+Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../COMMANDS.md#conventions) explains byte lists, addresses, and optional arguments. `dx @$osed().help("<command>", "full")` prints the built-in help. Append `.explain` to any call, as in `dx @$osed().modules().explain`, for a plain-language explanation and a report sentence.
 
 | Command | What it does |
 | --- | --- |

@@ -2,7 +2,7 @@
 
 Use these commands for ASLR leaks, number conversion, help, and the state that the toolkit keeps between commands.
 
-Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../COMMANDS.md#conventions) explains byte lists, addresses, and optional arguments. `dx @$osed().help("<command>", "full")` prints the built-in help.
+Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../COMMANDS.md#conventions) explains byte lists, addresses, and optional arguments. `dx @$osed().help("<command>", "full")` prints the built-in help. Append `.explain` to any call, as in `dx @$osed().modules().explain`, for a plain-language explanation and a report sentence.
 
 | Command | What it does |
 | --- | --- |
@@ -12,6 +12,7 @@ Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../CO
 | [`leak.scan`](#leakscan) | Scan an address range, up to `0x10000` bytes, for pointer-sized values and classify each one. |
 | [`math`](#math) | Print a number as hex, unsigned, signed, little-endian bytes, and two's complement. |
 | [`help`](#help) | List the commands, or print the help for one command. |
+| [`explain`](#explain) | Explain a command in plain words, with a sentence for the exam report. |
 | [`version`](#version) | Print the version, build time, and git commit of the loaded bundle. |
 | [`reload`](#reload) | Clear the command registry and register every command again, without reloading the script file. |
 | [`last_result`](#last_result) | Return the full structured result of the last command. |
@@ -124,6 +125,25 @@ dx @$osed().help("rop")
 
 `help("all")` lists every command by category. `help("<name>", "full")` adds notes and limits. `help("?text")` searches names and descriptions. A category or namespace name, such as `"rop"` or `"sc"`, lists its commands. Most commands also print their help when you pass `"help"` as the only argument.
 
+### explain
+
+Explain a command in plain words, with a sentence for the exam report.
+
+```text
+explain(command?, args...)
+<any call>.explain
+```
+
+```text
+dx @$osed().explain()
+dx @$osed().explain("sc.resolve")
+dx @$osed().explain("sc.resolve", "kernel32", "WinExec")
+dx @$osed().sc.resolve("kernel32", "WinExec").explain
+dx @$osed().sc.resolve("explain", "kernel32", "WinExec")
+```
+
+`explain()` lists every command. The other forms print the sections `What it does`, `How it works`, `When to use`, `Arguments`, `Results`, `Example`, `Reading output`, and `Report`. A placeholder such as `<module>` takes the argument of that name, and a result such as `<address>` takes the value the command found. `.explain` on a call runs the command first. `explain("name", args...)` and `"explain"` as the first argument do not run it, except for read-only lookups such as `sc.resolve`, `sc.hash`, and `pattern_offset`, which run silently and leave `last_result()` unchanged. Write `.explain` without parentheses. [Explain any command](../../README.md#explain-any-command) shows the output.
+
 ### version
 
 Print the version, build time, and git commit of the loaded bundle.
@@ -165,7 +185,7 @@ last_result()
 dx @$osed().last_result()
 ```
 
-Most commands return only `true` or `false` to `dx`. Use `last_result()` to browse the findings, warnings, and errors.
+Most commands return only a `success` field and `explain` to `dx`. Use `last_result()` to browse the findings, warnings, and errors.
 
 ### last_summary
 

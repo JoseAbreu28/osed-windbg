@@ -34,9 +34,37 @@ The load prints a line such as `[+] osed loaded: v1.0.4 (<commit>, clean, built 
 
 - Pass byte lists as one string of hex bytes, for example `"00 0A 0D"`.
 - Pass addresses as numbers such as `0x0012F800` or arithmetic such as `0x0019ed34+8`. Cast pseudo-registers first, for example `(unsigned int)@$t0`, because the script rejects the 64-bit object that `@$t0` becomes.
-- Arguments are positional. `dx` does not accept JavaScript object literals. Most commands print their output and return `true` or `false`. `dx @$osed().last_result()` shows the full result.
+- Arguments are positional. `dx` does not accept JavaScript object literals. Most commands print their output and return an object whose `success` field is `true` or `false`. `dx @$osed().last_result()` shows the full result.
 
 The [command index](Documentation/COMMANDS.md#conventions) has the full conventions.
+
+## Explain any command
+
+Append `.explain` to the command you just ran. You get what the command does, how it works, when to use it in an exploit, its arguments, how to read its output, and a sentence for the exam report. Your arguments and the real results replace the placeholders:
+
+```text
+dx @$osed().sc.resolve("kernel32", "WinExec").explain
+dx @$osed().egghunter("w00t", "ntaccess", true, "00 0A 0D", "win10").explain
+```
+
+```text
+    Arguments        : <module> = kernel32: Module that exports the API, such as kernel32.
+                       <api> = WinExec: Exported name, case-sensitive.
+    Results          : <address> = 0x76E2F2F0: Address of the function.
+    ...
+    Report           : Resolved WinExec in kernel32 to 0x76E2F2F0 with sc.resolve by walking the module's export table in memory.
+```
+
+The command runs first and prints its normal output, then the explanation. To explain a command without running it, ask for it by name. The placeholders stay, or take the arguments you pass. A read-only lookup such as `sc.resolve` or `sc.hash` also runs silently to fill in its results:
+
+```text
+dx @$osed().explain("sc.resolve")
+dx @$osed().explain("sc.resolve", "kernel32", "WinExec")
+dx @$osed().sc.resolve("explain", "kernel32", "WinExec")
+dx @$osed().explain()
+```
+
+`explain()` lists every command with a one-line summary. Write `.explain` without parentheses: classic WinDbg cannot call a property, so `.explain()` fails with `Object on left side of a call operation is not callable`. `dx` also cannot read a property of a command itself, so `dx @$osed().sc.resolve.explain` fails with `Unable to bind name 'explain'`. Use `explain("sc.resolve")` instead.
 
 ## Exam workflow
 
@@ -229,7 +257,7 @@ Each file documents one category with a signature, examples, and the meaning of 
 | [Shellcode](Documentation/commands/shellcode.md) | `egghunter`, `encode`, `nop`, `sc.push_string`, `sc.call_frame`, `sc.template`, `sc.builder` |
 | [Strings](Documentation/commands/strings.md) | `str.find`, `str.refs`, `str.read`, `str.bytes` |
 | [PE and API](Documentation/commands/pe-api.md) | `sc.iat_find`, `sc.iat_ptr`, `sc.export`, `sc.hash`, `sc.peb`, and 15 more |
-| [Leak, math, and session](Documentation/commands/tools.md) | `leak.analyze`, `leak.base`, `math`, `help`, `last_result`, and 9 more |
+| [Leak, math, and session](Documentation/commands/tools.md) | `leak.analyze`, `leak.base`, `math`, `help`, `explain`, and 10 more |
 
 ## Known limitations
 
@@ -243,6 +271,7 @@ Each file documents one category with a signature, examples, and the meaning of 
 - `badchar_function` is a new command.
 - `badchars` and `badchar_find` end with the `Exploit line` and the `Next command` for the next run.
 - `badchar_function(badchars, space)` and `badchar_find(..., start, size)` test the array in blocks when only a few bytes fit after EIP.
+- `.explain` on any call, and `explain()`, explain each command with a report sentence. Commands that returned `true` or `false` now return an object with `success`.
 
 ## Build from source
 

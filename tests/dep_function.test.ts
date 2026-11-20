@@ -45,10 +45,10 @@ describe("dep_function", () => {
   test("registers positional invocation and built-in help", () => {
     const api = loadApi();
     expect(normalizeInvocation("dep_function", ["VA"])).toEqual({ method: "VA" });
-    expect(api.dep_function("VA")).toBe(true);
+    expect(api.dep_function("VA").success).toBe(true);
     expect(api.last_result()).toMatchObject({ command: "dep_function", success: true });
     logs.length = 0;
-    expect(api.help("dep_function")).toBe(true);
+    expect(api.help("dep_function").success).toBe(true);
     expect(logs.join("")).toContain('dep_function("VA"');
     expect(logs.join("")).toContain('dep_function("WPM"');
   });

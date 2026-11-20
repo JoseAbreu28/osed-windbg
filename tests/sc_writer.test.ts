@@ -67,7 +67,7 @@ describe("sc.push_string", () => {
   });
 
   test.each(["a", "ab", "abc", "abcd", "abcde", "calc.exe"])("builds %j + NUL at ESP with no 00 byte", (text) => {
-    expect(api.sc.push_string(text)).toBe(true);
+    expect(api.sc.push_string(text).success).toBe(true);
     const lines = lastFinding(api).lines as AsmLine[];
     expect(lines.flatMap((line) => line.bytes!)).not.toContain(0x00);
     const run = execute(lines);
@@ -87,7 +87,7 @@ describe("sc.push_string", () => {
   test("avoids every given bad char and still builds the string, with a pointer in ebx", () => {
     const text = "cmd.exe /c echo ok > C:\\t\\sc.txt";
     const bad = [0x00, 0x0a, 0x0d, 0x20, 0x2e, 0x63, 0x68];
-    expect(api.sc.push_string(text, "00 0A 0D 20 2E 63 68", "ebx")).toBe(true);
+    expect(api.sc.push_string(text, "00 0A 0D 20 2E 63 68", "ebx").success).toBe(true);
     const lines = lastFinding(api).lines as AsmLine[];
     for (const byte of lines.flatMap((line) => line.bytes!)) expect(bad).not.toContain(byte);
     const run = execute(lines);
@@ -96,9 +96,9 @@ describe("sc.push_string", () => {
   });
 
   test("rejects an empty string, ESP as the pointer register, and unreadable bad chars", () => {
-    expect(api.sc.push_string("")).toBe(false);
-    expect(api.sc.push_string("calc", "", "esp")).toBe(false);
-    expect(api.sc.push_string("calc", "zz")).toBe(false);
+    expect(api.sc.push_string("").success).toBe(false);
+    expect(api.sc.push_string("calc", "", "esp").success).toBe(false);
+    expect(api.sc.push_string("calc", "zz").success).toBe(false);
   });
 });
 
@@ -109,7 +109,7 @@ describe("sc.call_frame", () => {
   });
 
   test("pushes WinExec arguments in reverse, then its ROR13 hash and the resolver calls", () => {
-    expect(api.sc.call_frame("WinExec", "<ptr to cmd>", "1")).toBe(true);
+    expect(api.sc.call_frame("WinExec", "<ptr to cmd>", "1").success).toBe(true);
     const finding = lastFinding(api);
     expect(finding.hash).toBe("0x0e8afe98");
     const asm = (finding.lines as AsmLine[]).map((line) => line.asm);
@@ -119,7 +119,7 @@ describe("sc.call_frame", () => {
   });
 
   test("pushes zero and hashes without 00 or bad bytes", () => {
-    expect(api.sc.call_frame("ExitProcess", "0", "bad=00 0A 0D 7E")).toBe(true);
+    expect(api.sc.call_frame("ExitProcess", "0", "bad=00 0A 0D 7E").success).toBe(true);
     const lines = lastFinding(api).lines as AsmLine[];
     const bytes = lines.flatMap((line) => line.bytes ?? []);
     for (const byte of [0x00, 0x0a, 0x0d, 0x7e]) expect(bytes).not.toContain(byte);
@@ -135,12 +135,12 @@ describe("sc.call_frame", () => {
   });
 
   test("still hashes an unknown API, with a warning, and rejects a malformed name", () => {
-    expect(api.sc.call_frame("NotARealApi", "eax")).toBe(true);
+    expect(api.sc.call_frame("NotARealApi", "eax").success).toBe(true);
     expect(output()).toContain("is not in the prototype table");
     expect(lastFinding(api).known).toBe(false);
-    expect(api.sc.call_frame("winexec", "ebx", "1")).toBe(true);
+    expect(api.sc.call_frame("winexec", "ebx", "1").success).toBe(true);
     expect(lastFinding(api).hash).toBe("0x0e8afe98");
-    expect(api.sc.call_frame("Win Exec")).toBe(false);
+    expect(api.sc.call_frame("Win Exec").success).toBe(false);
   });
 });
 
@@ -153,7 +153,7 @@ describe("sc.template", () => {
   const script = (): string => lastFinding(api).script as string;
 
   test("prints a Keystone build script with resolver, call frames and epilogue", () => {
-    expect(api.sc.template("winexec=calc.exe", "exit")).toBe(true);
+    expect(api.sc.template("winexec=calc.exe", "exit").success).toBe(true);
     const text = script();
     for (const piece of ["Ks(KS_ARCH_X86, KS_MODE_32)", "BADCHARS = bytes([0x00])", "shellcode.bin", '"pushad",', '"add esp, 0xfffff810",',
       '"mov eax, dword ptr fs:[ecx+0x30]",', '"resolve_hash:",', '"push 0xe8afe98",', '"push 0x73e2d87e",', '"popad",']) {
@@ -164,15 +164,15 @@ describe("sc.template", () => {
   });
 
   test("passes the bad chars into the script and keeps the generated lines clean", () => {
-    expect(api.sc.template("show=0", "winexec=cmd.exe /c echo ok > C:\\o.txt", "terminate", "bad=00 0A 0D 20")).toBe(true);
+    expect(api.sc.template("show=0", "winexec=cmd.exe /c echo ok > C:\\o.txt", "terminate", "bad=00 0A 0D 20").success).toBe(true);
     expect(script()).toContain("BADCHARS = bytes([0x00, 0x0a, 0x0d, 0x20])");
     expect(script()).toContain("0x78b5b983");
   });
 
   test("defaults to calc and ExitProcess, and names the valid tasks on a typo", () => {
-    expect(api.sc.template()).toBe(true);
+    expect(api.sc.template().success).toBe(true);
     expect(script()).toContain("Task 2: ExitProcess(0)");
-    expect(api.sc.template("winexex=calc.exe")).toBe(false);
+    expect(api.sc.template("winexex=calc.exe").success).toBe(false);
     expect(output()).toContain("Tasks: winexec=<command line>");
   });
 });
@@ -180,13 +180,13 @@ describe("sc.template", () => {
 describe("writer help", () => {
   test("lists the dotted writers under shellcode and resolves their help", () => {
     const api = loadApi();
-    expect(api.help("all")).toBe(true);
+    expect(api.help("all").success).toBe(true);
     const all = output();
     for (const name of ["sc.push_string", "sc.call_frame", "sc.template", "sc.builder"]) expect(all).toContain(name);
     expect(all).not.toContain("sc_template");
     expect(all).not.toContain("sc_builder ");
     logs.length = 0;
-    expect(api.help("shellcode")).toBe(true);
+    expect(api.help("shellcode").success).toBe(true);
     expect(output()).toContain("sc.template");
     logs.length = 0;
     api.sc.template("help");
@@ -213,7 +213,7 @@ describe("sc.builder", () => {
   });
 
   test("prints the shipped script with no arguments", () => {
-    expect(api.sc.builder()).toBe(true);
+    expect(api.sc.builder().success).toBe(true);
     expect(script()).toBe(shipped);
     const text = output();
     expect(text).toContain("Save everything below this line as sc_builder.py");
@@ -222,7 +222,7 @@ describe("sc.builder", () => {
   });
 
   test("fills only the CONFIG block from sc.template tasks, xor and max", () => {
-    expect(api.sc.builder("show=0", 'winexec=cmd.exe /c echo "ok" > C:\\o.txt', "terminate", "bad=00 0A 0D 20 2F", "xor", "max=0x200")).toBe(true);
+    expect(api.sc.builder("show=0", 'winexec=cmd.exe /c echo "ok" > C:\\o.txt', "terminate", "bad=00 0A 0D 20 2F", "xor", "max=0x200").success).toBe(true);
     expect(outsideConfig(script())).toBe(outsideConfig(shipped));
     expect(config(script()).split("\n")).toEqual([
       'BADCHARS = b"\\x00\\x0a\\x0d\\x20\\x2f"',
@@ -237,20 +237,20 @@ describe("sc.builder", () => {
   });
 
   test("maps loadlibrary and getprocaddress to calls, and no exit task to ret", () => {
-    expect(api.sc.builder("loadlibrary=user32.dll", "getprocaddress=MessageBoxA")).toBe(true);
+    expect(api.sc.builder("loadlibrary=user32.dll", "getprocaddress=MessageBoxA").success).toBe(true);
     const block = config(script());
     expect(block).toContain('("kernel32.dll", "LoadLibraryA", [s("user32.dll")]),');
     expect(block).toContain('("kernel32.dll", "GetProcAddress", [ref(1), s("MessageBoxA")]),');
     expect(block).toContain('EXIT = "ret"');
-    expect(api.sc.builder("getprocaddress=WinExec", "exit")).toBe(true);
+    expect(api.sc.builder("getprocaddress=WinExec", "exit").success).toBe(true);
     expect(config(script())).toContain('[base("kernel32.dll"), s("WinExec")]');
     expect(config(script())).toContain('EXIT = "exit"');
   });
 
   test("names the valid tasks on a typo and rejects a bad max", () => {
-    expect(api.sc.builder("winexex=calc.exe")).toBe(false);
+    expect(api.sc.builder("winexex=calc.exe").success).toBe(false);
     expect(output()).toContain("xor, max=<bytes>");
-    expect(api.sc.builder("winexec=calc.exe", "max=-4")).toBe(false);
+    expect(api.sc.builder("winexec=calc.exe", "max=-4").success).toBe(false);
   });
 });
 

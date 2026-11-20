@@ -5,7 +5,7 @@ import { HelpDocument, renderAll, renderCandidates, renderCompactDetail, renderF
 
 const SHELLCODE_WRITERS = ["sc.push_string", "sc.call_frame", "sc.template", "sc.builder"];
 
-const categoryForName = (name: string): string => {
+export const categoryForName = (name: string): string => {
   if (SHELLCODE_WRITERS.includes(name)) return "shellcode";
   if (name.startsWith("rop") || name === "dep_function" || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
   if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";

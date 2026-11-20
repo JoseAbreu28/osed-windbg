@@ -131,9 +131,9 @@ describe("memory analysis", () => {
     };
 
     initializeScript();
-    const api = (globalThis as unknown as { osed: { can_execute: (address: number) => boolean | null } }).osed;
+    const api = (globalThis as unknown as { osed: { can_execute: (address: number) => { value: boolean | null } } }).osed;
 
-    expect(api.can_execute(0x41414141)).toBeNull();
+    expect(api.can_execute(0x41414141).value).toBeNull();
   });
 
   test("initializeScript prints a load banner with version metadata", () => {

@@ -6,8 +6,8 @@ import { validateOptions } from "../src/core/validation";
 import { initializeScript, normalizeInvocation } from "../src/index";
 
 type Api = Record<string, unknown> & {
-  egghunter: (...args: unknown[]) => boolean;
-  findmsp: (...args: unknown[]) => boolean;
+  egghunter: (...args: unknown[]) => { success: boolean };
+  findmsp: (...args: unknown[]) => { success: boolean };
   last_result: () => { success: boolean; errors: string[]; warnings: string[]; findings: unknown[] } | undefined;
   exploit: Record<string, (...args: unknown[]) => unknown>;
 };
@@ -35,7 +35,7 @@ describe("egghunter from dx", () => {
   });
 
   test("os selects the NtAccessCheckAndAuditAlarm number for that build", () => {
-    expect(api.egghunter("W00T", "ntaccess", false, "", "win10-2004")).toBe(true);
+    expect(api.egghunter("W00T", "ntaccess", false, "", "win10-2004").success).toBe(true);
     expect(printed()).toContain("31C066B8C801CD2E");
     expect(printed()).toContain("0x1C8 (Windows 10 2004)");
   });
@@ -70,18 +70,18 @@ describe("egghunter from dx", () => {
   });
 
   test("the Windows 10 WOW64 stub passes a 00 0A 0D check", () => {
-    expect(api.egghunter("w00t", "ntaccess", true, "00 0A 0D", "win10")).toBe(true);
+    expect(api.egghunter("w00t", "ntaccess", true, "00 0A 0D", "win10").success).toBe(true);
     expect(printed()).toContain("Size: 49 bytes");
     expect(printed()).not.toContain("Badchar:");
   });
 
   test("a bad character in the syscall number switches to mov eax, ~n ; not eax", () => {
-    expect(api.egghunter("W00T", "ntaccess", false, "C8", "win10-2004")).toBe(true);
+    expect(api.egghunter("W00T", "ntaccess", false, "C8", "win10-2004").success).toBe(true);
     expect(printed()).toContain("B837FEFFFFF7D0CD2E");
   });
 
   test("bad characters in the stub body are reported", () => {
-    expect(api.egghunter("W00T", "ntaccess", false, "0F", "win10-2004")).toBe(false);
+    expect(api.egghunter("W00T", "ntaccess", false, "0F", "win10-2004").success).toBe(false);
     expect(printed()).toContain("byte 0x0F at offset 4");
   });
 });
@@ -110,7 +110,7 @@ describe("findmsp from dx", () => {
 describe("exploit workflow from dx", () => {
   test("exploit.workflow prints the commands for a mode", () => {
     const api = loadApi();
-    expect(api.exploit.workflow("egghunter", "B33F")).toBe(true);
+    expect(api.exploit.workflow("egghunter", "B33F").success).toBe(true);
     expect(printed()).toContain('dx @$osed().egghunter("B33F")');
   });
 

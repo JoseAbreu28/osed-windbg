@@ -4,8 +4,20 @@ export type TableColumn = {
   width?: number;
 };
 
+let quietDepth = 0;
+
 function write(line = ""): void {
-  host.diagnostics.debugLog(`${line}\n`);
+  if (quietDepth === 0) host.diagnostics.debugLog(`${line}\n`);
+}
+
+/** Runs fn with every output.ts line suppressed, for a lookup whose printout nobody asked for. */
+export function quietly<T>(fn: () => T): T {
+  quietDepth += 1;
+  try {
+    return fn();
+  } finally {
+    quietDepth -= 1;
+  }
 }
 
 function pad(value: string, width: number): string {

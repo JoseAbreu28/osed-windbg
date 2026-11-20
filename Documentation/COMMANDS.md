@@ -11,7 +11,8 @@ This page lists every command that the script registers. Each name links to its 
 - Pass addresses as numbers (`0x0012F800`), hex strings (`"0012F800"`), or arithmetic (`0x0019ed34+8`). `dx` evaluates the arithmetic before the call.
 - Pseudo-registers such as `@$t0` reach the script as 64-bit `Int64` objects, and address arguments reject them. Cast them first, as in `dx @$osed().badchar_find((unsigned int)@$t0, "00 0A 0D")`.
 - Use double quotes for strings.
-- Most commands print their output and return `true` or `false`. `dx @$osed().last_result()` returns the full structured result.
+- Most commands print their output and return an object whose `success` field is `true` or `false`. `dx @$osed().last_result()` returns the full structured result.
+- Append `.explain` to any call, as in `dx @$osed().sc.resolve("kernel32", "WinExec").explain`, to explain that call in plain words with your arguments and results filled in. See [Explain any command](../README.md#explain-any-command).
 - `dx @$osed().help("<command>", "full")` prints the built-in help for one command. Most commands also print it when you pass `"help"` as the only argument.
 - **[fork: new]** and **[fork: changed]** mark commands that this fork adds or changes.
 
@@ -28,7 +29,7 @@ This page lists every command that the script registers. Each name links to its 
 | [Shellcode](commands/shellcode.md) | 3 |
 | [Strings](commands/strings.md) | 4 |
 | [PE and API](commands/pe-api.md) | 20 |
-| [Leak, math, and session](commands/tools.md) | 14 |
+| [Leak, math, and session](commands/tools.md) | 15 |
 
 ## All commands
 
@@ -44,6 +45,7 @@ This page lists every command that the script registers. Each name links to its 
 | [`code_caves`](commands/target.md#code_caves) | [Target and memory](commands/target.md) | Find runs of null, `int3`, or NOP padding inside PE sections that can hold a payload. |
 | [`egghunter`](commands/shellcode.md#egghunter) | [Shellcode](commands/shellcode.md) | Print an egghunter stub for a 4-byte tag, as hex and as Python bytes, and flag stub bytes that are bad characters. |
 | [`encode`](commands/shellcode.md#encode) | [Shellcode](commands/shellcode.md) | XOR-encode a payload so that it contains none of the excluded bytes, and print the decoder stub with it. |
+| [`explain`](commands/tools.md#explain) | [Leak, math, and session](commands/tools.md) | Explain a command in plain words, with a sentence for the exam report. |
 | [`exploit.clear`](commands/tools.md#exploitclear) | [Leak, math, and session](commands/tools.md) | Clear the cached exploit state. |
 | [`exploit.state`](commands/tools.md#exploitstate) | [Leak, math, and session](commands/tools.md) | Show the exploit state that `triage()` cached, such as the control mechanism, the stack pointer, and the bad characters, which `rop.synthesize` reads. |
 | [`exploit.workflow`](commands/tools.md#exploitworkflow) | [Leak, math, and session](commands/tools.md) | Print a fixed list of `dx` commands for one workflow: `offset`, `badchars`, or `egghunter`. |
@@ -57,43 +59,7 @@ This page lists every command that the script registers. Each name links to its 
 | `fmt_offset` | [Format strings](commands/format.md) | Same as [`fmt.offset`](commands/format.md#fmtoffset). |
 | [`fmt.build`](commands/format.md#fmtbuild) | [Format strings](commands/format.md) | Build a `%n` write-what-where payload that writes `value` to `addr`. |
 | [`fmt.inspect`](commands/format.md#fmtinspect) | [Format strings](commands/format.md) | Read the format-string argument of a paused `printf`, `fprintf`, `sprintf`, or `snprintf` call and list its conversions. |
-| [`fmt.offset`](commands/format.md#fmtoffset) | [Format strings](commands/format.md) | Find which `%N# Command index
-
-This page lists every command that the script registers. Each name links to its entry in a category file. The [README](../README.md#exam-workflow) shows the commands in exam order.
-
-## Conventions
-
-- Run each command as `dx @$osed().<command>(arguments)`.
-- Arguments are positional. A `?` after a name in a signature marks an optional argument. To skip an optional string argument and set a later one, pass `""`, as in `code_caves("", 50, 25, "", "EXEC")`.
-- `dx` does not accept JavaScript object literals such as `{mode: "guided"}`. Use the positional form.
-- Pass byte lists, such as bad characters, as one string of hex bytes: `"00 0A 0D"`.
-- Pass addresses as numbers (`0x0012F800`), hex strings (`"0012F800"`), or arithmetic (`0x0019ed34+8`). `dx` evaluates the arithmetic before the call.
-- Pseudo-registers such as `@$t0` reach the script as 64-bit `Int64` objects, and address arguments reject them. Cast them first, as in `dx @$osed().badchar_find((unsigned int)@$t0, "00 0A 0D")`.
-- Use double quotes for strings.
-- Most commands print their output and return `true` or `false`. `dx @$osed().last_result()` returns the full structured result.
-- `dx @$osed().help("<command>", "full")` prints the built-in help for one command. Most commands also print it when you pass `"help"` as the only argument.
-- **[fork: new]** and **[fork: changed]** mark commands that this fork adds or changes.
-
-## Categories
-
-| Category | Commands |
-| --- | --- |
-| [Pattern and bad characters](commands/payload.md) | 6 |
-| [Crash triage](commands/crash.md) | 4 |
-| [Target and memory](commands/target.md) | 8 |
-| [SEH](commands/seh.md) | 2 |
-| [ROP and DEP](commands/rop.md) | 36 |
-| [Format strings](commands/format.md) | 3 |
-| [Shellcode](commands/shellcode.md) | 3 |
-| [Strings](commands/strings.md) | 4 |
-| [PE and API](commands/pe-api.md) | 20 |
-| [Leak, math, and session](commands/tools.md) | 14 |
-
-## All commands
-
-| Command | Category | What it does |
-| --- | --- | --- |
- parameter reaches your buffer and which stack slots hold pointers worth leaking. |
+| [`fmt.offset`](commands/format.md#fmtoffset) | [Format strings](commands/format.md) | Find which `%N$` parameter reaches your buffer and which stack slots hold pointers worth leaking. |
 | [`help`](commands/tools.md#help) | [Leak, math, and session](commands/tools.md) | List the commands, or print the help for one command. |
 | [`landing`](commands/crash.md#landing) | [Crash triage](commands/crash.md) | Show what sits at ESP, or at an address, and whether the memory there is executable. |
 | [`last_result`](commands/tools.md#last_result) | [Leak, math, and session](commands/tools.md) | Return the full structured result of the last command. |

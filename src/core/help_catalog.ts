@@ -610,6 +610,18 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     ],
   },
   {
+    name: "explain",
+    summary: "Explain any command, with a report sentence",
+    description: "Explains a command in plain words: what it does, how it works, when to use it, its arguments, how to read its output, and a sentence for an exam report. Append .explain to any call to explain that call with its real arguments and results.",
+    usage: "dx @$osed().explain(command?, args...)",
+    examples: [
+      'dx @$osed().sc.resolve("kernel32", "WinExec").explain',
+      'dx @$osed().explain("sc.resolve")',
+      "dx @$osed().explain()",
+    ],
+    keywords: ["report", "why", "what"],
+  },
+  {
     name: "exploit.state",
     description: "Views or updates the cached exploit state used by rop.synthesize(). Populated automatically by triage(); individual fields can be set or overridden manually.",
     usage: "dx @$osed().exploit.state(overrides?)",

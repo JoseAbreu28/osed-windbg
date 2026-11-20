@@ -212,7 +212,7 @@ describe("rop_suggest command", () => {
         functionAlias?: new (fn: (...args: unknown[]) => unknown, aliasName: string) => unknown;
       };
       osed?: {
-        find_bytes: (module: string, bytes: string) => boolean;
+        find_bytes: (module: string, bytes: string) => { success: boolean };
         last_result: () => { success: boolean; errors: string[] };
       };
     }).host.diagnostics = {
@@ -222,12 +222,12 @@ describe("rop_suggest command", () => {
     initializeScript();
     const api = (globalThis as unknown as {
       osed: {
-        find_bytes: (module: string, bytes: string) => boolean;
+        find_bytes: (module: string, bytes: string) => { success: boolean };
         last_result: () => { success: boolean; errors: string[] };
       };
     }).osed;
 
-    expect(api.find_bytes("target", "C C C C")).toBe(false);
+    expect(api.find_bytes("target", "C C C C").success).toBe(false);
     expect(api.last_result().success).toBe(false);
     expect(api.last_result().errors[0]).toContain("bytes");
     expect(logs.join("")).toContain("Usage: dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)");
@@ -500,11 +500,11 @@ describe("rop_suggest command", () => {
     initializeScript();
     const api = (globalThis as unknown as {
       osed: {
-        find_stack_bytes: (bytes: string, maxResults?: number, stackBytes?: number) => boolean;
+        find_stack_bytes: (bytes: string, maxResults?: number, stackBytes?: number) => { success: boolean };
       };
     }).osed;
 
-    expect(api.find_stack_bytes("43 43 43 43", 10, 0x80)).toBe(true);
+    expect(api.find_stack_bytes("43 43 43 43", 10, 0x80).success).toBe(true);
     expect(logs.join("")).toContain("Scope: current thread stack only; this does not search heap, modules outside the stack window, or arbitrary process memory.");
   });
 
@@ -541,11 +541,11 @@ describe("rop_suggest command", () => {
     initializeScript();
     const api = (globalThis as unknown as {
       osed: {
-        find_mem_bytes: (address: number, length: number, bytes: string, maxResults?: number) => boolean;
+        find_mem_bytes: (address: number, length: number, bytes: string, maxResults?: number) => { success: boolean };
       };
     }).osed;
 
-    expect(api.find_mem_bytes(Number(base), 0x200, "43 43 43 43", 10)).toBe(true);
+    expect(api.find_mem_bytes(Number(base), 0x200, "43 43 43 43", 10).success).toBe(true);
     expect(logs.join("")).toContain("Scope: explicit live-memory range only; this can search stack, heap, modules, or any readable region if you provide the correct address and length.");
   });
 
