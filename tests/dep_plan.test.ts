@@ -36,6 +36,8 @@ const GADGETS: Array<[number, number[]]> = [
   [0x1271, [0x58, 0xc3]], // pop eax ; ret
   [0x1281, [0x60, 0xc3]], // pushad ; ret
   [0x1291, [0xff, 0xe4]], // jmp esp
+  [0x1311, [0x83, 0xc4, 0x10, 0xc3]], // add esp, 0x10 ; ret
+  [0x1321, [0x83, 0xf0, 0xff, 0x8b, 0xe5, 0x5d, 0xc3]], // xor eax, 0xffffffff ; mov esp, ebp ; pop ebp ; ret
 ];
 
 function installHost(): void {
@@ -112,6 +114,18 @@ describe("dep_plan", () => {
     expect(output).toContain("#   bp 0x11111111 ; g ; r esp");
     expect(output).toContain("=== VirtualAlloc Python Call-Frame Skeleton ===");
     expect(api.last_result().findings[0]).toMatchObject({ api: "VirtualAlloc", module: "libbkup", style: "skeleton" });
+  });
+
+  test("no job but the pivot takes a gadget whose destination is esp", () => {
+    api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
+    const output = text();
+    const job = (title: string): string => output.slice(output.indexOf(`  ${title}:`)).split(/\n  (?=\S)/)[0];
+    expect(job("add or subtract")).toContain("add esi, ecx ; ret");
+    expect(job("add or subtract")).not.toContain("add esp");
+    expect(job("copy a register")).not.toContain("mov esp, ebp");
+    expect(job("pivot ESP onto the frame")).toContain("xchg eax, esp ; ret");
+    expect(output).toContain("rop += p32(0x11111151)    # add the distance: add esi, ecx ; ret");
+    expect(output).not.toContain("# add the distance: add esp");
   });
 
   test("pushad style lists a pop for each register, pushad and jmp esp, then the register map", () => {

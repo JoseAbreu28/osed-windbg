@@ -63,9 +63,13 @@ function movesEsp(gadget: RopGadget): boolean {
   return gadget.categories.includes("STACK_PIVOT") || gadget.capabilities.some((capability) => capability.kind === "STACK_PIVOT");
 }
 
+// A capability whose destination is ESP does no job here: `add esp, 0x10 ; ret` is a REGISTER_ADD
+// and `mov esp, ebp ; ...` a MOVE_REGISTER, and neither leaves a working pointer behind.
 function jobCapability(gadget: RopGadget, job: Job) {
   return gadget.capabilities.find((capability) =>
-    job.capabilities.includes(capability.kind) && (job.register === undefined || capability.register === job.register));
+    job.capabilities.includes(capability.kind)
+    && (job.register === undefined || capability.register === job.register)
+    && capability.register !== "esp");
 }
 
 // A gadget that moves ESP only fits the pivot job; anywhere else it throws the chain away.
