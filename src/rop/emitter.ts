@@ -49,7 +49,7 @@ function sideEffectCount(gadget: RopGadget): number {
     + (summary.memoryWrites.values.exact.size + summary.memoryWrites.values.conservative.size) * 2;
 }
 
-function rankCandidates(gadgets: RopGadget[]): RopGadget[] {
+export function rankCandidates(gadgets: RopGadget[]): RopGadget[] {
   return gadgets
     .filter((gadget) => knownAddress(gadget) !== undefined)
     .sort((left, right) => {

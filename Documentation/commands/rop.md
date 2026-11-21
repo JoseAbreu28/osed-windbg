@@ -13,6 +13,7 @@ Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../CO
 | [`rop.find`](#ropfind) | Run the older ROP helper that scans one module and prints a module summary. |
 | [`rop_template`](#rop_template) | Print a commented chain skeleton for one API in the skeleton or PUSHAD style, with the `dx` commands that find each address it needs. |
 | [`dep_function`](#dep_function) | Print a Python call-frame skeleton for VirtualAlloc, VirtualProtect, or WriteProcessMemory. |
+| [`dep_plan`](#dep_plan) | Run the whole DEP bypass discovery for one API and module, each step under its own `[n/7]` header, ending in a Python draft to verify. |
 | [`rop.scan_live`](#ropscan_live) | Find gadgets in one or more loaded modules and load them into the corpus that the other `rop.*` commands use. |
 | [`rop.scan`](#ropscan) | Load gadget text from RP++ output into the corpus. |
 | [`rop.capabilities`](#ropcapabilities) | Count the gadgets in the corpus by capability, such as `LOAD_REGISTER`, `MEMORY_WRITE`, or `STACK_PIVOT`. |
@@ -161,6 +162,32 @@ dx @$osed().dep_function("WriteProcessMemory")
 ```
 
 `VA`, `VP`, and `WPM` work as short aliases, in any case. The frame follows the order the API reads the stack: the API address, the return address, then each argument. `VirtualAlloc` uses `shellcodeAddr` for `lpAddress`. `VirtualProtect` uses `0x40` for `flNewProtect` and a writable address for `lpflOldProtect`. `WriteProcessMemory` uses `0xFFFFFFFF` as the pseudo process handle and a code cave as the destination. Fill in the remaining addresses and argument values in the printed skeleton before using it.
+
+### dep_plan
+
+Run the DEP bypass discovery for VirtualAlloc, VirtualProtect, or WriteProcessMemory in one command. Each step prints under its own `[n/7]` header, so one screenshot covers one step.
+
+```text
+dep_plan(api, module, badchars, style?)
+```
+
+```text
+dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20")
+dx @$osed().dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad")
+dx @$osed().dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D")
+```
+
+It calls the existing commands in this order:
+
+1. `modules` for the module, with a warning when the module has ASLR, was relocated, or its base holds a bad character.
+2. `sc.iat_find` for the API, preferring a slot in the module, and whether the slot address holds a bad character.
+3. `rop.scan_live` with the bad characters, then the gadget and capability counts.
+4. The best 3 gadgets per job, ranked by fewest side effects. Each line lists the registers the gadget writes, how far it moves ESP, extra pops, a `ret N`, and a memory write. The `skeleton` style, the default, asks for capture ESP, copy a register, add or subtract, negate, read a pointer, write a field, advance the pointer, and pivot. A gadget that moves ESP is only offered as a pivot. The `pushad` style asks for a pop for each of EDI, ESI, EBP, EBX, EDX, ECX, and EAX, a pointer read for the IAT slot, `pushad ; ret`, and `jmp esp` or `call esp` from `find_bytes`.
+5. `rop.construct` for each constant: 0x1, 0x1000, and 0x40 for VirtualAlloc; 0x201 and 0x40 for VirtualProtect; 0xFFFFFFFF and 0x210 for WriteProcessMemory. It also builds the IAT slot when its address holds a bad character. A writable address for `lpflOldProtect` or `lpNumberOfBytesWritten` comes from a `code_caves` STAGING cave, and the WriteProcessMemory destination from an EXEC cave.
+6. The call frame from `dep_function`, or the PUSHAD register map that `rop_template` prints.
+7. A Python draft. It fills in the slot, the cave addresses, and the top gadget per job. Lines marked `TODO measure` hold the values only a debugger run can give, such as the distance from the captured ESP to field 1 and to the shellcode, each with the `bp`, `s`, and `?` commands that measure it.
+
+The draft is not a finished chain. It picks the top gadget per job and does not check that the register one gadget leaves is the register the next one reads. Verify each field in WinDbg before you use it. In the course labs, build the chain by hand first with `dep_function` and `rop_template`, and use `dep_plan` once you know the method.
 
 ## Build the gadget corpus
 

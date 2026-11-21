@@ -7,6 +7,15 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-21 - One command for the DEP bypass discovery
+
+- `dep_plan(api, module, badchars, style?)` runs the discovery for VirtualAlloc, VirtualProtect, or WriteProcessMemory and prints seven sections, each under a `[n/7]` header: the module's protections, the IAT slot, the gadget corpus, the best 3 gadgets per job with their side effects, clean recipes for the constants plus writable and code cave addresses, the frame or PUSHAD map, and a Python draft. Each section calls the existing command, so `modules`, `sc.iat_find`, `rop.scan_live`, `rop.construct`, `code_caves`, `find_bytes`, and `dep_function` print what they print on their own.
+- The draft fills in the top gadget per job and marks the distances that need a debugger run with `TODO measure`, with the `bp`, `s -d`, and `?` commands that measure them. It says that it is a draft to verify field by field, because nothing checks that one gadget's output register is the next one's input.
+- A gadget that moves ESP is offered only as a pivot. `xchg eax, esp ; ret` also counts as a stack pointer capture in the corpus, and using it to capture ESP would throw the chain away.
+- `rop_template` keeps its PUSHAD register maps in one table that `dep_plan` reuses, and the gadget ranking of the emitter is exported for the same reason.
+- Section 1 warns about a bad byte in the module's base only when every address in the module shares that byte. The low 16 bits of every base are 00 because of the 64K alignment, and the gadget offset fills them, so the older check would have flagged every module when 00 is bad. Section 2 warns when the module does not import the API and the slot belongs to another module, and says when that module has ASLR.
+- `code_caves` asks `!vprot` once per memory region instead of once per cave. Classic WinDbg echoes each `!vprot` it runs for a script, so `code_caves` and the cave lookup in `dep_plan` printed one line per cave, about 1200 lines for `libbkup.dll`.
+
 ### 2026-11-21 - Both DEP helpers cover all three APIs
 
 - `rop_template(api, module, style)` takes a third argument. `"skeleton"`, the default, prints the method that puts a frame of dummy dwords before the return address, patches each field with a gadget, and pivots ESP onto the frame. It is printed for VirtualAlloc, VirtualProtect, and WriteProcessMemory in four steps: each field's real value and the `dx` command that gives it, the gadgets by `rop.query` capability, a Python skeleton, and the WinDbg checks for each field. `"pushad"` prints the register map instead. VirtualAlloc is a new `api` value.

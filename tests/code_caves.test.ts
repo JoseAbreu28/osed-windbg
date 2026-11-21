@@ -226,6 +226,27 @@ describe("findCodeCaves", () => {
     expect(caves[0].size).toBeGreaterThanOrEqual(caves[1].size);
   });
 
+  test("asks !vprot once for caves that share a region", () => {
+    const { image, base } = makeImageWithSections(
+      [{ name: ".text", rva: 0x1000, virtualSize: 0x2000, characteristics: IMAGE_SCN_MEM_EXECUTE }],
+      0x5000,
+    );
+    for (let i = 0x1000; i < 0x3000; i++) image[i] = 0xc3;
+    for (let i = 0x1100; i < 0x113c; i++) image[i] = 0x00;
+    for (let i = 0x1800; i < 0x18c8; i++) image[i] = 0xcc;
+    const calls: string[] = [];
+    const map = makeVprotMap(base, [{ offset: 0x1000, size: 0x2000, protect: PAGE_EXECUTE_READ }]);
+    installPeBackedHost(image, base, (cmd) => {
+      calls.push(cmd);
+      return map(cmd);
+    });
+
+    const { caves } = findCodeCaves(undefined, 50, 25);
+    expect(caves.length).toBe(2);
+    expect(caves.every((cave) => cave.executable === true)).toBe(true);
+    expect(calls.filter((cmd) => cmd.startsWith("!vprot"))).toHaveLength(1);
+  });
+
   test("respects module filter", () => {
     const { image, base } = makeImageWithSections(
       [{ name: ".text", rva: 0x1000, virtualSize: 0x1000, characteristics: IMAGE_SCN_MEM_EXECUTE }],

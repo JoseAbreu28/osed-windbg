@@ -86,6 +86,7 @@ This page lists every command that the script registers. Each name links to its 
 | `rop_find` | [ROP and DEP](commands/rop.md) | Same as [`rop.find`](commands/rop.md#ropfind). |
 | [`rop_suggest`](commands/rop.md#rop_suggest) | [ROP and DEP](commands/rop.md) | Scan a module and print common exploit gadgets grouped by what they do. |
 | [`rop_template`](commands/rop.md#rop_template) | [ROP and DEP](commands/rop.md) | Print a commented chain skeleton for one API in the skeleton or PUSHAD style, with the `dx` commands that find each address it needs. |
+| [`dep_plan`](commands/rop.md#dep_plan) | [ROP and DEP](commands/rop.md) | Run the whole DEP bypass discovery for one API and module, each step under its own `[n/7]` header, ending in a Python draft to verify. |
 | [`rop.api_build`](commands/rop.md#ropapi_build) | [ROP and DEP](commands/rop.md) | Build a short chain that loads an API address into EAX from one `rop.api_plan` candidate. |
 | [`rop.api_plan`](commands/rop.md#ropapi_plan) | [ROP and DEP](commands/rop.md) | List the ways to get an API address into a register: a direct IAT slot, or an export of the same module. |
 | [`rop.capabilities`](commands/rop.md#ropcapabilities) | [ROP and DEP](commands/rop.md) | Count the gadgets in the corpus by capability, such as `LOAD_REGISTER`, `MEMORY_WRITE`, or `STACK_PIVOT`. |

@@ -236,13 +236,23 @@ function protectionLabel(r: boolean | null, w: boolean | null, x: boolean | null
 
 function enrichAndSplit(caves: CodeCave[], minSize: number): CodeCave[] {
   const result: CodeCave[] = [];
+  // One !vprot answer covers its whole region, and classic WinDbg echoes every call, so ask once per region.
+  const regions: Array<ReturnType<typeof memoryRegion>> = [];
+  const regionAt = (address: bigint): ReturnType<typeof memoryRegion> => {
+    const known = regions.find((region) => region.baseAddress !== undefined && region.regionSize !== undefined
+      && region.baseAddress <= address && address < region.baseAddress + region.regionSize);
+    if (known) return known;
+    const fresh = memoryRegion(address);
+    regions.push(fresh);
+    return fresh;
+  };
 
   for (const cave of caves) {
     let pos = cave.address;
     const end = cave.address + BigInt(cave.size);
 
     while (pos < end) {
-      const region = memoryRegion(pos);
+      const region = regionAt(pos);
       let segEnd: bigint;
 
       if (region.baseAddress !== undefined && region.regionSize !== undefined && region.regionSize > BigInt(0)

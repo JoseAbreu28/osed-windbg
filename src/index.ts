@@ -41,10 +41,12 @@ import { createFindMspCommand } from "./commands/findmsp";
 import { createFindPtrCommand } from "./commands/find_ptr";
 import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
-import { createRopTemplateCommand } from "./commands/rop_template";
+import { createRopTemplateCommand, printPushadMap } from "./commands/rop_template";
+import type { RopGadget } from "./rop/types";
+import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, candidateLines, candidates as depPlanCandidates, draftLines, hex32 as dwordHex, jobsFor, type DepPlanStyle } from "./commands/dep_plan";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
-import { createCodeCavesCommand } from "./commands/code_caves";
+import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
 import { createExplainCommand, wrapApi, type ExplainState } from "./explain/explain";
@@ -3108,6 +3110,151 @@ function bindApi(): OsedApi {
     return toDxResult("Chain Verifier", rows);
   };
 
+  const executeDepPlan = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("dep_plan");
+    }
+    const [apiArg, moduleArg, badArg, styleArg] = args;
+    const depApi = DEP_PLAN_APIS.find((name) => name.toLowerCase() === String(apiArg ?? "").trim().toLowerCase());
+    const style = String(styleArg ?? "skeleton").trim().toLowerCase() as DepPlanStyle;
+    const moduleName = typeof moduleArg === "string" ? moduleArg.trim() : "";
+    const badText = typeof badArg === "string" ? badArg : "";
+    const badchars = parseHexByteList(badText);
+    const fail = (message: string): DxResult => {
+      const rows = [{ Error: message }];
+      renderRows("DEP Plan", rows);
+      out.info('Usage: dx @$osed().dep_plan(api, module, badchars, style?)');
+      setResult({ command: "dep_plan", args: { api: apiArg, module: moduleArg, badchars: badArg, style: styleArg }, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult("DEP Plan", rows);
+    };
+    if (!depApi) return fail(`api must be one of ${DEP_PLAN_APIS.join(", ")}.`);
+    if (!DEP_PLAN_STYLES.includes(style)) return fail(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
+    if (!Array.isArray(badchars)) return fail('badchars must be hex bytes such as "00 0A 0D".');
+    const moduleInfo = moduleName ? moduleInfoByName(moduleName) : undefined;
+    if (!moduleInfo) return fail(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
+    const badSet = new Set(badchars as number[]);
+    const n = DEP_PLAN_SECTIONS;
+    const summary: Array<Record<string, string>> = [];
+    const shortName = (name: string): string => name.split("\\").pop() ?? name;
+    const moduleLabel = shortName(moduleInfo.name);
+    const first = Number(moduleInfo.base);
+    const last = Number(moduleInfo.base + moduleInfo.size - BigInt(1));
+    const fixedByte = (shift: number): number | undefined =>
+      ((first >>> shift) & 0xff) === ((last >>> shift) & 0xff) ? (first >>> shift) & 0xff : undefined;
+
+    out.section(`[1/${n}] Module protections for ${moduleLabel}`);
+    invoke("modules", [moduleName]);
+    const sharedBad = [...new Set([24, 16].map(fixedByte).filter((byte): byte is number => byte !== undefined && badSet.has(byte)))];
+    const moduleWarnings = [
+      moduleInfo.aslr === "enabled" ? `${moduleLabel} has ASLR: its addresses change on every run, so a chain built from it needs a leak.` : undefined,
+      moduleInfo.preferredBase !== BigInt(0) && moduleInfo.base !== moduleInfo.preferredBase ? `${moduleLabel} was relocated from its preferred base ${dwordHex(Number(moduleInfo.preferredBase))}.` : undefined,
+      sharedBad.length > 0 ? `Every address in ${moduleLabel} (${dwordHex(first)} to ${dwordHex(last)}) holds the bad byte(s) ${sharedBad.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ")}, so no gadget from it is usable.` : undefined,
+    ].filter((warning): warning is string => warning !== undefined);
+    for (const warning of moduleWarnings) out.warn(warning);
+    if (moduleWarnings.length === 0) out.info(`${moduleLabel} spans ${dwordHex(first)} to ${dwordHex(last)}: no ASLR, and its fixed high bytes are clean. The scan in [3/${n}] drops each address whose low bytes are bad.`);
+    summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
+
+    out.section(`[2/${n}] IAT slot of ${depApi}`);
+    const iatRows = ((api.sc as { iat_find: (symbol: string) => unknown }).iat_find(depApi) as { rows?: { length: number; [i: number]: Record<string, string> } }).rows;
+    const slotRows = Array.from({ length: iatRows?.length ?? 0 }, (_, i) => iatRows![i])
+      .filter((row) => new RegExp(`(^|!)${depApi}$`, "i").test(out.stripDml(String(row.Symbol ?? "")).trim()));
+    const chosen = slotRows.find((row) => out.stripDml(String(row.Owner ?? "")).toLowerCase().includes(moduleName.toLowerCase())) ?? slotRows[0];
+    const slotMatch = chosen ? /0x([0-9a-fA-F]+)/.exec(out.stripDml(String(chosen.Slot ?? ""))) : null;
+    const iatSlot = slotMatch ? parseInt(slotMatch[1], 16) >>> 0 : undefined;
+    const slotBad = iatSlot === undefined ? [] : addressBadBytes(BigInt(iatSlot), 4, badSet);
+    if (iatSlot === undefined) {
+      out.warn(`No module imports ${depApi}. Pick another API, or resolve it at run time (sc.iat_find("GetProcAddress")).`);
+    } else {
+      const owner = out.stripDml(String(chosen!.Owner));
+      out.info(`Slot ${dwordHex(iatSlot)} in ${owner}. The chain reads the API address from it with mov eax, [eax].`);
+      if (!owner.toLowerCase().includes(moduleName.toLowerCase())) {
+        const ownerAslr = moduleInfoByName(owner)?.aslr === "enabled";
+        out.warn(`${moduleLabel} does not import ${depApi}; this slot belongs to ${owner}${ownerAslr ? ", which has ASLR, so the slot moves on every boot and needs a leak" : ""}. Check other modules with sc.iat_find, or resolve the API at run time.`);
+      }
+      if (slotBad.length > 0) out.warn(`The slot address holds bad byte(s) ${slotBad.map((b) => dwordHex(b).slice(-2)).join(" ")}: build it with the recipe in [5/${n}].`);
+      else out.info("The slot address has no bad byte, so it can be popped as it is.");
+    }
+    summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === undefined ? "not found" : `${dwordHex(iatSlot)}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
+
+    out.section(`[3/${n}] Gadget corpus from ${moduleName}`);
+    executeRopScanLive(moduleName, badText);
+    const corpus = currentRopCorpus;
+    const gadgetCount = corpus?.gadgets.length ?? 0;
+    out.info(`${gadgetCount} gadgets and ${corpus ? summarizeCapabilities(corpus).length : 0} capabilities, every address free of the bad bytes.`);
+    summary.push({ Section: `[3/${n}] corpus`, Result: `${gadgetCount} gadgets` });
+
+    out.section(`[4/${n}] Best 3 candidates per job (${style} style)`);
+    out.info("Ranked by fewest side effects, then the smallest stack move. Side effects are listed after each gadget.");
+    const best: Record<string, RopGadget | undefined> = {};
+    for (const job of jobsFor(style)) {
+      const found = corpus ? depPlanCandidates(corpus, job) : [];
+      best[job.key] = found[0];
+      for (const line of candidateLines(found, job)) out.print(line);
+    }
+    let jmpEsp: number | undefined;
+    if (style === "pushad") {
+      for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
+        invoke("find_bytes", [moduleName, bytes, 20]);
+        const hits = ((lastResult?.findings ?? []) as unknown[])
+          .map((hit) => Number(hit))
+          .filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0)
+          .slice(0, 3);
+        out.print(`  ${label}: ${hits.length > 0 ? hits.map(dwordHex).join("  ") : "none without bad bytes"}`);
+        jmpEsp = jmpEsp ?? hits[0];
+      }
+    }
+    const missing = jobsFor(style).filter((job) => !best[job.key]).map((job) => job.title);
+    if (missing.length > 0) out.warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
+    summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
+
+    out.section(`[5/${n}] Clean recipes for the constants`);
+    for (const constant of CONSTANTS[depApi]) {
+      out.info(`${constant.field} = ${dwordHex(constant.value)}`);
+      executeRopConstruct("eax", constant.value, badText);
+    }
+    if (iatSlot !== undefined && slotBad.length > 0) {
+      out.info(`IAT slot = ${dwordHex(iatSlot)}`);
+      executeRopConstruct("eax", iatSlot, badText);
+    }
+    const pickCave = (minSize: number, capability: string): number | undefined => {
+      const { caves } = findCodeCaves(moduleName, minSize, 25, badText, capability);
+      const cave = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
+      if (!cave) return undefined;
+      return Number(cave.addrSafe === false && cave.safeVa !== null ? cave.safeVa : cave.address);
+    };
+    const writable = depApi === "VirtualAlloc" ? undefined : pickCave(4, "STAGING");
+    const cave = depApi === "WriteProcessMemory" ? pickCave(0x210, "EXEC") : undefined;
+    if (depApi !== "VirtualAlloc") {
+      const field = depApi === "VirtualProtect" ? "lpflOldProtect" : "lpNumberOfBytesWritten";
+      if (writable === undefined) out.warn(`${field}: no clean writable cave in ${moduleName}. Try dx @$osed().code_caves("", 4, 25, "${badText}", "STAGING").`);
+      else out.info(`${field} = ${dwordHex(writable)}, a writable cave with no bad byte (code_caves STAGING).`);
+    }
+    if (depApi === "WriteProcessMemory") {
+      if (cave === undefined) out.warn(`Code cave: none of 0x210 bytes with a clean address in ${moduleName}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
+      else out.info(`Code cave (return address and lpBaseAddress) = ${dwordHex(cave)}, executable (code_caves EXEC).`);
+    }
+    summary.push({ Section: `[5/${n}] constants`, Result: `${CONSTANTS[depApi].length} recipes` });
+
+    out.section(`[6/${n}] ${style === "pushad" ? "PUSHAD register map" : "Call frame"} for ${depApi}`);
+    if (style === "pushad") printPushadMap(depApi);
+    else invoke("dep_function", [depApi]);
+    summary.push({ Section: `[6/${n}] frame`, Result: style === "pushad" ? "register map" : "dep_function frame" });
+
+    out.section(`[7/${n}] Python draft: verify it field by field, it is not a finished chain`);
+    for (const line of draftLines({ api: depApi, style, module: moduleName, iatSlot, writable, cave, best, jmpEsp })) out.print(line);
+    summary.push({ Section: `[7/${n}] draft`, Result: "TODO lines mark what only a debugger run can give" });
+
+    setResult({
+      command: "dep_plan",
+      args: { api: depApi, module: moduleName, badchars: badText, style },
+      success: true,
+      findings: [{ api: depApi, module: moduleName, style, iatSlot, writable, cave, gadgets: gadgetCount, missing }],
+      warnings: [...moduleWarnings, ...(missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : [])],
+      errors: [],
+    });
+    return toDxResult("DEP Plan", summary);
+  };
+
   for (const command of registry.getAll()) {
     api[command.name] = (...args: unknown[]) => {
       return invoke(command.name, args);
@@ -3173,6 +3320,7 @@ function bindApi(): OsedApi {
     },
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
+  api.dep_plan = executeDepPlan;
 
   // exploit.state and exploit.clear make exploit an object, which shadows the
   // registry command of the same name. The workflow command sits beside them so

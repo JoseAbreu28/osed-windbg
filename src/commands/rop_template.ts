@@ -1,6 +1,49 @@
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 
+export type DepApi = "VirtualAlloc" | "VirtualProtect" | "WriteProcessMemory";
+
+export const PUSHAD_MAPS: Record<DepApi, string[]> = {
+  VirtualAlloc: [
+    "    [ESP+0]  = EDI        <- ret ; (a ROP NOP, the RET of pushad lands here)",
+    "    [ESP+4]  = ESI        <- VirtualAlloc address (read from the IAT slot)",
+    "    [ESP+8]  = EBP        <- return address of VirtualAlloc: jmp esp / call esp",
+    "    [ESP+12] = saved ESP  <- lpAddress: points into the stack for free",
+    "    [ESP+16] = EBX        <- dwSize = 0x1",
+    "    [ESP+20] = EDX        <- flAllocationType = 0x1000",
+    "    [ESP+24] = ECX        <- flProtect = 0x40",
+    "    [ESP+28] = EAX        <- 0x90909090, the start of the NOP sled",
+  ],
+  VirtualProtect: [
+    "    [ESP+0]  = EDI        <- ret ; (a ROP NOP, the RET of pushad lands here)",
+    "    [ESP+4]  = ESI        <- VirtualProtect address (read from the IAT slot)",
+    "    [ESP+8]  = EBP        <- return address of VirtualProtect: jmp esp / call esp",
+    "    [ESP+12] = saved ESP  <- lpAddress: points into the stack for free",
+    "    [ESP+16] = EBX        <- dwSize = 0x201",
+    "    [ESP+20] = EDX        <- flNewProtect = 0x40",
+    "    [ESP+24] = ECX        <- lpflOldProtect = a writable address",
+    "    [ESP+28] = EAX        <- 0x90909090, jmp esp runs it, then the shellcode",
+  ],
+  WriteProcessMemory: [
+    "    [ESP+0]  = EDI        <- add esp, 0xC ; ret (skips the next three dwords)",
+    "    [ESP+4]  = ESI        <- skipped",
+    "    [ESP+8]  = EBP        <- skipped",
+    "    [ESP+12] = saved ESP  <- skipped",
+    "    [ESP+16] = EBX        <- WriteProcessMemory address (read from the IAT slot)",
+    "    [ESP+20] = EDX        <- return address = CAVE",
+    "    [ESP+24] = ECX        <- hProcess = 0xFFFFFFFF",
+    "    [ESP+28] = EAX        <- lpBaseAddress = CAVE",
+    "    [ESP+32]  payload     <- lpBuffer = shellcode address, patched by one write",
+    "    [ESP+36]  payload     <- nSize, patched if it holds bad bytes",
+    "    [ESP+40]  payload     <- lpNumberOfBytesWritten = WRITABLE",
+  ],
+};
+
+export function printPushadMap(api: DepApi): void {
+  out.print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
+  for (const line of PUSHAD_MAPS[api]) out.print(line);
+}
+
 type Field = { name: string; value: string; how: string };
 
 function fieldTable(fields: Field[]): void {
@@ -114,15 +157,7 @@ function vaPushadTemplate(mod: string): void {
   out.print('  Load order:            dx @$osed().rop.setup("ebx=0x1 edx=0x1000 ecx=0x40", "<bad chars>")');
 
   out.section("Step 2 — PUSHAD register map");
-  out.print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
-  out.print("    [ESP+0]  = EDI        <- ret ; (a ROP NOP, the RET of pushad lands here)");
-  out.print("    [ESP+4]  = ESI        <- VirtualAlloc address (read from the IAT slot)");
-  out.print("    [ESP+8]  = EBP        <- return address of VirtualAlloc: jmp esp / call esp");
-  out.print("    [ESP+12] = saved ESP  <- lpAddress: points into the stack for free");
-  out.print("    [ESP+16] = EBX        <- dwSize = 0x1");
-  out.print("    [ESP+20] = EDX        <- flAllocationType = 0x1000");
-  out.print("    [ESP+24] = ECX        <- flProtect = 0x40");
-  out.print("    [ESP+28] = EAX        <- 0x90909090, the start of the NOP sled");
+  printPushadMap("VirtualAlloc");
 
   out.section("Step 3 — Python skeleton");
   out.print("import struct");
@@ -229,15 +264,7 @@ function vpPushadTemplate(mod: string): void {
   out.print('  Load order:            dx @$osed().rop.setup("ebx=0x201 edx=0x40", "<bad chars>")');
 
   out.section("Step 2 — PUSHAD register map");
-  out.print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
-  out.print("    [ESP+0]  = EDI        <- ret ; (a ROP NOP, the RET of pushad lands here)");
-  out.print("    [ESP+4]  = ESI        <- VirtualProtect address (read from the IAT slot)");
-  out.print("    [ESP+8]  = EBP        <- return address of VirtualProtect: jmp esp / call esp");
-  out.print("    [ESP+12] = saved ESP  <- lpAddress: points into the stack for free");
-  out.print("    [ESP+16] = EBX        <- dwSize = 0x201");
-  out.print("    [ESP+20] = EDX        <- flNewProtect = 0x40");
-  out.print("    [ESP+24] = ECX        <- lpflOldProtect = a writable address");
-  out.print("    [ESP+28] = EAX        <- 0x90909090, jmp esp runs it, then the shellcode");
+  printPushadMap("VirtualProtect");
 
   out.section("Step 3 — Python skeleton");
   out.print("import struct");
@@ -358,18 +385,7 @@ function wpmPushadTemplate(mod: string): void {
   out.print(`  Writable address:      dx @$osed().code_caves("${mod}", 4, 25, "<bad chars>", "STAGING")`);
 
   out.section("Step 2 — PUSHAD register map");
-  out.print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
-  out.print("    [ESP+0]  = EDI        <- add esp, 0xC ; ret (skips the next three dwords)");
-  out.print("    [ESP+4]  = ESI        <- skipped");
-  out.print("    [ESP+8]  = EBP        <- skipped");
-  out.print("    [ESP+12] = saved ESP  <- skipped");
-  out.print("    [ESP+16] = EBX        <- WriteProcessMemory address (read from the IAT slot)");
-  out.print("    [ESP+20] = EDX        <- return address = CAVE");
-  out.print("    [ESP+24] = ECX        <- hProcess = 0xFFFFFFFF");
-  out.print("    [ESP+28] = EAX        <- lpBaseAddress = CAVE");
-  out.print("    [ESP+32]  payload     <- lpBuffer = shellcode address, patched by one write");
-  out.print("    [ESP+36]  payload     <- nSize, patched if it holds bad bytes");
-  out.print("    [ESP+40]  payload     <- lpNumberOfBytesWritten = WRITABLE");
+  printPushadMap("WriteProcessMemory");
 
   out.section("Step 3 — Python skeleton");
   out.print("import struct");

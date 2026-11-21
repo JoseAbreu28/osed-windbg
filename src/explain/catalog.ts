@@ -456,6 +456,22 @@ export const EXPLANATIONS: ExplainEntry[] = [
     report: "Prepared the <method> call frame skeleton with dep_function and replaced each placeholder with target addresses.",
     quick: true,
   },
+  {
+    name: "dep_plan",
+    summary: "Whole DEP bypass discovery in seven sections",
+    what: "Runs the discovery for a <api> DEP bypass from <module> in one go, in the <style> style, and prints each step under its own [n/7] header.",
+    how: "Calls the existing commands in order: modules for <module>, sc.iat_find for <api>, rop.scan_live with <badchars>, a ranked rop.query per job with each gadget's side effects, rop.construct for each constant, code_caves for writable and executable addresses, then dep_function or the PUSHAD map, and last a Python draft. The draft fills in the top gadget per job and marks with TODO the distances only a debugger run can give, with the bp and dd commands that measure them. It does not check that the registers of one gadget feed the next.",
+    when: "Later labs and the exam, once you know the method by hand and want every piece on one screen. Verify the draft field by field before you trust it.",
+    args: [
+      { name: "api", meaning: "DEP bypass API.", values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into a code cave." } },
+      { name: "module", meaning: "Module without ASLR that supplies the gadgets and the IAT slot." },
+      BADCHARS("Bytes the target corrupts or cuts, as one hex string such as \"00 0A 0D\". Every address and constant is checked against them.", "none"),
+      { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "registers loaded, then one PUSHAD writes the frame." } },
+    ],
+    example: "dx @$osed().dep_plan(\"VirtualAlloc\", \"libbkup\", \"00 09 0A 0B 0C 0D 20\")",
+    output: "Seven sections: [1/7] module protections, [2/7] IAT slot, [3/7] gadget corpus, [4/7] the best 3 gadgets per job with side effects, [5/7] clean recipes for the constants and the writable or cave addresses, [6/7] the frame or PUSHAD map, [7/7] a Python draft with TODO lines to measure.",
+    report: "Ran dep_plan for <api> from <module> with bad characters <badchars> in the <style> style, then verified each field of the draft in WinDbg before using it.",
+  },
 
   // Gadget corpus
   {
