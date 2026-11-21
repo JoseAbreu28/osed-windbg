@@ -343,8 +343,8 @@ var osed_bundle = (() => {
       if (/^[0-9]+$/.test(trimmed)) {
         throw new Error("Decimal address strings are not allowed.");
       }
-      const hex7 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-      return __bi(hex7);
+      const hex8 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+      return __bi(hex8);
     }
     throw new Error("Address must be a number or hex string.");
   }
@@ -477,6 +477,22 @@ var osed_bundle = (() => {
     write();
     write(`=== ${title} ===`);
   }
+  function hex(value) {
+    return { hex: value };
+  }
+  function literal(value) {
+    if (typeof value === "string")
+      return JSON.stringify(value);
+    if (typeof value === "object" && value !== null && "hex" in value)
+      return `0x${(value.hex >>> 0).toString(16).toUpperCase()}`;
+    return String(value);
+  }
+  function dxCall(path, args) {
+    return `dx @$osed().${path}(${args.map(literal).join(", ")})`;
+  }
+  function echo(path, args) {
+    write(dxCall(path, args));
+  }
   function info(message) {
     write(`[+] ${message}`);
   }
@@ -587,13 +603,13 @@ var osed_bundle = (() => {
     if (!/^(0x)?[0-9a-fA-F]+$/.test(value)) {
       throw new Error("String pattern_offset value must be raw hex only.");
     }
-    const hex7 = value.startsWith("0x") ? value.slice(2) : value;
-    if (hex7.length % 2 !== 0) {
+    const hex8 = value.startsWith("0x") ? value.slice(2) : value;
+    if (hex8.length % 2 !== 0) {
       throw new Error("Hex string length must be even.");
     }
     const chars = [];
-    for (let i = 0; i < hex7.length; i += 2) {
-      chars.push(parseInt(hex7.slice(i, i + 2), 16));
+    for (let i = 0; i < hex8.length; i += 2) {
+      chars.push(parseInt(hex8.slice(i, i + 2), 16));
     }
     return String.fromCharCode(...chars.reverse());
   }
@@ -2634,15 +2650,15 @@ var osed_bundle = (() => {
         const expected = expectedBytes(normalizedExclude.values);
         const python = formatByteArray(expected, "python");
         const c = formatByteArray(expected, "c");
-        const hex7 = formatByteArray(expected, "hex");
+        const hex8 = formatByteArray(expected, "hex");
         section("Bad Character Test Array");
         info(`Bytes: ${expected.length} (excluded ${normalizedExclude.values.length})`);
         print(`Python: ${python}`);
         print(`C:      ${c}`);
-        print(`Hex:    ${hex7}`);
+        print(`Hex:    ${hex8}`);
         whyItMatters("Send this array to the target, then use badchar_find to locate it in memory and see which bytes were mangled.");
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
-        return result("badchar_array", __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }), [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex7 } }], warnings);
+        return result("badchar_array", __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }), [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex8 } }], warnings);
       }
     };
   }
@@ -2893,7 +2909,7 @@ var osed_bundle = (() => {
     const needle = name.trim().toLowerCase();
     return OS_TABLE.find((row) => row.key === needle || row.builds.includes(needle));
   }
-  function hex(value) {
+  function hex2(value) {
     return `0x${value.toString(16).toUpperCase()}`;
   }
   function resolveSyscall(kind, os, syscall) {
@@ -2912,7 +2928,7 @@ var osed_bundle = (() => {
     return {
       number: fallbackNumber,
       source: fallback.label,
-      warning: `${reason}; using ${hex(fallbackNumber)} (${fallback.label}). Pass os (${known}) or syscall, or read the number with u ntdll!${SERVICE_NAME[kind]} L1.`
+      warning: `${reason}; using ${hex2(fallbackNumber)} (${fallback.label}). Pass os (${known}) or syscall, or read the number with u ntdll!${SERVICE_NAME[kind]} L1.`
     };
   }
   function asmSize(item) {
@@ -3205,7 +3221,7 @@ var osed_bundle = (() => {
       }
       resolved = resolveSyscall("ntdisplay32", options.os, options.syscall);
       if (resolved.number < 1 || resolved.number > 127) {
-        throw new Error(`NtDisplayString number ${hex(resolved.number)} (${resolved.source}) does not fit the push imm8 in the ntdisplay stub (0x01-0x7F). Use mode "ntaccess".`);
+        throw new Error(`NtDisplayString number ${hex2(resolved.number)} (${resolved.source}) does not fit the push imm8 in the ntdisplay stub (0x01-0x7F). Use mode "ntaccess".`);
       }
       items = ntdisplayX86(tag, resolved.number);
       label = "ntdisplay egghunter";
@@ -3267,7 +3283,7 @@ var osed_bundle = (() => {
         };
         const result3 = buildEgghunter(opts);
         section("Egghunter");
-        const sysLabel = result3.syscallUsed !== null ? ` | Syscall: ${hex(result3.syscallUsed)} (${result3.syscallSource})` : "";
+        const sysLabel = result3.syscallUsed !== null ? ` | Syscall: ${hex2(result3.syscallUsed)} (${result3.syscallSource})` : "";
         info(`Tag: ${opts.tag} | Mode: ${opts.mode}${opts.wow64 ? " (WoW64)" : ""} | Size: ${result3.size} bytes${sysLabel}`);
         if (result3.osWarning) {
           warn(result3.osWarning);
@@ -6129,7 +6145,7 @@ var osed_bundle = (() => {
           break;
         }
         if (!done)
-          unsatisfied.push(`no \`mov <valreg>, [ptr] ; ret\` + settable pointer to deref ${hex2(word.derefSlot)} for ${word.comment}`);
+          unsatisfied.push(`no \`mov <valreg>, [ptr] ; ret\` + settable pointer to deref ${hex3(word.derefSlot)} for ${word.comment}`);
       } else if (word.placeholder || word.value !== void 0 && isBadcharFree3(word.value, bc)) {
         const store = stores.find((s) => popFor(s.reg) !== void 0);
         if (!store) {
@@ -6148,7 +6164,7 @@ var osed_bundle = (() => {
           }
         }
         if (!done)
-          unsatisfied.push(`cannot build any of [${stores.map((s) => s.reg).join(", ")}] = ${hex2(word.value)} for ${word.comment} while preserving eax`);
+          unsatisfied.push(`cannot build any of [${stores.map((s) => s.reg).join(", ")}] = ${hex3(word.value)} for ${word.comment} while preserving eax`);
       }
     }
     if (unsatisfied.length > 0) {
@@ -6165,7 +6181,7 @@ var osed_bundle = (() => {
       }
       steps.push(...retImmPadding(retImmBytes(popEax)));
     };
-    setEax(bufAddress, `eax = BUF ${(_b = bufAddress.placeholder) != null ? _b : hex2(bufAddress.value)}`);
+    setEax(bufAddress, `eax = BUF ${(_b = bufAddress.placeholder) != null ? _b : hex3(bufAddress.value)}`);
     resolved.forEach((r, i) => {
       if (i > 0) {
         steps.push(gadgetStep2(advance.gadget, `add eax, 4 -> BUF+0x${(i * 4).toString(16)}`));
@@ -6177,12 +6193,12 @@ var osed_bundle = (() => {
       if (r.deref) {
         if (r.deref.ptrPop) {
           steps.push(gadgetStep2(r.deref.ptrPop, `pop ${r.deref.ptrReg}`));
-          steps.push({ kind: "value", value: r.deref.slot >>> 0, comment: `${r.deref.ptrReg} = ${hex2(r.deref.slot)} (IAT slot of ${r.word.comment})` });
+          steps.push({ kind: "value", value: r.deref.slot >>> 0, comment: `${r.deref.ptrReg} = ${hex3(r.deref.slot)} (IAT slot of ${r.word.comment})` });
           steps.push(...retImmPadding(retImmBytes(r.deref.ptrPop)));
         } else {
           steps.push(...r.deref.ptrRecipe.steps);
         }
-        steps.push(gadgetStep2(r.deref.memLoad, `mov ${r.reg}, [${r.deref.ptrReg}]  -> ${r.reg} = *${hex2(r.deref.slot)} (${r.word.comment})`));
+        steps.push(gadgetStep2(r.deref.memLoad, `mov ${r.reg}, [${r.deref.ptrReg}]  -> ${r.reg} = *${hex3(r.deref.slot)} (${r.word.comment})`));
         steps.push(...retImmPadding(retImmBytes(r.deref.memLoad)));
       } else if (r.recipe) {
         steps.push(...r.recipe.steps);
@@ -6192,14 +6208,14 @@ var osed_bundle = (() => {
           placeholders.add(r.word.placeholder);
           steps.push({ kind: "value", placeholder: r.word.placeholder, comment: `${r.reg} = ${r.word.placeholder} (${r.word.comment})` });
         } else {
-          steps.push({ kind: "value", value: r.word.value >>> 0, comment: `${r.reg} = ${hex2(r.word.value)} (${r.word.comment})` });
+          steps.push({ kind: "value", value: r.word.value >>> 0, comment: `${r.reg} = ${hex3(r.word.value)} (${r.word.comment})` });
         }
         steps.push(...retImmPadding(retImmBytes(r.pop)));
       }
       steps.push(gadgetStep2(r.store.gadget, `mov [eax], ${r.reg}  -> BUF+0x${(i * 4).toString(16)} = ${r.word.comment}`));
       steps.push(...retImmPadding(retImmBytes(r.store.gadget)));
     });
-    setEax(bufAddress, `eax = BUF ${(_c = bufAddress.placeholder) != null ? _c : hex2(bufAddress.value)} (for pivot)`);
+    setEax(bufAddress, `eax = BUF ${(_c = bufAddress.placeholder) != null ? _c : hex3(bufAddress.value)} (for pivot)`);
     steps.push(gadgetStep2(pivot, "xchg eax, esp  -> ESP = BUF; ret dispatches into BUF[0]"));
     steps.push(...retImmPadding(retImmBytes(pivot)));
     return {
@@ -6216,7 +6232,7 @@ var osed_bundle = (() => {
       success: true
     };
   }
-  function hex2(value) {
+  function hex3(value) {
     return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
   }
 
@@ -6343,14 +6359,14 @@ var osed_bundle = (() => {
     const jmpAddr = firstKnownAddress(chain.dispatch);
     const unstable = [];
     if (!isAddressStable(popAddr))
-      unstable.push(`pop ${chain.ptrReg} @ ${hex3(Number(popAddr))}`);
+      unstable.push(`pop ${chain.ptrReg} @ ${hex4(Number(popAddr))}`);
     if (!isAddressStable(derefAddr))
-      unstable.push(`mov ${chain.valReg},[${chain.ptrReg}] @ ${hex3(Number(derefAddr))}`);
+      unstable.push(`mov ${chain.valReg},[${chain.ptrReg}] @ ${hex4(Number(derefAddr))}`);
     if (!isAddressStable(jmpAddr))
-      unstable.push(`jmp ${chain.valReg} @ ${hex3(Number(jmpAddr))}`);
+      unstable.push(`jmp ${chain.valReg} @ ${hex4(Number(jmpAddr))}`);
     const words2 = [
       { value: Number(popAddr) >>> 0, comment: `pop ${chain.ptrReg} ; ret (deref preamble)` },
-      { value: slot >>> 0, comment: `IAT slot ${hex3(slot)}` },
+      { value: slot >>> 0, comment: `IAT slot ${hex4(slot)}` },
       { value: Number(derefAddr) >>> 0, comment: `mov ${chain.valReg},[${chain.ptrReg}] ; ret (deref -> live API)` },
       { value: Number(jmpAddr) >>> 0, comment: `jmp ${chain.valReg} (dispatch)` },
       ...frame
@@ -6368,7 +6384,7 @@ var osed_bundle = (() => {
       }
     });
   }
-  function hex3(value) {
+  function hex4(value) {
     return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
   }
 
@@ -8052,8 +8068,8 @@ var osed_bundle = (() => {
     const raw = text.trim().toLowerCase();
     if (/^-?0x[0-9a-f]+$/.test(raw)) {
       const negative = raw.startsWith("-");
-      const hex7 = negative ? raw.slice(3) : raw.slice(2);
-      const parsed = Number.parseInt(hex7, 16);
+      const hex8 = negative ? raw.slice(3) : raw.slice(2);
+      const parsed = Number.parseInt(hex8, 16);
       if (!Number.isFinite(parsed)) {
         return void 0;
       }
@@ -12072,10 +12088,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-21T18:29:54.422Z" : globalThis[key2];
+        value = true ? "2026-11-21T19:44:12.542Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "32231d78be59" : globalThis[key2];
+        value = true ? "7d6622fd3285" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13301,13 +13317,13 @@ var osed_bundle = (() => {
     if (typeof raw !== "string" || !raw.trim()) {
       throw new Error("shellcode must be a non-empty hex string or byte array.");
     }
-    const hex7 = raw.replace(/[^0-9a-fA-F]/g, "");
-    if (hex7.length % 2 !== 0) {
+    const hex8 = raw.replace(/[^0-9a-fA-F]/g, "");
+    if (hex8.length % 2 !== 0) {
       throw new Error("shellcode hex string must have an even number of hex digits.");
     }
     const result3 = [];
-    for (let i = 0; i < hex7.length; i += 2) {
-      result3.push(parseInt(hex7.slice(i, i + 2), 16));
+    for (let i = 0; i < hex8.length; i += 2) {
+      result3.push(parseInt(hex8.slice(i, i + 2), 16));
     }
     return result3;
   }
@@ -15677,8 +15693,8 @@ var osed_bundle = (() => {
     return chars.join("");
   }
   function toDmlAddress(address, command2) {
-    const hex7 = `0x${address.toString(16).toUpperCase()}`;
-    return `<link cmd="${command2} ${hex7}">${hex7}</link>`;
+    const hex8 = `0x${address.toString(16).toUpperCase()}`;
+    return `<link cmd="${command2} ${hex8}">${hex8}</link>`;
   }
   function toDmlModule(name) {
     var _a2;
@@ -16779,7 +16795,7 @@ if __name__ == "__main__":
   var SCRATCH = ["eax", "ecx", "edx"];
   var regIndex = (reg) => REGS2.indexOf(reg);
   var isReg = (value) => REGS2.includes(value);
-  var hex4 = (value) => `0x${(value >>> 0).toString(16)}`;
+  var hex5 = (value) => `0x${(value >>> 0).toString(16)}`;
   var hex326 = (value) => `0x${(value >>> 0).toString(16).padStart(8, "0")}`;
   var fitsImm8 = (value) => (value | 0) >= -128 && (value | 0) <= 127;
   function le32(value) {
@@ -16792,12 +16808,12 @@ if __name__ == "__main__":
   var ALU_EXT = { add: 0, sub: 5, xor: 6 };
   var x86 = {
     pushImm: (value) => ({
-      asm: `push ${hex4(value)}`,
+      asm: `push ${hex5(value)}`,
       bytes: fitsImm8(value) ? [106, value & 255] : [104, ...le32(value)]
     }),
     pushReg: (reg) => ({ asm: `push ${reg}`, bytes: [80 + regIndex(reg)] }),
     popReg: (reg) => ({ asm: `pop ${reg}`, bytes: [88 + regIndex(reg)] }),
-    movImm: (reg, value) => ({ asm: `mov ${reg}, ${hex4(value)}`, bytes: [184 + regIndex(reg), ...le32(value)] }),
+    movImm: (reg, value) => ({ asm: `mov ${reg}, ${hex5(value)}`, bytes: [184 + regIndex(reg), ...le32(value)] }),
     movReg: (dst, src) => ({ asm: `mov ${dst}, ${src}`, bytes: [137, 192 | regIndex(src) << 3 | regIndex(dst)] }),
     zero: (op5, reg) => ({
       asm: `${op5} ${reg}, ${reg}`,
@@ -16808,7 +16824,7 @@ if __name__ == "__main__":
     alu: (op5, reg, value) => {
       const ext = ALU_EXT[op5] << 3;
       const bytes = fitsImm8(value) ? [131, 192 | ext | regIndex(reg), value & 255] : reg === "eax" ? [5 | ext, ...le32(value)] : [129, 192 | ext | regIndex(reg), ...le32(value)];
-      return { asm: `${op5} ${reg}, ${hex4(value)}`, bytes };
+      return { asm: `${op5} ${reg}, ${hex5(value)}`, bytes };
     },
     pushFrame: (disp) => ({ asm: `push ${frameOperand(disp)}`, bytes: [255, 117, disp & 255] }),
     callFrame: (disp) => ({ asm: `call ${frameOperand(disp)}`, bytes: [255, 85, disp & 255] }),
@@ -20108,7 +20124,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return "value" in self2 ? String(self2.value) : String(self2.success);
     }
   };
-  function hex5(value) {
+  function hex6(value) {
     return value < 0 ? `-0x${(-value).toString(16).toUpperCase()}` : `0x${value.toString(16).toUpperCase()}`;
   }
   function toPlainNumber(value) {
@@ -20122,10 +20138,10 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     if (typeof value === "number") {
       if (kind === "number")
         return String(value);
-      return kind === "address" || Math.abs(value) > 65535 ? hex5(value) : String(value);
+      return kind === "address" || Math.abs(value) > 65535 ? hex6(value) : String(value);
     }
     if (typeof value === "bigint")
-      return hex5(Number(value));
+      return hex6(Number(value));
     if (typeof value === "string")
       return value === "" ? "none" : stripDml(value);
     if (Array.isArray(value)) {
@@ -20144,7 +20160,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     if (typeof value === "string")
       return JSON.stringify(value);
     if (typeof value === "number")
-      return Math.abs(value) > 65535 ? hex5(value) : String(value);
+      return Math.abs(value) > 65535 ? hex6(value) : String(value);
     return String(value);
   }
   function readPath(source, path) {
@@ -20992,8 +21008,8 @@ ${INDENT}`)]);
     const text = value.trim().replace(/`/g, "");
     if (/^-?0x[0-9a-f]+$/i.test(text)) {
       const negative = text.startsWith("-");
-      const hex7 = negative ? text.slice(3) : text.slice(2);
-      const parsed = __bi(`0x${hex7}`);
+      const hex8 = negative ? text.slice(3) : text.slice(2);
+      const parsed = __bi(`0x${hex8}`);
       return negative ? -parsed : parsed;
     }
     if (/^-?[0-9]+$/.test(text)) {
@@ -21014,7 +21030,7 @@ ${INDENT}`)]);
     const signed = __bi.and(unsigned, signBit) !== __bi(0) ? unsigned - modulus : unsigned;
     const width = bits / 4;
     const byteCount = bits / 8;
-    const hex7 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
+    const hex8 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
     const littleEndianBytes = [];
     for (let i = 0; i < byteCount; i += 1) {
       const byte = Number(__bi.and(__bi.shr(unsigned, __bi(i * 8)), __bi(255)));
@@ -21023,11 +21039,11 @@ ${INDENT}`)]);
     return {
       input: typeof rawValue === "string" ? rawValue : value.toString(),
       bits,
-      hex: hex7,
+      hex: hex8,
       unsigned: unsigned.toString(),
       signed: signed.toString(),
       littleEndianBytes: littleEndianBytes.join(" "),
-      twosComplement: hex7
+      twosComplement: hex8
     };
   }
 
@@ -22354,7 +22370,7 @@ ${INDENT}`)]);
     const value = [...field.values.exact][0];
     return value > 0 ? "+" + value : String(value);
   }
-  function hex6(value, width) {
+  function hex7(value, width) {
     return "0x" + value.toString(16).toUpperCase().padStart(width, "0");
   }
   function pad2(value, width) {
@@ -22410,7 +22426,7 @@ ${INDENT}`)]);
         return ((_b2 = (_a3 = left.rva) != null ? _a3 : left.va) != null ? _b2 : __bi(-1)) < ((_d = (_c2 = right.rva) != null ? _c2 : right.va) != null ? _d : __bi(-1)) ? -1 : ((_f = (_e = left.rva) != null ? _e : left.va) != null ? _f : __bi(-1)) > ((_h = (_g = right.rva) != null ? _g : right.va) != null ? _h : __bi(-1)) ? 1 : left.instructions < right.instructions ? -1 : left.instructions > right.instructions ? 1 : 0;
       });
       const rendered = rows.map((row) => ({
-        va: row.va === void 0 ? "?" : hex6(row.va, addressWidth),
+        va: row.va === void 0 ? "?" : hex7(row.va, addressWidth),
         rva: row.rva === void 0 ? "?" : "+" + row.rva.toString(16).toUpperCase().padStart(Math.max(1, addressWidth - 2), "0"),
         instructions: row.instructions,
         capability: row.capability,
@@ -22423,7 +22439,7 @@ ${INDENT}`)]);
         capability: Math.max(10, ...rendered.map((row) => row.capability.length)),
         esp: Math.max(3, ...rendered.map((row) => row.esp.length))
       };
-      lines.push("", "MODULE: " + moduleName, "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex6(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length, "", pad2("VA", widths.va) + "  " + pad2("RVA", widths.rva) + "  " + pad2("INSTRUCTIONS", widths.instructions) + "  " + pad2("CAPABILITY", widths.capability) + "  ESP", "-".repeat(widths.va) + "  " + "-".repeat(widths.rva) + "  " + "-".repeat(widths.instructions) + "  " + "-".repeat(widths.capability) + "  " + "-".repeat(widths.esp), ...rendered.map((row) => pad2(row.va, widths.va) + "  " + pad2(row.rva, widths.rva) + "  " + pad2(row.instructions, widths.instructions) + "  " + pad2(row.capability, widths.capability) + "  " + row.esp));
+      lines.push("", "MODULE: " + moduleName, "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex7(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length, "", pad2("VA", widths.va) + "  " + pad2("RVA", widths.rva) + "  " + pad2("INSTRUCTIONS", widths.instructions) + "  " + pad2("CAPABILITY", widths.capability) + "  ESP", "-".repeat(widths.va) + "  " + "-".repeat(widths.rva) + "  " + "-".repeat(widths.instructions) + "  " + "-".repeat(widths.capability) + "  " + "-".repeat(widths.esp), ...rendered.map((row) => pad2(row.va, widths.va) + "  " + pad2(row.rva, widths.rva) + "  " + pad2(row.instructions, widths.instructions) + "  " + pad2(row.capability, widths.capability) + "  " + row.esp));
     }
     return lines.join("\n");
   }
@@ -22555,9 +22571,9 @@ ${INDENT}`)]);
         byByte.set(entry.byte, list);
       }
       const badSummary = [...byByte.entries()].map(([byte, positions]) => {
-        const hex7 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        const hex8 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
         const posStr = positions.length === 1 ? `offset ${positions[0]}` : positions.length === positions[positions.length - 1] - positions[0] + 1 ? `offsets ${positions[0]}-${positions[positions.length - 1]}` : `offsets ${positions.join(",")}`;
-        return `${hex7} (${posStr})`;
+        return `${hex8} (${posStr})`;
       }).join(", ");
       return `${mod.name} base ${baseHex} | packed: ${packed} | bad bytes: ${badSummary}. No usable gadget addresses.`;
     } catch (e) {
@@ -25235,6 +25251,7 @@ ${INDENT}`)]);
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("dep_plan");
       }
+      section(dxCall("dep_plan", args));
       const [apiArg, moduleArg, badArg, styleArg] = args;
       const depApi = DEP_PLAN_APIS.find((name) => name.toLowerCase() === String(apiArg != null ? apiArg : "").trim().toLowerCase());
       const style = String(styleArg != null ? styleArg : "skeleton").trim().toLowerCase();
@@ -25269,6 +25286,7 @@ ${INDENT}`)]);
       const last = Number(moduleInfo.base + moduleInfo.size - __bi(1));
       const fixedByte = (shift) => (first >>> shift & 255) === (last >>> shift & 255) ? first >>> shift & 255 : void 0;
       section(`[1/${n}] Module protections for ${moduleLabel2}`);
+      echo("modules", [moduleName]);
       invoke("modules", [moduleName]);
       const sharedBad = [...new Set([24, 16].map(fixedByte).filter((byte) => byte !== void 0 && badSet.has(byte)))];
       const moduleWarnings = [
@@ -25282,6 +25300,7 @@ ${INDENT}`)]);
         info(`${moduleLabel2} spans ${hex325(first)} to ${hex325(last)}: no ASLR, and its fixed high bytes are clean. The scan in [3/${n}] drops each address whose low bytes are bad.`);
       summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
       section(`[2/${n}] IAT slot of ${depApi}`);
+      echo("sc.iat_find", [depApi]);
       const iatRows = api.sc.iat_find(depApi).rows;
       const slotRows = Array.from({ length: (_a2 = iatRows == null ? void 0 : iatRows.length) != null ? _a2 : 0 }, (_, i) => iatRows[i]).filter((row) => {
         var _a3;
@@ -25310,6 +25329,7 @@ ${INDENT}`)]);
       }
       summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === void 0 ? "not found" : `${hex325(iatSlot)}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
       section(`[3/${n}] Gadget corpus from ${moduleName}`);
+      echo("rop.scan_live", [moduleName, badText]);
       executeRopScanLive(moduleName, badText);
       const corpus = currentRopCorpus;
       const gadgetCount = (_e = corpus == null ? void 0 : corpus.gadgets.length) != null ? _e : 0;
@@ -25327,6 +25347,7 @@ ${INDENT}`)]);
       let jmpEsp;
       if (style === "pushad") {
         for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
+          echo("find_bytes", [moduleName, bytes, 20]);
           invoke("find_bytes", [moduleName, bytes, 20]);
           const hits = ((_f = lastResult == null ? void 0 : lastResult.findings) != null ? _f : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit) && addressBadBytes(__bi(hit), 4, badSet).length === 0).slice(0, 3);
           print(`  ${label}: ${hits.length > 0 ? hits.map(hex325).join("  ") : "none without bad bytes"}`);
@@ -25340,22 +25361,26 @@ ${INDENT}`)]);
       section(`[5/${n}] Clean recipes for the constants`);
       for (const constant of CONSTANTS[depApi]) {
         info(`${constant.field} = ${hex325(constant.value)}`);
+        echo("rop.construct", ["eax", hex(constant.value), badText]);
         executeRopConstruct("eax", constant.value, badText);
       }
       if (iatSlot !== void 0 && slotBad.length > 0) {
         info(`IAT slot = ${hex325(iatSlot)}`);
+        echo("rop.construct", ["eax", hex(iatSlot), badText]);
         executeRopConstruct("eax", iatSlot, badText);
       }
       const pickCave = (minSize, capability2) => {
+        echo("code_caves", [moduleName, hex(minSize), 25, badText, capability2]);
         const { caves } = findCodeCaves(moduleName, minSize, 25, badText, capability2);
         const cave2 = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
         if (!cave2)
           return void 0;
         return Number(cave2.addrSafe === false && cave2.safeVa !== null ? cave2.safeVa : cave2.address);
       };
-      const writable = depApi === "VirtualAlloc" ? void 0 : pickCave(4, "STAGING");
-      const cave = depApi === "WriteProcessMemory" ? pickCave(528, "EXEC") : void 0;
+      let writable;
+      let cave;
       if (depApi !== "VirtualAlloc") {
+        writable = pickCave(4, "STAGING");
         const field = depApi === "VirtualProtect" ? "lpflOldProtect" : "lpNumberOfBytesWritten";
         if (writable === void 0)
           warn(`${field}: no clean writable cave in ${moduleName}. Try dx @$osed().code_caves("", 4, 25, "${badText}", "STAGING").`);
@@ -25363,6 +25388,7 @@ ${INDENT}`)]);
           info(`${field} = ${hex325(writable)}, a writable cave with no bad byte (code_caves STAGING).`);
       }
       if (depApi === "WriteProcessMemory") {
+        cave = pickCave(528, "EXEC");
         if (cave === void 0)
           warn(`Code cave: none of 0x210 bytes with a clean address in ${moduleName}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
         else
@@ -25372,8 +25398,10 @@ ${INDENT}`)]);
       section(`[6/${n}] ${style === "pushad" ? "PUSHAD register map" : "Call frame"} for ${depApi}`);
       if (style === "pushad")
         printPushadMap(depApi);
-      else
+      else {
+        echo("dep_function", [depApi]);
         invoke("dep_function", [depApi]);
+      }
       summary.push({ Section: `[6/${n}] frame`, Result: style === "pushad" ? "register map" : "dep_function frame" });
       section(`[7/${n}] Python draft: verify it field by field, it is not a finished chain`);
       for (const line of draftLines({ api: depApi, style, module: moduleName, iatSlot, writable, cave, best, jmpEsp }))
@@ -25455,6 +25483,11 @@ ${INDENT}`)]);
           return helperHelp("leak.base");
         return invoke("leak_base", args);
       }
+    };
+    api.rop_template = (...args) => {
+      if (!(args.length === 1 && args[0] === "help"))
+        section(dxCall("rop_template", args));
+      return invoke("rop_template", args);
     };
     api.rop_find = (...args) => invoke("rop", args);
     api.dep_plan = executeDepPlan;
