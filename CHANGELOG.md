@@ -7,6 +7,12 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-21 - The legacy build is checked against the 19041 engine
+
+- `leak.analyze` failed in classic WinDbg 10.0.19041 with `Object doesn't support property or method 'matchAll'`, and so did the format string parser behind `fmt.inspect`. That engine has no `String.prototype.matchAll`. `legacy/runtime.js` now defines it.
+- `legacy/engine.js` lists what the engine lacks, as measured by `legacy/engine_probe.js` inside cdb x86 10.0.19041.685: 33 builtins such as `replaceAll`, `Array.prototype.at`, `findLast`, and `Object.hasOwn`, plus regex named groups, lookbehind, and the `s` flag. `npm run build` deletes `dist/osed-legacy.js` and fails when the bundle uses one that `runtime.js` does not polyfill. `tests/legacy_engine.test.ts` builds the legacy bundle, scans it, and runs `leak.analyze` in a realm with those builtins removed.
+- When `badchar_find` finds no array, it says how many bytes it scanned. It used to print the requested window even when the stack ended sooner. When the instruction pointer is inside a module, it says that the target has not crashed on the overflow yet, or faulted inside a module, rather than blaming the return address.
+
 ### 2026-11-21 - One command for the DEP bypass discovery
 
 - `dep_plan(api, module, badchars, style?)` runs the discovery for VirtualAlloc, VirtualProtect, or WriteProcessMemory and prints seven sections, each under a `[n/7]` header: the module's protections, the IAT slot, the gadget corpus, the best 3 gadgets per job with their side effects, clean recipes for the constants plus writable and code cave addresses, the frame or PUSHAD map, and a Python draft. Each section calls the existing command, so `modules`, `sc.iat_find`, `rop.scan_live`, `rop.construct`, `code_caves`, `find_bytes`, and `dep_function` print what they print on their own.

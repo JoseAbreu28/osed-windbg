@@ -172,3 +172,21 @@ if (!String.prototype.trimEnd) {
 if (!String.prototype.trimStart) {
   String.prototype.trimStart = String.prototype.trimLeft || function () { return String(this).replace(/^\s+/, ""); };
 }
+if (!String.prototype.matchAll) {
+  Object.defineProperty(String.prototype, "matchAll", {
+    configurable: true,
+    writable: true,
+    value: function matchAll(regexp) {
+      var isRegExp = regexp instanceof RegExp;
+      if (isRegExp && !regexp.global) throw new TypeError("String.prototype.matchAll called with a non-global RegExp argument");
+      var re = isRegExp ? new RegExp(regexp) : new RegExp(regexp, "g");
+      re.lastIndex = isRegExp ? regexp.lastIndex : 0;
+      var text = String(this), found = [], match;
+      while ((match = re.exec(text)) !== null) {
+        found.push(match);
+        if (match[0] === "") re.lastIndex++;
+      }
+      return found[Symbol.iterator]();
+    },
+  });
+}

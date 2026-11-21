@@ -16,6 +16,7 @@ const gitStatus = readGitValue("git status --porcelain", "");
 const fs = require("fs");
 const path = require("path");
 const { createLegacyTransformer } = require("./legacy/bigint_transform.js");
+const { findEngineGaps, formatGaps } = require("./legacy/engine.js");
 
 // sc.builder prints tools/sc_builder.py; regenerate its embedded copy so the two cannot drift.
 const builderSource = fs.readFileSync(path.join(__dirname, "tools", "sc_builder.py"), "utf8").replace(/\r\n/g, "\n");
@@ -40,10 +41,10 @@ const targets = [
   },
 ];
 
-Promise.all(targets.map((target) => esbuild
-  .build({
-    entryPoints: ["src/index.ts"],
-    outfile: target.outfile,
+function buildOptions(target) {
+  return {
+    entryPoints: [path.join(__dirname, "src", "index.ts")],
+    outfile: path.join(__dirname, target.outfile),
     plugins: target.plugins,
     banner: target.banner,
     bundle: true,
@@ -66,8 +67,23 @@ Promise.all(targets.map((target) => esbuild
       __OSED_GIT_DIRTY__: JSON.stringify(gitStatus.length > 0),
     },
     logLevel: "info",
-  })))
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+  };
+}
+
+function checkLegacyBundle(file) {
+  const gaps = findEngineGaps(fs.readFileSync(file, "utf8"), file);
+  if (gaps.length === 0) return;
+  fs.unlinkSync(file);
+  throw new Error(`${file} uses what classic WinDbg 10.0.19041 lacks (see legacy/engine.js); output deleted:\n${formatGaps(gaps)}`);
+}
+
+module.exports = { buildOptions, legacyTarget: targets[1] };
+
+if (require.main === module) {
+  Promise.all(targets.map((target) => esbuild.build(buildOptions(target))))
+    .then(() => checkLegacyBundle(path.join(__dirname, targets[1].outfile)))
+    .catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
+}
