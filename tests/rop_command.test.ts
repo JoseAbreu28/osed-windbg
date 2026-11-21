@@ -142,7 +142,7 @@ describe("rop_suggest command", () => {
     expect(findMsp.usage).toBe("dx @$osed().findmsp(patternLength?, stackBytes?, probeBytes?)");
     expect(findMsp.examples).toContain("dx @$osed().findmsp(20000, 4096)");
     expect(findBytes?.usage).toBe(
-      "dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)",
+      "dx @$osed().find_bytes(module, bytes, maxResults?, badchars?, executableOnly?, mode?)  // a boolean in the badchars slot is executableOnly, the older order",
     );
     expect(findBytes?.examples).toContain('dx @$osed().find_bytes("vulnserver", "FF E4")');
   });
@@ -157,7 +157,7 @@ describe("rop_suggest command", () => {
       default: "legacy",
     });
     expect(ropSuggest?.examples).toContain(
-      'dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")',
+      'dx @$osed().rop_suggest("essfunc", 50, "00 0A 0D", true, "fast", "semantic")',
     );
   });
 
@@ -230,7 +230,7 @@ describe("rop_suggest command", () => {
     expect(api.find_bytes("target", "C C C C").success).toBe(false);
     expect(api.last_result().success).toBe(false);
     expect(api.last_result().errors[0]).toContain("bytes");
-    expect(logs.join("")).toContain("Usage: dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)");
+    expect(logs.join("")).toContain("Usage: dx @$osed().find_bytes(module, bytes, maxResults?, badchars?, executableOnly?, mode?)");
   });
 
   test("scan_live reports explicit rejected counts when backward discovery exceeds pattern hits", () => {

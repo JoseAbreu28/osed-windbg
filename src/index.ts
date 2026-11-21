@@ -54,6 +54,7 @@ import { buildBestApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabi
 import { buildExploitFrame } from "./rop/exploit_frame";
 import { verifyChain, parseManualChain, type VerificationReport } from "./rop/chain_verifier";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
+import { badcharSlotArgs } from "./analysis/badchar_scan";
 import { findModuleByAddress, listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
@@ -3516,14 +3517,15 @@ function parseHexByteList(value: unknown): number[] | unknown {
   if (typeof value !== "string") {
     return value;
   }
-  const tokens = value.split(/[,\s]+/).filter((token) => token.length > 0);
+  const tokens = value.split(/[,\s]+|(?=\\x)/i).filter((token) => token.length > 0);
   if (tokens.length === 0) {
     return [];
   }
   const parsed: number[] = [];
   for (const token of tokens) {
-    if (/^[0-9a-fA-F]{2}$/.test(token)) {
-      parsed.push(parseInt(token, 16));
+    const pair = /^(?:\\x|0x)?([0-9a-fA-F]{2})$/i.exec(token);
+    if (pair) {
+      parsed.push(parseInt(pair[1], 16));
       continue;
     }
 
@@ -3591,24 +3593,21 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
     case "str_bytes":
       return { text: args[0], encoding: args[1], terminator: args[2], exclude: parseHexByteList(args[3]) };
     case "rop":
+      return { module: args[0], maxResults: args[1], executableOnly: args[2], mode: args[3] };
     case "rop_suggest":
     case "pivots":
     case "retn":
-    case "add_esp":
-      return commandName === "rop_suggest"
-        ? {
-            module: args[0],
-            maxResults: args[1],
-            executableOnly: args[2],
-            mode: args[3],
-            engine: args[4],
-          }
-        : {
-            module: args[0],
-            maxResults: args[1],
-            executableOnly: args[2],
-            mode: args[3],
-          };
+    case "add_esp": {
+      const slots = badcharSlotArgs(args, 2);
+      const scan = {
+        module: slots[0],
+        maxResults: slots[1],
+        badchars: parseHexByteList(slots[2]),
+        executableOnly: slots[3],
+        mode: slots[4],
+      };
+      return commandName === "rop_suggest" ? { ...scan, engine: slots[5] } : scan;
+    }
     case "nop":
       return { length: args[0], byte: args[1] };
     case "rop_template":
@@ -3644,14 +3643,17 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
         exclude: parseHexByteList(args[1]),
         key: args[2],
       };
-    case "find_bytes":
+    case "find_bytes": {
+      const slots = badcharSlotArgs(args, 3);
       return {
-        module: args[0],
-        bytes: parseHexByteList(args[1]),
-        maxResults: args[2],
-        executableOnly: args[3],
-        mode: args[4],
+        module: slots[0],
+        bytes: parseHexByteList(slots[1]),
+        maxResults: slots[2],
+        badchars: parseHexByteList(slots[3]),
+        executableOnly: slots[4],
+        mode: slots[5],
       };
+    }
     case "find_stack_bytes":
       return {
         bytes: parseHexByteList(args[0]),

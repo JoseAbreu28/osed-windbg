@@ -1,7 +1,8 @@
 import { Command, CommandResult, ValidationFlags } from "../core/registry";
 import * as out from "../core/output";
 import { getPointerSize, readMemory, tryReadMemory } from "../core/memory";
-import { scanPattern } from "../core/scan_engine";
+import { normalizeByteArray } from "../core/validation";
+import { reportBadcharDrops, scanPatternAvoiding } from "../analysis/badchar_scan";
 import { knownPatternsForPointerSize, type GadgetPattern, validateInstructionCandidateForPointerSize } from "../logic/instruction_validation";
 import { buildRopIndexFromSequences } from "../rop";
 import { parseInstruction } from "../semantics";
@@ -13,6 +14,7 @@ type ScanOptions = {
   executableOnly: boolean;
   maxResults: number;
   mode: "fast" | "thorough";
+  badchars: number[];
 };
 
 type RopEngine = "legacy" | "semantic";
@@ -42,6 +44,7 @@ function normalizeScan(options: Record<string, unknown>): ScanOptions {
     executableOnly: (options.executableOnly as boolean | undefined) ?? true,
     maxResults: Math.min((options.maxResults as number | undefined) ?? 50, 200),
     mode: (options.mode as "fast" | "thorough" | undefined) ?? "fast",
+    badchars: normalizeByteArray((options.badchars as number[] | undefined) ?? []).values,
   };
 }
 
@@ -58,7 +61,7 @@ function validationPass(flags: ValidationFlags): boolean {
 
 function collectValidatedPatternHits(pattern: GadgetPattern, options: ScanOptions): { hits: ValidatedPatternHit[]; warnings: string[]; stats: Record<string, number> } {
   const pointerSize = getPointerSize();
-  const scan = scanPattern(
+  const scan = scanPatternAvoiding(
     {
       module: options.module,
       executableOnly: options.executableOnly,
@@ -66,6 +69,7 @@ function collectValidatedPatternHits(pattern: GadgetPattern, options: ScanOption
       chunkSize: options.mode === "thorough" ? 0x1000 : 0x4000,
     },
     Uint8Array.from(pattern.bytes),
+    options.badchars,
   );
 
   const hits: ValidatedPatternHit[] = [];
@@ -92,7 +96,7 @@ function collectValidatedPatternHits(pattern: GadgetPattern, options: ScanOption
   return {
     hits,
     warnings: scan.warnings.map((warning) => `${warning.region}: ${warning.message}`),
-    stats: scan.stats,
+    stats: { ...scan.stats, dropped: scan.dropped },
   };
 }
 
@@ -174,7 +178,7 @@ function runSemanticRopSuggest(options: RopSuggestOptions): CommandResult {
   const pointerSize = getPointerSize();
   const combinedWarnings: string[] = [];
   const allHits: ValidatedPatternHit[] = [];
-  let combinedStats: Record<string, number> = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
+  let combinedStats: Record<string, number> = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0, dropped: 0 };
 
   for (const pattern of knownPatternsForPointerSize(pointerSize)) {
     const result = collectValidatedPatternHits(pattern, options);
@@ -186,6 +190,7 @@ function runSemanticRopSuggest(options: RopSuggestOptions): CommandResult {
       chunksSkipped: combinedStats.chunksSkipped + (result.stats?.chunksSkipped ?? 0),
       results: combinedStats.results + (result.stats?.results ?? 0),
       stoppedEarly: combinedStats.stoppedEarly + (result.stats?.stoppedEarly ?? 0),
+      dropped: combinedStats.dropped + (result.stats?.dropped ?? 0),
     };
   }
 
@@ -232,6 +237,7 @@ function runSemanticRopSuggest(options: RopSuggestOptions): CommandResult {
     );
   }
 
+  reportBadcharDrops(options.badchars, combinedStats.dropped);
   out.info("Semantic backend selected; duplicate gadgets are merged by canonical IR.");
   out.whyItMatters("Semantic gadget suggestions improve ranking, deduplication, and explainability.");
 
@@ -249,7 +255,7 @@ function runSemanticRopSuggest(options: RopSuggestOptions): CommandResult {
 function runLegacyRopSuggest(options: RopSuggestOptions, initialWarnings: string[] = []): CommandResult {
   const combinedFindings: unknown[] = [];
   const combinedWarnings: string[] = [...initialWarnings];
-  let combinedStats: Record<string, number> = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
+  let combinedStats: Record<string, number> = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0, dropped: 0 };
 
   const pointerSize = getPointerSize();
   for (const pattern of knownPatternsForPointerSize(pointerSize)) {
@@ -264,9 +270,11 @@ function runLegacyRopSuggest(options: RopSuggestOptions, initialWarnings: string
       chunksSkipped: combinedStats.chunksSkipped + (result.stats?.chunksSkipped ?? 0),
       results: combinedStats.results + (result.stats?.results ?? 0),
       stoppedEarly: combinedStats.stoppedEarly + (result.stats?.stoppedEarly ?? 0),
+      dropped: combinedStats.dropped + (result.stats?.dropped ?? 0),
     };
   }
 
+  reportBadcharDrops(options.badchars, combinedStats.dropped);
   out.whyItMatters("Validated gadget suggestions reduce false positives during ROP chain construction.");
 
   return {
@@ -324,14 +332,16 @@ export function createRopCommands(): Command[] {
   const findBytes: Command = {
     name: "find_bytes",
     description: "Find byte sequence hits in PE sections of a loaded module.",
-    usage: 'dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)',
+    usage: 'dx @$osed().find_bytes(module, bytes, maxResults?, badchars?, executableOnly?, mode?)  // a boolean in the badchars slot is executableOnly, the older order',
     examples: [
       'dx @$osed().find_bytes("vulnserver", "FF E4")',
       'dx @$osed().find_bytes("essfunc", "58 C3", 25)',
+      'dx @$osed().find_bytes("libbkup", "FF E4", 20, "00 09 0A 0B 0C 0D 20")',
     ],
     schema: {
       module: { type: "string", required: true },
       bytes: { type: "array", elementType: "number", required: true },
+      badchars: { type: "array", elementType: "number", default: [] },
       executableOnly: { type: "boolean", default: true },
       maxResults: { type: "number", min: 1, max: 200, default: 50 },
       mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
@@ -343,7 +353,7 @@ export function createRopCommands(): Command[] {
       }
 
       const scanOpts = normalizeScan(options);
-      const scan = scanPattern(
+      const scan = scanPatternAvoiding(
         {
           module: options.module as string,
           executableOnly: scanOpts.executableOnly,
@@ -351,6 +361,7 @@ export function createRopCommands(): Command[] {
           chunkSize: scanOpts.mode === "thorough" ? 0x1000 : 0x4000,
         },
         Uint8Array.from(bytes),
+        scanOpts.badchars,
       );
 
       const pointerSize = getPointerSize();
@@ -370,7 +381,8 @@ export function createRopCommands(): Command[] {
       for (const warning of scan.warnings) {
         out.warn(`${warning.region}: ${warning.message}`);
       }
-      if (scan.stats.sectionsScanned > 0 && scan.hits.length === 0) {
+      reportBadcharDrops(scanOpts.badchars, scan.dropped);
+      if (scan.stats.sectionsScanned > 0 && scan.hits.length === 0 && scan.dropped === 0) {
         out.info(
           `Scanned ${scan.stats.sectionsScanned} section(s) in ${scan.stats.chunksRead} readable chunk(s); no byte matches found.`,
         );
@@ -389,22 +401,24 @@ export function createRopCommands(): Command[] {
         findings: scan.hits,
         warnings: scan.warnings.map((warning) => `${warning.region}: ${warning.message}`),
         errors: [],
-        stats: scan.stats,
+        stats: { ...scan.stats, dropped: scan.dropped },
       };
     },
   };
 
   const ropSuggest: Command = {
     name: "rop_suggest",
-    description: "Suggest common exploit-friendly gadget patterns.",
-    usage: "dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)",
+    description: "Suggest common exploit-friendly gadget patterns, optionally without bad chars in the address.",
+    usage: "dx @$osed().rop_suggest(module?, maxResults?, badchars?, executableOnly?, mode?, engine?)  // a boolean in the badchars slot is executableOnly, the older order",
     examples: [
       'dx @$osed().rop_suggest("essfunc")',
-      'dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")',
-      'dx @$osed().rop_suggest("", 50, true, "thorough", "legacy")',
+      'dx @$osed().rop_suggest("libbkup", 3, "00 09 0A 0B 0C 0D 20")',
+      'dx @$osed().rop_suggest("essfunc", 50, "00 0A 0D", true, "fast", "semantic")',
+      'dx @$osed().rop_suggest("", 50, "", true, "thorough", "legacy")',
     ],
     schema: {
       module: { type: "string" },
+      badchars: { type: "array", elementType: "number", default: [] },
       executableOnly: { type: "boolean", default: true },
       maxResults: { type: "number", min: 1, max: 200, default: 50 },
       mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
@@ -426,13 +440,15 @@ export function createRopCommands(): Command[] {
   const retnGadgets: Command = {
     name: "retn",
     description: "Scan for retn N gadgets that pop N bytes before returning.",
-    usage: "dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)",
+    usage: "dx @$osed().retn(module?, maxResults?, badchars?, executableOnly?, mode?)  // a boolean in the badchars slot is executableOnly, the older order",
     examples: [
       'dx @$osed().retn("essfunc")',
       'dx @$osed().retn("essfunc", 100)',
+      'dx @$osed().retn("libbkup", 20, "00 09 0A 0B 0C 0D 20")',
     ],
     schema: {
       module: { type: "string" },
+      badchars: { type: "array", elementType: "number", default: [] },
       executableOnly: { type: "boolean", default: true },
       maxResults: { type: "number", min: 1, max: 200, default: 50 },
       mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
@@ -443,11 +459,13 @@ export function createRopCommands(): Command[] {
       const executableOnly = (options.executableOnly as boolean | undefined) ?? true;
       const moduleFilter = options.module as string | undefined;
       const chunkSize = (options.mode as string) === "thorough" ? 0x1000 : 0x4000;
+      const badchars = normalizeByteArray((options.badchars as number[] | undefined) ?? []).values;
 
       // Scan for the retn opcode (C2) with a generous internal limit to capture diverse N values.
-      const scan = scanPattern(
+      const scan = scanPatternAvoiding(
         { module: moduleFilter, executableOnly, maxResults: 200, chunkSize },
         Uint8Array.from([0xc2]),
+        badchars,
       );
 
       const warnings: string[] = [...scan.warnings.map((w) => `${w.region}: ${w.message}`)];
@@ -497,6 +515,7 @@ export function createRopCommands(): Command[] {
           rows,
         );
       }
+      reportBadcharDrops(badchars, scan.dropped);
       out.whyItMatters("retn N pops N bytes before returning — used to skip arguments in stdcall ROP chains.");
 
       return {
@@ -506,7 +525,7 @@ export function createRopCommands(): Command[] {
         findings,
         warnings,
         errors: [],
-        stats: scan.stats,
+        stats: { ...scan.stats, dropped: scan.dropped },
       };
     },
   };
@@ -514,13 +533,15 @@ export function createRopCommands(): Command[] {
   const addEsp: Command = {
     name: "add_esp",
     description: "Scan for add esp, N ; ret gadgets used to skip stack slots in ROP chains.",
-    usage: "dx @$osed().add_esp(module?, maxResults?, executableOnly?, mode?)",
+    usage: "dx @$osed().add_esp(module?, maxResults?, badchars?, executableOnly?, mode?)  // a boolean in the badchars slot is executableOnly, the older order",
     examples: [
       'dx @$osed().add_esp("essfunc")',
       'dx @$osed().add_esp("essfunc", 100)',
+      'dx @$osed().add_esp("libbkup", 20, "00 09 0A 0B 0C 0D 20")',
     ],
     schema: {
       module: { type: "string" },
+      badchars: { type: "array", elementType: "number", default: [] },
       executableOnly: { type: "boolean", default: true },
       maxResults: { type: "number", min: 1, max: 200, default: 50 },
       mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
@@ -531,6 +552,7 @@ export function createRopCommands(): Command[] {
       const executableOnly = (options.executableOnly as boolean | undefined) ?? true;
       const moduleFilter = options.module as string | undefined;
       const chunkSize = (options.mode as string) === "thorough" ? 0x1000 : 0x4000;
+      const badchars = normalizeByteArray((options.badchars as number[] | undefined) ?? []).values;
 
       const warnings: string[] = [];
 
@@ -539,7 +561,7 @@ export function createRopCommands(): Command[] {
       const groups = new Map<number, Group>();
 
       // Scan for ADD ESP, imm8 (83 C4 NN C3)
-      const scan8 = scanPattern({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([0x83, 0xc4]));
+      const scan8 = scanPatternAvoiding({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([0x83, 0xc4]), badchars);
       warnings.push(...scan8.warnings.map((w) => `${w.region}: ${w.message}`));
       for (const hit of scan8.hits) {
         const bytes = tryReadMemory(hit, 4);
@@ -551,7 +573,7 @@ export function createRopCommands(): Command[] {
       }
 
       // Scan for ADD ESP, imm32 (81 C4 NN NN NN NN C3)
-      const scan32 = scanPattern({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([0x81, 0xc4]));
+      const scan32 = scanPatternAvoiding({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([0x81, 0xc4]), badchars);
       warnings.push(...scan32.warnings.map((w) => `${w.region}: ${w.message}`));
       for (const hit of scan32.hits) {
         const bytes = tryReadMemory(hit, 7);
@@ -594,6 +616,7 @@ export function createRopCommands(): Command[] {
           rows,
         );
       }
+      reportBadcharDrops(badchars, scan8.dropped + scan32.dropped);
       out.whyItMatters("add esp, N skips N bytes of ROP chain slots — essential for aligning stdcall argument frames.");
 
       const stats = {
@@ -602,6 +625,7 @@ export function createRopCommands(): Command[] {
         chunksSkipped: (scan8.stats?.chunksSkipped ?? 0) + (scan32.stats?.chunksSkipped ?? 0),
         results: findings.length,
         stoppedEarly: (scan8.stats?.stoppedEarly ?? 0) + (scan32.stats?.stoppedEarly ?? 0),
+        dropped: scan8.dropped + scan32.dropped,
       };
 
       return { command: "add_esp", args: options, success: true, findings, warnings, errors: [], stats };

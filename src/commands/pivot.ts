@@ -1,7 +1,8 @@
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 import { getPointerSize, readMemory } from "../core/memory";
-import { scanPattern } from "../core/scan_engine";
+import { normalizeByteArray } from "../core/validation";
+import { reportBadcharDrops, scanPatternAvoiding } from "../analysis/badchar_scan";
 import { validateInstructionCandidateForPointerSize } from "../logic/instruction_validation";
 import { buildCapabilityIndex, buildRopIndexFromSequences } from "../rop";
 import { parseInstruction } from "../semantics";
@@ -76,10 +77,15 @@ export function createPivotCommand(): Command {
   return {
     name: "pivots",
     description: "Scan for stack pivot candidates.",
-    usage: "dx @$osed().pivots(module?, maxResults?, executableOnly?, mode?)",
-    examples: ['dx @$osed().pivots("essfunc")', 'dx @$osed().pivots("", 50, true, "thorough")'],
+    usage: "dx @$osed().pivots(module?, maxResults?, badchars?, executableOnly?, mode?)  // a boolean in the badchars slot is executableOnly, the older order",
+    examples: [
+      'dx @$osed().pivots("essfunc")',
+      'dx @$osed().pivots("libbkup", 15, "00 09 0A 0B 0C 0D 20")',
+      'dx @$osed().pivots("", 50, "", true, "thorough")',
+    ],
     schema: {
       module: { type: "string" },
+      badchars: { type: "array", elementType: "number", default: [] },
       executableOnly: { type: "boolean", default: true },
       maxResults: { type: "number", min: 1, max: 200, default: 50 },
       mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
@@ -90,9 +96,11 @@ export function createPivotCommand(): Command {
       const warnings: string[] = [];
       const sequenceHits: InstructionSequence[] = [];
       const detailsByAddress = new Map<bigint, { sequence: string; flags: Record<string, unknown> }>();
+      const badchars = normalizeByteArray((options.badchars as number[] | undefined) ?? []).values;
+      let dropped = 0;
 
       for (const pivot of patterns) {
-        const scan = scanPattern(
+        const scan = scanPatternAvoiding(
           {
             module: options.module as string | undefined,
             executableOnly: (options.executableOnly as boolean | undefined) ?? true,
@@ -100,7 +108,9 @@ export function createPivotCommand(): Command {
             chunkSize: (options.mode as string) === "thorough" ? 0x1000 : 0x4000,
           },
           Uint8Array.from(pivot.bytes),
+          badchars,
         );
+        dropped += scan.dropped;
 
         warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
 
@@ -160,6 +170,7 @@ export function createPivotCommand(): Command {
           python: `0x${finding.address.toString(16).toUpperCase()}`,
         })),
       );
+      reportBadcharDrops(badchars, dropped);
       out.whyItMatters("Stack pivots transition execution into attacker-controlled ROP chains.");
 
       return {
@@ -169,6 +180,7 @@ export function createPivotCommand(): Command {
         findings,
         warnings,
         errors: [],
+        stats: { dropped },
       };
     },
   };

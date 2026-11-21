@@ -3,6 +3,7 @@
  * field is a placeholder for an argument or a result of the same name; explain fills it from the
  * real call. tests/explain.test.ts fails when a command has no entry or a placeholder is unknown.
  */
+import { badcharSlotArgs } from "../analysis/badchar_scan";
 
 export type ExplainArg = {
   name: string;
@@ -41,12 +42,15 @@ export type ExplainEntry = {
   quick?: boolean;
   /** Field that holds a primitive return value; success unless the boolean means something else. */
   primitive?: "success" | "value";
+  /** Maps an older positional order onto args, the way the command itself reads the call. */
+  positional?: (args: unknown[]) => unknown[];
 };
 
 const BADCHARS = (meaning = "Bytes the target corrupts or cuts, as one hex string such as \"00 0A 0D\".", defaultValue = "none"): ExplainArg => ({ name: "badchars", meaning, optional: true, default: defaultValue });
 const MODULE = (meaning = "Loaded module name, with or without the extension, such as essfunc or kernel32."): ExplainArg => ({ name: "module", meaning });
 const SCAN_MODE: ExplainArg = { name: "mode", meaning: "fast scans the usual gadget shapes; thorough also decodes more starting offsets.", optional: true, default: "fast", values: { fast: "the quicker scan.", thorough: "the slower, wider scan." } };
 const EXEC_ONLY: ExplainArg = { name: "executableOnly", meaning: "true keeps only addresses in executable sections.", optional: true, default: "true" };
+const GADGET_BADCHARS = BADCHARS("Bytes the target corrupts, as one hex string such as \"00 0A 0D\". Every address that holds one is dropped. A boolean here is executableOnly, the older order.");
 const MAX_RESULTS: ExplainArg = { name: "maxResults", meaning: "Upper limit on the number of hits printed.", optional: true, kind: "number" };
 
 const TEMPLATE_TASKS: Record<string, string> = {
@@ -279,19 +283,21 @@ export const EXPLANATIONS: ExplainEntry[] = [
   {
     name: "find_bytes",
     summary: "Search one module's sections for bytes",
-    what: "Searches the PE sections of <module> for the byte sequence <bytes>.",
-    how: "Reads the section table from the module's PE header and scans the bytes of each section (executable ones only by default). It does not look at the stack or the heap, and says so when nothing is found.",
+    what: "Searches the PE sections of <module> for the byte sequence <bytes>, and drops every hit whose address holds a byte from <badchars>.",
+    how: "Reads the section table from the module's PE header and scans the bytes of each section (executable ones only by default). With bad characters it reads more hits than it prints, writes each address as the little-endian bytes a payload would carry, and drops the address when one of those bytes is in <badchars>, the same test rop.scan_live applies. It does not look at the stack or the heap, and says so when nothing is found.",
     when: "Gadget and pointer search when you know the exact bytes, such as 58 C3 for pop eax ; ret.",
     args: [
       MODULE(),
       { name: "bytes", meaning: "Byte sequence as hex, such as \"FF E4\"." },
       MAX_RESULTS,
+      GADGET_BADCHARS,
       EXEC_ONLY,
       SCAN_MODE,
     ],
-    example: "dx @$osed().find_bytes(\"essfunc\", \"FF E4\")",
-    output: "One line per hit with the address and the section that holds it.",
-    report: "Located the byte sequence <bytes> in the sections of <module> with find_bytes.",
+    example: "dx @$osed().find_bytes(\"libbkup\", \"FF E4\", 20, \"00 09 0A 0B 0C 0D 20\")",
+    output: "One line per hit with the address. With bad characters, a Bad chars line counts the candidate addresses dropped because they hold one.",
+    report: "Located the byte sequence <bytes> in the sections of <module> with find_bytes, excluding addresses that contain the bad characters <badchars>.",
+    positional: (args) => badcharSlotArgs(args, 3),
   },
   {
     name: "find_stack_bytes",
@@ -370,52 +376,57 @@ export const EXPLANATIONS: ExplainEntry[] = [
   {
     name: "rop_suggest",
     summary: "Common exploit gadgets in a module, by purpose",
-    what: "Scans a module and prints the common exploit gadgets grouped by what they do, such as register loads, stack pivots and memory writes.",
-    how: "Decodes instruction sequences that end in ret in the executable sections of <module> and sorts them by effect. It needs no corpus.",
+    what: "Scans a module and prints the common exploit gadgets grouped by what they do, such as register loads, stack pivots and memory writes. Gadgets whose address holds a byte from <badchars> are left out.",
+    how: "Searches the executable sections of <module> for the byte patterns of common gadgets that end in ret, decodes each hit to confirm the instructions, and sorts them by effect. With bad characters it reads more hits than it prints and drops every address whose little-endian bytes include one from <badchars>, the same test rop.scan_live applies, so up to <maxResults> clean addresses remain per pattern. It needs no corpus.",
     when: "Early ROP step, for a quick look at what a module offers before you build a full corpus with rop.scan_live.",
     args: [
       { name: "module", meaning: "Module to scan; every module when empty.", optional: true },
       MAX_RESULTS,
+      GADGET_BADCHARS,
       EXEC_ONLY,
       SCAN_MODE,
       { name: "engine", meaning: "semantic or legacy gadget classifier.", optional: true, values: { semantic: "the newer effect-based classifier.", legacy: "the older pattern classifier." } },
     ],
-    example: "dx @$osed().rop_suggest(\"essfunc\")",
-    output: "One group per purpose, each with addresses and instruction text.",
-    report: "Surveyed the gadgets available in <module> with rop_suggest to plan the ROP chain.",
+    example: "dx @$osed().rop_suggest(\"libbkup\", 3, \"00 09 0A 0B 0C 0D 20\")",
+    output: "One group per purpose, each with addresses and instruction text. With bad characters, a Bad chars line counts the candidate addresses dropped because they hold one.",
+    report: "Surveyed the gadgets available in <module> with rop_suggest to plan the ROP chain, excluding addresses that contain the bad characters <badchars>.",
+    positional: (args) => badcharSlotArgs(args, 2),
   },
   {
     name: "retn",
     summary: "Find retn N gadgets",
     what: "Finds retn N gadgets, which return and then drop N more bytes from the stack.",
-    how: "Searches the executable sections of <module> for the C2 opcode with its 16-bit count. Each hit is a real return instruction at that address.",
+    how: "Searches the executable sections of <module> for the C2 opcode with its 16-bit count, and drops every address that holds a byte from <badchars>. Each hit is a real return instruction at that address.",
     when: "ROP chains and stack alignment, when you need to skip a few stack slots after a return.",
-    args: [MODULE("Module to scan; all modules when left out."), MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
-    example: "dx @$osed().retn(\"essfunc\")",
-    output: "One line per gadget with its address and N.",
-    report: "Located retn gadgets in <module> with retn to skip stack slots in the chain.",
+    args: [MODULE("Module to scan; all modules when left out."), MAX_RESULTS, GADGET_BADCHARS, EXEC_ONLY, SCAN_MODE],
+    example: "dx @$osed().retn(\"libbkup\", 20, \"00 09 0A 0B 0C 0D 20\")",
+    output: "One line per gadget with its address and N. With bad characters, a Bad chars line counts the candidate addresses dropped because they hold one.",
+    report: "Located retn gadgets in <module> with retn to skip stack slots in the chain, excluding addresses that contain the bad characters <badchars>.",
+    positional: (args) => badcharSlotArgs(args, 2),
   },
   {
     name: "add_esp",
     summary: "Find add esp, N ; ret gadgets",
     what: "Finds add esp, N ; ret gadgets, which move the stack pointer up and skip stack slots.",
-    how: "Searches the executable sections of <module> for the byte patterns of add esp followed by ret.",
+    how: "Searches the executable sections of <module> for the byte patterns of add esp followed by ret, and drops every address that holds a byte from <badchars>.",
     when: "ROP chains, to step over data that sits between two parts of the chain.",
-    args: [MODULE("Module to scan; all modules when left out."), MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
-    example: "dx @$osed().add_esp(\"essfunc\")",
-    output: "One line per gadget with its address and the size of the skip.",
-    report: "Located add esp gadgets in <module> with add_esp to skip over data in the chain.",
+    args: [MODULE("Module to scan; all modules when left out."), MAX_RESULTS, GADGET_BADCHARS, EXEC_ONLY, SCAN_MODE],
+    example: "dx @$osed().add_esp(\"libbkup\", 20, \"00 09 0A 0B 0C 0D 20\")",
+    output: "One line per gadget with its address and the size of the skip. With bad characters, a Bad chars line counts the candidate addresses dropped because they hold one.",
+    report: "Located add esp gadgets in <module> with add_esp to skip over data in the chain, excluding addresses that contain the bad characters <badchars>.",
+    positional: (args) => badcharSlotArgs(args, 2),
   },
   {
     name: "pivots",
     summary: "Find stack pivot gadgets in a module",
     what: "Finds stack pivot gadgets, which move ESP to a register or by a large offset, such as xchg eax, esp ; ret.",
-    how: "Scans the executable sections of <module> for instructions that write ESP, followed by ret. It needs no corpus.",
+    how: "Scans the executable sections of <module> for instructions that write ESP, followed by ret, and drops every address that holds a byte from <badchars>. It needs no corpus.",
     when: "When the buffer you control is not where ESP points, so the chain must first move the stack onto it.",
-    args: [{ name: "module", meaning: "Module to scan; every module when empty.", optional: true }, MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
-    example: "dx @$osed().pivots(\"essfunc\")",
-    output: "One line per gadget with its address and how it changes ESP.",
-    report: "Identified stack pivot gadgets in <module> with pivots to move the stack pointer onto the controlled buffer.",
+    args: [{ name: "module", meaning: "Module to scan; every module when empty.", optional: true }, MAX_RESULTS, GADGET_BADCHARS, EXEC_ONLY, SCAN_MODE],
+    example: "dx @$osed().pivots(\"libbkup\", 15, \"00 09 0A 0B 0C 0D 20\")",
+    output: "One line per gadget with its address and how it changes ESP. With bad characters, a Bad chars line counts the candidate addresses dropped because they hold one.",
+    report: "Identified stack pivot gadgets in <module> with pivots to move the stack pointer onto the controlled buffer, excluding addresses that contain the bad characters <badchars>.",
+    positional: (args) => badcharSlotArgs(args, 2),
   },
   {
     name: "rop.find",

@@ -7,6 +7,13 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-21 - The gadget scans drop addresses with bad characters
+
+- `rop_suggest(module, maxResults, badchars)` takes the bad characters as its third argument, as in `rop_suggest("libbkup", 3, "00 09 0A 0B 0C 0D 20")`, and leaves out every gadget whose address holds one. It reads more candidates than it prints, so up to `maxResults` clean addresses remain per pattern, and a `Bad chars` line counts the candidate addresses it dropped. `retn`, `add_esp`, `pivots`, and `find_bytes` take the list in the same place, right after `maxResults`. A boolean in the `badchars` slot is read as `executableOnly`, the older order, so calls written before the bad-char argument still work. With no list the output is unchanged.
+- The test is the one `rop.scan_live` uses, `badcharAddressFilter`, with the same rule for how deep to scan, so the two agree on which address is bad.
+- Byte lists also accept `\x00\x0a` and `0x00 0x0a`. Before, `rop.scan_live("libbkup", "\x00\x0a")` did not parse the list and scanned with no filter at all.
+- `.explain` on these commands names the bad characters of the call in its report line.
+
 ### 2026-11-21 - The legacy build is checked against the 19041 engine
 
 - `leak.analyze` failed in classic WinDbg 10.0.19041 with `Object doesn't support property or method 'matchAll'`, and so did the format string parser behind `fmt.inspect`. That engine has no `String.prototype.matchAll`. `legacy/runtime.js` now defines it.

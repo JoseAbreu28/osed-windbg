@@ -54,28 +54,32 @@ These commands scan a module directly and need no corpus.
 Scan a module and print common exploit gadgets grouped by what they do.
 
 ```text
-rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)
+rop_suggest(module?, maxResults?, badchars?, executableOnly?, mode?, engine?)
 ```
 
 ```text
 dx @$osed().rop_suggest("essfunc")
-dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")
-dx @$osed().rop_suggest("", 50, true, "thorough", "legacy")
+dx @$osed().rop_suggest("libbkup", 3, "00 09 0A 0B 0C 0D 20")
+dx @$osed().rop_suggest("essfunc", 50, "00 0A 0D", true, "fast", "semantic")
+dx @$osed().rop_suggest("", 50, "", true, "thorough", "legacy")
 ```
 
 `engine` is `semantic` or `legacy`. `mode` is `fast` or `thorough`. An empty module name scans every module.
+
+With `badchars`, every gadget whose address holds one of those bytes is dropped, with the same test `rop.scan_live` applies, and a `Bad chars` line counts the candidate addresses dropped. A boolean in the `badchars` slot is read as `executableOnly`, the older order, so calls written before the bad-char argument still work. `retn`, `add_esp`, `pivots`, and `find_bytes` take `badchars` in the same place, right after `maxResults`.
 
 ### retn
 
 Find `retn N` gadgets, which return and then drop N bytes from the stack.
 
 ```text
-retn(module?, maxResults?, executableOnly?, mode?)
+retn(module?, maxResults?, badchars?, executableOnly?, mode?)
 ```
 
 ```text
 dx @$osed().retn("essfunc")
 dx @$osed().retn("essfunc", 100)
+dx @$osed().retn("libbkup", 20, "00 09 0A 0B 0C 0D 20")
 ```
 
 ### add_esp
@@ -83,12 +87,13 @@ dx @$osed().retn("essfunc", 100)
 Find `add esp, N ; ret` gadgets, which skip stack slots.
 
 ```text
-add_esp(module?, maxResults?, executableOnly?, mode?)
+add_esp(module?, maxResults?, badchars?, executableOnly?, mode?)
 ```
 
 ```text
 dx @$osed().add_esp("essfunc")
 dx @$osed().add_esp("essfunc", 100)
+dx @$osed().add_esp("libbkup", 20, "00 09 0A 0B 0C 0D 20")
 ```
 
 ### pivots
@@ -96,12 +101,13 @@ dx @$osed().add_esp("essfunc", 100)
 Find stack pivot gadgets, which move ESP to a register or an offset.
 
 ```text
-pivots(module?, maxResults?, executableOnly?, mode?)
+pivots(module?, maxResults?, badchars?, executableOnly?, mode?)
 ```
 
 ```text
 dx @$osed().pivots("essfunc")
-dx @$osed().pivots("", 50, true, "thorough")
+dx @$osed().pivots("libbkup", 15, "00 09 0A 0B 0C 0D 20")
+dx @$osed().pivots("", 50, "", true, "thorough")
 ```
 
 ### rop.find

@@ -81,12 +81,13 @@ The instruction text is a mnemonic and a register: `jmp`, `call`, or `pushret`. 
 Search the PE sections of one loaded module for a byte sequence.
 
 ```text
-find_bytes(module, bytes, maxResults?, executableOnly?, mode?)
+find_bytes(module, bytes, maxResults?, badchars?, executableOnly?, mode?)
 ```
 
 ```text
 dx @$osed().find_bytes("vulnserver", "FF E4")
 dx @$osed().find_bytes("essfunc", "58 C3", 25)
+dx @$osed().find_bytes("libbkup", "FF E4", 20, "00 09 0A 0B 0C 0D 20")
 ```
 
 By default it searches executable sections only. It does not search the stack or the heap, and it says so when it finds nothing.

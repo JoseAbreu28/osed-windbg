@@ -200,7 +200,8 @@ function wrap(text: string): string {
 }
 
 export function buildExplanation(path: string, entry: ExplainEntry, call: ExplainCall): Explanation {
-  const { fills, lines } = argumentFills(entry, call.args, call.ran || call.args.length > 0);
+  const args = entry.positional ? entry.positional(call.args) : call.args;
+  const { fills, lines } = argumentFills(entry, args, call.ran || call.args.length > 0);
   for (const result of entry.results ?? []) {
     const value = resultValue(result, call);
     if (value !== undefined) fills.set(result.name, value);

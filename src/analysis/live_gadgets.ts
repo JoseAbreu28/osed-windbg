@@ -3,6 +3,7 @@ import { scanPattern } from "../core/scan_engine";
 import { scanBackward } from "../core/backward_scanner";
 import { knownPatternsForPointerSize } from "../logic/instruction_validation";
 import { applyFilters, badcharAddressFilter } from "../logic/pointer_filter_logic";
+import { badcharScanDepth } from "./badchar_scan";
 import { findModuleByAddress } from "../commands/modules";
 import { LiveGadgetHit } from "../semantics/live-provider";
 
@@ -35,7 +36,7 @@ export function discoverLiveGadgets(options: LiveDiscoveryOptions = {}): LiveDis
   // preferred-base modules often live deep in .text. Scanning only a few
   // candidates left the corpus with just the first survivors — frequently none
   // clean-and-stable — so the solver fell back to dirtier gadgets.
-  const scanDepth = Math.min(Math.max(maxPerPattern * 20, 1500), 4000);
+  const scanDepth = badcharScanDepth(maxPerPattern);
 
   const hits: LiveGadgetHit[] = [];
   const warningSet = new Set<string>();
