@@ -11899,10 +11899,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-21T12:02:35.264Z" : globalThis[key2];
+        value = true ? "2026-11-21T12:24:12.006Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "a26e21fbb320" : globalThis[key2];
+        value = true ? "b6fcb3e5548d" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13959,7 +13959,7 @@ var osed_bundle = (() => {
     return gadget.categories.includes("STACK_PIVOT") || gadget.capabilities.some((capability2) => capability2.kind === "STACK_PIVOT");
   }
   function jobCapability(gadget, job) {
-    return gadget.capabilities.find((capability2) => job.capabilities.includes(capability2.kind) && (job.register === void 0 || capability2.register === job.register));
+    return gadget.capabilities.find((capability2) => job.capabilities.includes(capability2.kind) && (job.register === void 0 || capability2.register === job.register) && capability2.register !== "esp");
   }
   function candidates2(index, job, count = 3) {
     const matching = index.gadgets.filter((gadget) => jobCapability(gadget, job) !== void 0 && (job.key === "pivot" || !movesEsp(gadget)));
