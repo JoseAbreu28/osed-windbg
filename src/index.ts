@@ -3115,6 +3115,7 @@ function bindApi(): OsedApi {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("dep_plan");
     }
+    out.section(out.dxCall("dep_plan", args));
     const [apiArg, moduleArg, badArg, styleArg] = args;
     const depApi = DEP_PLAN_APIS.find((name) => name.toLowerCase() === String(apiArg ?? "").trim().toLowerCase());
     const style = String(styleArg ?? "skeleton").trim().toLowerCase() as DepPlanStyle;
@@ -3144,6 +3145,7 @@ function bindApi(): OsedApi {
       ((first >>> shift) & 0xff) === ((last >>> shift) & 0xff) ? (first >>> shift) & 0xff : undefined;
 
     out.section(`[1/${n}] Module protections for ${moduleLabel}`);
+    out.echo("modules", [moduleName]);
     invoke("modules", [moduleName]);
     const sharedBad = [...new Set([24, 16].map(fixedByte).filter((byte): byte is number => byte !== undefined && badSet.has(byte)))];
     const moduleWarnings = [
@@ -3156,6 +3158,7 @@ function bindApi(): OsedApi {
     summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
 
     out.section(`[2/${n}] IAT slot of ${depApi}`);
+    out.echo("sc.iat_find", [depApi]);
     const iatRows = ((api.sc as { iat_find: (symbol: string) => unknown }).iat_find(depApi) as { rows?: { length: number; [i: number]: Record<string, string> } }).rows;
     const slotRows = Array.from({ length: iatRows?.length ?? 0 }, (_, i) => iatRows![i])
       .filter((row) => new RegExp(`(^|!)${depApi}$`, "i").test(out.stripDml(String(row.Symbol ?? "")).trim()));
@@ -3178,6 +3181,7 @@ function bindApi(): OsedApi {
     summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === undefined ? "not found" : `${dwordHex(iatSlot)}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
 
     out.section(`[3/${n}] Gadget corpus from ${moduleName}`);
+    out.echo("rop.scan_live", [moduleName, badText]);
     executeRopScanLive(moduleName, badText);
     const corpus = currentRopCorpus;
     const gadgetCount = corpus?.gadgets.length ?? 0;
@@ -3195,6 +3199,7 @@ function bindApi(): OsedApi {
     let jmpEsp: number | undefined;
     if (style === "pushad") {
       for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
+        out.echo("find_bytes", [moduleName, bytes, 20]);
         invoke("find_bytes", [moduleName, bytes, 20]);
         const hits = ((lastResult?.findings ?? []) as unknown[])
           .map((hit) => Number(hit))
@@ -3211,26 +3216,31 @@ function bindApi(): OsedApi {
     out.section(`[5/${n}] Clean recipes for the constants`);
     for (const constant of CONSTANTS[depApi]) {
       out.info(`${constant.field} = ${dwordHex(constant.value)}`);
+      out.echo("rop.construct", ["eax", out.hex(constant.value), badText]);
       executeRopConstruct("eax", constant.value, badText);
     }
     if (iatSlot !== undefined && slotBad.length > 0) {
       out.info(`IAT slot = ${dwordHex(iatSlot)}`);
+      out.echo("rop.construct", ["eax", out.hex(iatSlot), badText]);
       executeRopConstruct("eax", iatSlot, badText);
     }
     const pickCave = (minSize: number, capability: string): number | undefined => {
+      out.echo("code_caves", [moduleName, out.hex(minSize), 25, badText, capability]);
       const { caves } = findCodeCaves(moduleName, minSize, 25, badText, capability);
       const cave = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
       if (!cave) return undefined;
       return Number(cave.addrSafe === false && cave.safeVa !== null ? cave.safeVa : cave.address);
     };
-    const writable = depApi === "VirtualAlloc" ? undefined : pickCave(4, "STAGING");
-    const cave = depApi === "WriteProcessMemory" ? pickCave(0x210, "EXEC") : undefined;
+    let writable: number | undefined;
+    let cave: number | undefined;
     if (depApi !== "VirtualAlloc") {
+      writable = pickCave(4, "STAGING");
       const field = depApi === "VirtualProtect" ? "lpflOldProtect" : "lpNumberOfBytesWritten";
       if (writable === undefined) out.warn(`${field}: no clean writable cave in ${moduleName}. Try dx @$osed().code_caves("", 4, 25, "${badText}", "STAGING").`);
       else out.info(`${field} = ${dwordHex(writable)}, a writable cave with no bad byte (code_caves STAGING).`);
     }
     if (depApi === "WriteProcessMemory") {
+      cave = pickCave(0x210, "EXEC");
       if (cave === undefined) out.warn(`Code cave: none of 0x210 bytes with a clean address in ${moduleName}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
       else out.info(`Code cave (return address and lpBaseAddress) = ${dwordHex(cave)}, executable (code_caves EXEC).`);
     }
@@ -3238,7 +3248,10 @@ function bindApi(): OsedApi {
 
     out.section(`[6/${n}] ${style === "pushad" ? "PUSHAD register map" : "Call frame"} for ${depApi}`);
     if (style === "pushad") printPushadMap(depApi);
-    else invoke("dep_function", [depApi]);
+    else {
+      out.echo("dep_function", [depApi]);
+      invoke("dep_function", [depApi]);
+    }
     summary.push({ Section: `[6/${n}] frame`, Result: style === "pushad" ? "register map" : "dep_function frame" });
 
     out.section(`[7/${n}] Python draft: verify it field by field, it is not a finished chain`);
@@ -3319,6 +3332,10 @@ function bindApi(): OsedApi {
       if (args.length === 1 && args[0] === "help") return helperHelp("leak.base");
       return invoke("leak_base", args);
     },
+  };
+  api.rop_template = (...args: unknown[]) => {
+    if (!(args.length === 1 && args[0] === "help")) out.section(out.dxCall("rop_template", args));
+    return invoke("rop_template", args);
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
   api.dep_plan = executeDepPlan;

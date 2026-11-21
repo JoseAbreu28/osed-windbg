@@ -7,6 +7,11 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-21 - dep_plan prints each command it runs
+
+- `dep_plan` opens with the call as typed, such as `=== dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20") ===`, so a log or a screenshot of the top names the API, the module, and the bad characters. `rop_template` opens the same way.
+- Inside each `[n/7]` step, every command `dep_plan` runs prints first as the `dx` line that reruns it, then its output: `modules`, `sc.iat_find`, `rop.scan_live`, `find_bytes` in the PUSHAD style, one `rop.construct` per constant, `code_caves`, and `dep_function`. Pasting the line gives the same output, so one step can be repeated alone and the report can say which command produced it. The step 4 ranking, the PUSHAD map, and the draft are computed by `dep_plan` itself and print no line.
+
 ### 2026-11-21 - The gadget scans drop addresses with bad characters
 
 - `rop_suggest(module, maxResults, badchars)` takes the bad characters as its third argument, as in `rop_suggest("libbkup", 3, "00 09 0A 0B 0C 0D 20")`, and leaves out every gadget whose address holds one. It reads more candidates than it prints, so up to `maxResults` clean addresses remain per pattern, and a `Bad chars` line counts the candidate addresses it dropped. `retn`, `add_esp`, `pivots`, and `find_bytes` take the list in the same place, right after `maxResults`. A boolean in the `badchars` slot is read as `executableOnly`, the older order, so calls written before the bad-char argument still work. With no list the output is unchanged.

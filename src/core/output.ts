@@ -46,6 +46,27 @@ export function section(title: string): void {
   write(`=== ${title} ===`);
 }
 
+/** A number dxCall writes in hex, as the user types an address or a flag value. */
+export type Hex = { hex: number };
+
+export function hex(value: number): Hex {
+  return { hex: value };
+}
+
+function literal(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "object" && value !== null && "hex" in value) return `0x${((value as Hex).hex >>> 0).toString(16).toUpperCase()}`;
+  return String(value);
+}
+
+export function dxCall(path: string, args: unknown[]): string {
+  return `dx @$osed().${path}(${args.map(literal).join(", ")})`;
+}
+
+export function echo(path: string, args: unknown[]): void {
+  write(dxCall(path, args));
+}
+
 export function info(message: string): void {
   write(`[+] ${message}`);
 }

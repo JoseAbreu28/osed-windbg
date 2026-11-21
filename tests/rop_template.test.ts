@@ -64,6 +64,15 @@ describe("rop_template", () => {
     expect(text).not.toContain("Skeleton Method");
   });
 
+  test.each([
+    [["VirtualAlloc", "libbkup", "pushad"], '=== dx @$osed().rop_template("VirtualAlloc", "libbkup", "pushad") ==='],
+    [[], "=== dx @$osed().rop_template() ==="],
+  ])("the first line is the call %j as typed", (args, header) => {
+    const api = loadApi();
+    api.rop_template(...args);
+    expect(logs.join("").split("\n").find((line) => line !== "")).toBe(header);
+  });
+
   test("skeleton is the default style and VirtualProtect the default api", () => {
     const api = loadApi();
     expect(api.rop_template().success).toBe(true);

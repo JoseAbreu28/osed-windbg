@@ -127,7 +127,7 @@ Also callable as `rop_find`.
 
 ### rop_template
 
-Print a commented chain skeleton for one API, with the `dx` commands that find each address it needs.
+Print a commented chain skeleton for one API, with the `dx` commands that find each address it needs. Its first line repeats the call as typed, such as `=== dx @$osed().rop_template("VirtualAlloc", "libbkup") ===`.
 
 ```text
 rop_template(api?, module?, style?)
@@ -182,6 +182,18 @@ dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20")
 dx @$osed().dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad")
 dx @$osed().dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D")
 ```
+
+Its first line repeats the call as typed, such as `=== dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20") ===`, so the top of a log or a screenshot names the API, the module, and the bad characters. Inside each step, every command it runs prints first as the `dx` line that reruns it on its own, then its output:
+
+```text
+=== [5/7] Clean recipes for the constants ===
+[+] dwSize = 0x00000001
+dx @$osed().rop.construct("eax", 0x1, "00 09 0A 0B 0C 0D 20")
+
+=== Value Construction: eax = 0x00000001 ===
+```
+
+The ranking in step 4, the PUSHAD map in step 6, and the draft in step 7 are computed by `dep_plan` itself and have no such line. The `code_caves` line shows the search a cave address came from: run on its own, it lists every cave, and `dep_plan` keeps the first one with a clean address.
 
 It calls the existing commands in this order:
 

@@ -147,6 +147,61 @@ describe("dep_plan", () => {
   });
 
   test.each([
+    [["VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20"], '=== dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20") ==='],
+    [["VirtualProtect", "libbkup", "00 0A 0D", "pushad"], '=== dx @$osed().dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad") ==='],
+  ])("the first line is the call %j as typed", (args, header) => {
+    api.dep_plan(...args);
+    const output = text();
+    expect(output.split("\n").find((line) => line !== "")).toBe(header);
+    expect(output.indexOf(header)).toBeLessThan(output.indexOf("=== [1/7]"));
+  });
+
+  test.each([
+    ["VirtualAlloc", "skeleton", [
+      '[1/7] modules("libbkup")',
+      '[2/7] sc.iat_find("VirtualAlloc")',
+      '[3/7] rop.scan_live("libbkup", "00 0A 0D")',
+      '[5/7] rop.construct("eax", 0x1, "00 0A 0D")',
+      '[5/7] rop.construct("eax", 0x1000, "00 0A 0D")',
+      '[5/7] rop.construct("eax", 0x40, "00 0A 0D")',
+      '[6/7] dep_function("VirtualAlloc")',
+    ]],
+    ["WriteProcessMemory", "pushad", [
+      '[1/7] modules("libbkup")',
+      '[2/7] sc.iat_find("WriteProcessMemory")',
+      '[3/7] rop.scan_live("libbkup", "00 0A 0D")',
+      '[4/7] find_bytes("libbkup", "FF E4", 20)',
+      '[4/7] find_bytes("libbkup", "FF D4", 20)',
+      '[5/7] rop.construct("eax", 0xFFFFFFFF, "00 0A 0D")',
+      '[5/7] rop.construct("eax", 0x210, "00 0A 0D")',
+      '[5/7] code_caves("libbkup", 0x4, 25, "00 0A 0D", "STAGING")',
+      '[5/7] code_caves("libbkup", 0x210, 25, "00 0A 0D", "EXEC")',
+    ]],
+  ])("%s %s prints each sub-command in its section before its output", (name, style, expected) => {
+    api.dep_plan(name, "libbkup", "00 0A 0D", style);
+    let section = "";
+    const echoed: string[] = [];
+    for (const line of text().split("\n")) {
+      section = /^=== (\[\d\/7\])/.exec(line)?.[1] ?? section;
+      if (line.startsWith("dx @$osed().")) echoed.push(`${section} ${line.slice("dx @$osed().".length)}`);
+    }
+    expect(echoed).toEqual(expected);
+  });
+
+  test("pasting an echoed line prints the same output dep_plan printed under it", () => {
+    api.dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D", "pushad");
+    const report = text();
+    const calls = report.split("\n").filter((line) => line.startsWith("dx @$osed().") && !line.includes("code_caves("));
+    expect(calls.length).toBeGreaterThan(5);
+    const osed = (globalThis as unknown as { osed: unknown }).osed;
+    for (const call of calls) {
+      logs.length = 0;
+      new Function("osed", `return osed.${call.slice("dx @$osed().".length)};`)(osed);
+      expect(report, call).toContain(`${call}\n${text()}`);
+    }
+  });
+
+  test.each([
     [["VirtualQuery", "libbkup", "00"], "api must be one of VirtualAlloc, VirtualProtect, WriteProcessMemory"],
     [["VirtualAlloc", "nosuchmod", "00"], 'Module "nosuchmod" is not loaded'],
     [["VirtualAlloc", "libbkup", "00", "rop"], "style must be one of skeleton, pushad"],
