@@ -7,6 +7,14 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-21 - Both DEP helpers cover all three APIs
+
+- `rop_template(api, module, style)` takes a third argument. `"skeleton"`, the default, prints the method that puts a frame of dummy dwords before the return address, patches each field with a gadget, and pivots ESP onto the frame. It is printed for VirtualAlloc, VirtualProtect, and WriteProcessMemory in four steps: each field's real value and the `dx` command that gives it, the gadgets by `rop.query` capability, a Python skeleton, and the WinDbg checks for each field. `"pushad"` prints the register map instead. VirtualAlloc is a new `api` value.
+- The VirtualProtect PUSHAD map was wrong. It put the saved ESP in `dwSize`, a stack address of about 0x0019xxxx, which asks VirtualProtect to change far more than the stack region. It now uses the usual layout: a ROP NOP in EDI, the API in ESI, the return in EBP, the saved ESP as `lpAddress`, then `dwSize`, `flNewProtect`, and `lpflOldProtect` from EBX, EDX, and ECX.
+- The WriteProcessMemory PUSHAD map left out the saved ESP slot, so the printed register comments did not match what PUSHAD writes. The saved ESP falls on `lpBaseAddress`, so the map now puts `add esp, 0xC ; ret` in EDI and takes the last three arguments from the payload after the pushad gadget.
+- `dep_function` takes `"VirtualAlloc"`, `"VirtualProtect"`, and `"WriteProcessMemory"`, with `VA`, `VP`, and `WPM` as aliases in any case. The VirtualProtect frame is new. The section title names the full API.
+- The templates break on `KERNELBASE!` exports, which every call through kernel32 reaches, and point to `code_caves(..., "EXEC")` for the WriteProcessMemory cave and `code_caves(..., "STAGING")` for a writable dword.
+
 ### 2026-11-20 - sc_builder checks what it chooses
 
 - A `buf(size)` result now binds where it is written, not where it is used. Before this change every use of a buffer allocated a fresh frame offset, so a buffer bound to a name and passed to two calls became two addresses and the builder reported no problem. A `path = buf(260)` used four times produced four buffers at `ebp-0x184`, `-0x288`, `-0x38c` and `-0x490`. One API can now fill a named buffer and the next can read it, as in `GetTempPathA` into `path` and then `lstrcatA(path, s("out.txt"))`, while an inline `buf(4)` out-parameter still gets space nothing else touches. The listing names each one, as in `arg1 = buf(260) #1, scratch at ebp-0x184`.

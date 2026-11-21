@@ -11,8 +11,8 @@ Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../CO
 | [`add_esp`](#add_esp) | Find `add esp, N ; ret` gadgets, which skip stack slots. |
 | [`pivots`](#pivots) | Find stack pivot gadgets, which move ESP to a register or an offset. |
 | [`rop.find`](#ropfind) | Run the older ROP helper that scans one module and prints a module summary. |
-| [`rop_template`](#rop_template) | Print a commented chain skeleton for one API, with the `dx` commands that find each address it needs. |
-| [`dep_function`](#dep_function) | Print a Python call-frame skeleton for VirtualAlloc or WriteProcessMemory. |
+| [`rop_template`](#rop_template) | Print a commented chain skeleton for one API in the skeleton or PUSHAD style, with the `dx` commands that find each address it needs. |
+| [`dep_function`](#dep_function) | Print a Python call-frame skeleton for VirtualAlloc, VirtualProtect, or WriteProcessMemory. |
 | [`rop.scan_live`](#ropscan_live) | Find gadgets in one or more loaded modules and load them into the corpus that the other `rop.*` commands use. |
 | [`rop.scan`](#ropscan) | Load gadget text from RP++ output into the corpus. |
 | [`rop.capabilities`](#ropcapabilities) | Count the gadgets in the corpus by capability, such as `LOAD_REGISTER`, `MEMORY_WRITE`, or `STACK_PIVOT`. |
@@ -123,32 +123,44 @@ Also callable as `rop_find`.
 Print a commented chain skeleton for one API, with the `dx` commands that find each address it needs.
 
 ```text
-rop_template(api?, module?)
+rop_template(api?, module?, style?)
 ```
 
 ```text
+dx @$osed().rop_template("VirtualAlloc", "essfunc")
+dx @$osed().rop_template("VirtualAlloc", "essfunc", "pushad")
 dx @$osed().rop_template("VirtualProtect", "essfunc")
-dx @$osed().rop_template("WriteProcessMemory", "essfunc")
+dx @$osed().rop_template("WriteProcessMemory", "essfunc", "pushad")
 dx @$osed().rop_template("LoadLibraryA", "essfunc")
 dx @$osed().rop_template("GetProcAddress", "essfunc")
 ```
 
-Supported APIs are VirtualProtect, WriteProcessMemory, LoadLibraryA, and GetProcAddress. The skeleton shows the PUSHAD register map and a Python layout with `???` for each value that you still need to find.
+Supported APIs are VirtualAlloc, VirtualProtect, WriteProcessMemory, LoadLibraryA, and GetProcAddress. `api` defaults to VirtualProtect.
+
+`style` picks how the chain builds the call frame for the three DEP APIs:
+
+- `skeleton`, the default, puts a frame of dummy dwords just before the return address. The chain captures ESP, writes the real value into each field, and then pivots ESP onto the frame. The output has four steps. Step 1 is a table of each field's real value and the `dx` command that gives it. Step 2 lists the gadgets to search for with `rop.query` capabilities such as `STACK_POINTER_CAPTURE`, `MOVE_REGISTER`, `MEMORY_READ`, and `MEMORY_WRITE`, plus `rop.construct` for values with 00 bytes and `pivots`. Step 3 is the Python skeleton with the dummy frame and the commented chain. Step 4 is the WinDbg commands that check each field: `bp`, `dd`, `dds esp`, and `!vprot`.
+- `pushad` loads the registers and lets one `pushad ; ret` write the frame. The output shows the register map, the Python chain, and the checks. For WriteProcessMemory the saved ESP falls on `lpBaseAddress`, so the map puts an `add esp, 0xC ; ret` in EDI and takes the last three arguments from the payload after the pushad gadget.
+
+For WriteProcessMemory the return address and `lpBaseAddress` are a code cave in an executable section (`code_caves(module, 0x200, 25, badchars, "EXEC")`), and `lpNumberOfBytesWritten` is a writable address (`code_caves(module, 4, 25, badchars, "STAGING")`). The same writable address serves as `lpflOldProtect` for VirtualProtect. LoadLibraryA and GetProcAddress print their PUSHAD layout whatever the style.
+
+The skeleton prints `???` for each value that you still need to find. It reads nothing from the target. `module` only appears in the suggested commands.
 
 ### dep_function
 
-Print a Python call-frame skeleton for VirtualAlloc or WriteProcessMemory without choosing addresses for the target.
+Print a Python call-frame skeleton for VirtualAlloc, VirtualProtect, or WriteProcessMemory without choosing addresses for the target.
 
 ```text
 dep_function(method)
 ```
 
 ```text
-dx @$osed().dep_function("VA")
-dx @$osed().dep_function("WPM")
+dx @$osed().dep_function("VirtualAlloc")
+dx @$osed().dep_function("VirtualProtect")
+dx @$osed().dep_function("WriteProcessMemory")
 ```
 
-`VA` uses `shellcodeAddr` for `lpAddress`. `WPM` uses `0xFFFFFFFF` as the pseudo process handle. Fill in the remaining addresses and argument values in the printed skeleton before using it.
+`VA`, `VP`, and `WPM` work as short aliases, in any case. The frame follows the order the API reads the stack: the API address, the return address, then each argument. `VirtualAlloc` uses `shellcodeAddr` for `lpAddress`. `VirtualProtect` uses `0x40` for `flNewProtect` and a writable address for `lpflOldProtect`. `WriteProcessMemory` uses `0xFFFFFFFF` as the pseudo process handle and a code cave as the destination. Fill in the remaining addresses and argument values in the printed skeleton before using it.
 
 ## Build the gadget corpus
 

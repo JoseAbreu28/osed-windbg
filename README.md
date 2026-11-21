@@ -181,11 +181,12 @@ dx @$osed().rop.prove("guided")
 **Print payload skeletons for a DEP bypass:**
 
 ```text
-dx @$osed().dep_function("VA")
-dx @$osed().dep_function("WPM")
+dx @$osed().dep_function("VirtualAlloc")
+dx @$osed().dep_function("VirtualProtect")
+dx @$osed().dep_function("WriteProcessMemory")
 ```
 
-`dep_function("VA")` prints a `VirtualAlloc` call-frame skeleton; `"WPM"` prints one for `WriteProcessMemory`. Fill in the addresses and argument values for the target before using either skeleton.
+Each prints the call frame of that API in the order it reads the stack. `VA`, `VP`, and `WPM` work as short aliases. `rop_template` prints the matching chain in the skeleton style by default, which patches that frame field by field, or with `"pushad"` as the third argument in the PUSHAD style. Fill in the addresses and argument values for the target before using either skeleton.
 
 ### 9. Defeat ASLR with a leak
 

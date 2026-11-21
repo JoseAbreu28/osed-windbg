@@ -3464,7 +3464,7 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
     case "nop":
       return { length: args[0], byte: args[1] };
     case "rop_template":
-      return { api: args[0], module: args[1] };
+      return { api: args[0], module: args[1], style: args[2] };
     case "dep_function":
       return { method: args[0] };
     case "sc_push_string":
