@@ -172,6 +172,24 @@ if (!String.prototype.trimEnd) {
 if (!String.prototype.trimStart) {
   String.prototype.trimStart = String.prototype.trimLeft || function () { return String(this).replace(/^\s+/, ""); };
 }
+if (!String.prototype.matchAll) {
+  Object.defineProperty(String.prototype, "matchAll", {
+    configurable: true,
+    writable: true,
+    value: function matchAll(regexp) {
+      var isRegExp = regexp instanceof RegExp;
+      if (isRegExp && !regexp.global) throw new TypeError("String.prototype.matchAll called with a non-global RegExp argument");
+      var re = isRegExp ? new RegExp(regexp) : new RegExp(regexp, "g");
+      re.lastIndex = isRegExp ? regexp.lastIndex : 0;
+      var text = String(this), found = [], match;
+      while ((match = re.exec(text)) !== null) {
+        found.push(match);
+        if (match[0] === "") re.lastIndex++;
+      }
+      return found[Symbol.iterator]();
+    },
+  });
+}
 
 "use strict";
 var osed_bundle = (() => {
@@ -2690,7 +2708,7 @@ var osed_bundle = (() => {
         size: { type: "number", min: 0, max: 256 }
       },
       execute(options) {
-        var _a2, _b, _c;
+        var _a2, _b, _c, _d;
         const pointerSize = getPointerSize();
         const normalizedExclude = normalizeByteArray((_a2 = options.exclude) != null ? _a2 : []);
         const size = options.size || void 0;
@@ -2754,8 +2772,14 @@ var osed_bundle = (() => {
         } else {
           const afterSlot = readAfterReturnSlot(anchor, pointerSize, expected.length + 64);
           if (!afterSlot) {
-            warn(`Test array not found within ${windowBytes} bytes of the anchor (min run ${minRun}).`);
-            warn("The overwritten return address was not found just before the anchor either. If the array sits before EIP, pass its address.");
+            warn(`Test array not found: scanned ${window.length} bytes from the anchor (min run ${minRun}).`);
+            const regs = readRegisters(pointerSize);
+            const ipModule = regs.ip !== void 0 ? findModuleByAddress(regs.ip) : void 0;
+            if (regs.ip !== void 0 && ipModule) {
+              warn(`${(_d = regs.ipName) != null ? _d : "ip"} ${formatAddress(regs.ip, pointerSize)} is inside ${ipModule.name}, not on an overwritten return address: the target has not crashed yet (break-in or breakpoint) or faulted inside a module. Let the payload crash it, or pass the array's address.`);
+            } else {
+              warn("The overwritten return address was not found just before the anchor either. If the array sits before EIP, pass its address.");
+            }
             return result("badchar_find", options, [{ located: false }], warnings.length > 0 ? warnings : ["Test array not found near anchor."]);
           }
           landing2 = afterSlot.landing;
@@ -11899,10 +11923,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-21T12:24:12.006Z" : globalThis[key2];
+        value = true ? "2026-11-21T15:24:50.450Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "b6fcb3e5548d" : globalThis[key2];
+        value = true ? "320b97745398" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
