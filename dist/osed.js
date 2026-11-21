@@ -3191,6 +3191,123 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/logic/pointer_filter_logic.ts
+  var REGISTER_CODE = {
+    eax: 0,
+    ecx: 1,
+    edx: 2,
+    ebx: 3,
+    esp: 4,
+    ebp: 5,
+    esi: 6,
+    edi: 7,
+    rax: 0,
+    rcx: 1,
+    rdx: 2,
+    rbx: 3,
+    rsp: 4,
+    rbp: 5,
+    rsi: 6,
+    rdi: 7
+  };
+  function encodeJumpToRegister(kind, register2) {
+    const code = REGISTER_CODE[register2.trim().toLowerCase()];
+    if (code === void 0) {
+      return void 0;
+    }
+    switch (kind) {
+      case "jmp":
+        return [255, 224 + code];
+      case "call":
+        return [255, 208 + code];
+      case "pushret":
+        return [80 + code, 195];
+      default:
+        return void 0;
+    }
+  }
+  function encodeInstructionSearch(text) {
+    const parts = text.trim().toLowerCase().split(/\s+/);
+    if (parts.length !== 2) {
+      return void 0;
+    }
+    const [mnemonic, register2] = parts;
+    if (mnemonic === "jmp" || mnemonic === "call") {
+      return encodeJumpToRegister(mnemonic, register2);
+    }
+    if (mnemonic === "pushret" || mnemonic === "push+ret") {
+      return encodeJumpToRegister("pushret", register2);
+    }
+    return void 0;
+  }
+  function addressToBytes(address, pointerSize) {
+    const bytes = [];
+    let value = address;
+    for (let index = 0; index < pointerSize; index += 1) {
+      bytes.push(Number(value & BigInt(255)));
+      value >>= BigInt(8);
+    }
+    return bytes;
+  }
+  function addressHasBadchar(address, pointerSize, badchars) {
+    if (badchars.length === 0) {
+      return false;
+    }
+    const bad = new Set(badchars.map((value) => value & 255));
+    return addressToBytes(address, pointerSize).some((byte) => bad.has(byte));
+  }
+  function badcharAddressFilter(badchars, pointerSize) {
+    return {
+      name: "badchar-free-address",
+      predicate: (candidate) => !addressHasBadchar(candidate.address, pointerSize, badchars)
+    };
+  }
+  function applyFilters(addresses, filters) {
+    const kept = [];
+    const rejected = [];
+    for (const address of addresses) {
+      const failing = filters.find((filter) => !filter.predicate({ address }));
+      if (failing) {
+        rejected.push({ address, failed: failing.name });
+      } else {
+        kept.push(address);
+      }
+    }
+    return { kept, rejected };
+  }
+
+  // src/analysis/badchar_scan.ts
+  function badcharScanDepth(keep) {
+    return Math.min(Math.max(keep * 20, 1500), 4e3);
+  }
+  function scanPatternAvoiding(options, pattern, badchars) {
+    if (badchars.length === 0) {
+      return __spreadProps(__spreadValues({}, scanPattern(options, pattern)), { dropped: 0 });
+    }
+    const scan = scanPattern(__spreadProps(__spreadValues({}, options), { maxResults: badcharScanDepth(options.maxResults) }), pattern);
+    const filter = badcharAddressFilter(badchars, getPointerSize());
+    const hits = [];
+    let dropped = 0;
+    for (const address of scan.hits) {
+      if (hits.length >= options.maxResults) break;
+      if (filter.predicate({ address })) {
+        hits.push(address);
+      } else {
+        dropped += 1;
+      }
+    }
+    return __spreadProps(__spreadValues({}, scan), { hits, stats: __spreadProps(__spreadValues({}, scan.stats), { results: hits.length }), dropped });
+  }
+  function reportBadcharDrops(badchars, dropped) {
+    if (badchars.length === 0) return;
+    const list = badchars.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+    info(`Bad chars ${list}: dropped ${dropped} candidate address(es) that contain one.`);
+  }
+  function badcharSlotArgs(args, slot) {
+    if (typeof args[slot] !== "boolean") return args;
+    return [...args.slice(0, slot), void 0, ...args.slice(slot)];
+  }
+
   // src/logic/instruction_validation.ts
   var KNOWN_PATTERNS = [
     // plain ret — useful as a RET-slide dispatcher in PUSHAD DEP-bypass chains
@@ -10172,12 +10289,13 @@ var osed_bundle = (() => {
     }
   }
   function normalizeScan(options) {
-    var _a2, _b, _c;
+    var _a2, _b, _c, _d;
     return {
       module: options.module,
       executableOnly: (_a2 = options.executableOnly) != null ? _a2 : true,
       maxResults: Math.min((_b = options.maxResults) != null ? _b : 50, 200),
-      mode: (_c = options.mode) != null ? _c : "fast"
+      mode: (_c = options.mode) != null ? _c : "fast",
+      badchars: normalizeByteArray((_d = options.badchars) != null ? _d : []).values
     };
   }
   function normalizeRopSuggest(options) {
@@ -10192,14 +10310,15 @@ var osed_bundle = (() => {
   function collectValidatedPatternHits(pattern, options) {
     var _a2;
     const pointerSize = getPointerSize();
-    const scan = scanPattern(
+    const scan = scanPatternAvoiding(
       {
         module: options.module,
         executableOnly: options.executableOnly,
         maxResults: options.maxResults,
         chunkSize: options.mode === "thorough" ? 4096 : 16384
       },
-      Uint8Array.from(pattern.bytes)
+      Uint8Array.from(pattern.bytes),
+      options.badchars
     );
     const hits = [];
     for (const hit of scan.hits) {
@@ -10221,7 +10340,7 @@ var osed_bundle = (() => {
     return {
       hits,
       warnings: scan.warnings.map((warning) => `${warning.region}: ${warning.message}`),
-      stats: scan.stats
+      stats: __spreadProps(__spreadValues({}, scan.stats), { dropped: scan.dropped })
     };
   }
   function scanForPattern(name, pattern, options) {
@@ -10290,11 +10409,11 @@ var osed_bundle = (() => {
     };
   }
   function runSemanticRopSuggest(options) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
     const pointerSize = getPointerSize();
     const combinedWarnings = [];
     const allHits = [];
-    let combinedStats = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
+    let combinedStats = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0, dropped: 0 };
     for (const pattern of knownPatternsForPointerSize(pointerSize)) {
       const result3 = collectValidatedPatternHits(pattern, options);
       allHits.push(...result3.hits);
@@ -10304,7 +10423,8 @@ var osed_bundle = (() => {
         chunksRead: combinedStats.chunksRead + ((_d = (_c = result3.stats) == null ? void 0 : _c.chunksRead) != null ? _d : 0),
         chunksSkipped: combinedStats.chunksSkipped + ((_f = (_e = result3.stats) == null ? void 0 : _e.chunksSkipped) != null ? _f : 0),
         results: combinedStats.results + ((_h = (_g = result3.stats) == null ? void 0 : _g.results) != null ? _h : 0),
-        stoppedEarly: combinedStats.stoppedEarly + ((_j = (_i = result3.stats) == null ? void 0 : _i.stoppedEarly) != null ? _j : 0)
+        stoppedEarly: combinedStats.stoppedEarly + ((_j = (_i = result3.stats) == null ? void 0 : _i.stoppedEarly) != null ? _j : 0),
+        dropped: combinedStats.dropped + ((_l = (_k = result3.stats) == null ? void 0 : _k.dropped) != null ? _l : 0)
       };
     }
     const index = buildRopIndexFromSequences(allHits.map((hit) => buildSequenceFromHit(hit)));
@@ -10348,6 +10468,7 @@ var osed_bundle = (() => {
         rows
       );
     }
+    reportBadcharDrops(options.badchars, combinedStats.dropped);
     info("Semantic backend selected; duplicate gadgets are merged by canonical IR.");
     whyItMatters("Semantic gadget suggestions improve ranking, deduplication, and explainability.");
     return {
@@ -10361,10 +10482,10 @@ var osed_bundle = (() => {
     };
   }
   function runLegacyRopSuggest(options, initialWarnings = []) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
     const combinedFindings = [];
     const combinedWarnings = [...initialWarnings];
-    let combinedStats = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
+    let combinedStats = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0, dropped: 0 };
     const pointerSize = getPointerSize();
     for (const pattern of knownPatternsForPointerSize(pointerSize)) {
       const result3 = scanForPattern(`ROP Suggest: ${pattern.name}`, pattern, options);
@@ -10377,9 +10498,11 @@ var osed_bundle = (() => {
         chunksRead: combinedStats.chunksRead + ((_d = (_c = result3.stats) == null ? void 0 : _c.chunksRead) != null ? _d : 0),
         chunksSkipped: combinedStats.chunksSkipped + ((_f = (_e = result3.stats) == null ? void 0 : _e.chunksSkipped) != null ? _f : 0),
         results: combinedStats.results + ((_h = (_g = result3.stats) == null ? void 0 : _g.results) != null ? _h : 0),
-        stoppedEarly: combinedStats.stoppedEarly + ((_j = (_i = result3.stats) == null ? void 0 : _i.stoppedEarly) != null ? _j : 0)
+        stoppedEarly: combinedStats.stoppedEarly + ((_j = (_i = result3.stats) == null ? void 0 : _i.stoppedEarly) != null ? _j : 0),
+        dropped: combinedStats.dropped + ((_l = (_k = result3.stats) == null ? void 0 : _k.dropped) != null ? _l : 0)
       };
     }
+    reportBadcharDrops(options.badchars, combinedStats.dropped);
     whyItMatters("Validated gadget suggestions reduce false positives during ROP chain construction.");
     return {
       command: "rop_suggest",
@@ -10433,14 +10556,16 @@ var osed_bundle = (() => {
     const findBytes = {
       name: "find_bytes",
       description: "Find byte sequence hits in PE sections of a loaded module.",
-      usage: "dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)",
+      usage: "dx @$osed().find_bytes(module, bytes, maxResults?, badchars?, executableOnly?, mode?)  // a boolean in the badchars slot is executableOnly, the older order",
       examples: [
         'dx @$osed().find_bytes("vulnserver", "FF E4")',
-        'dx @$osed().find_bytes("essfunc", "58 C3", 25)'
+        'dx @$osed().find_bytes("essfunc", "58 C3", 25)',
+        'dx @$osed().find_bytes("libbkup", "FF E4", 20, "00 09 0A 0B 0C 0D 20")'
       ],
       schema: {
         module: { type: "string", required: true },
         bytes: { type: "array", elementType: "number", required: true },
+        badchars: { type: "array", elementType: "number", default: [] },
         executableOnly: { type: "boolean", default: true },
         maxResults: { type: "number", min: 1, max: 200, default: 50 },
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
@@ -10451,14 +10576,15 @@ var osed_bundle = (() => {
           throw new Error("bytes must contain 0x00..0xFF integers.");
         }
         const scanOpts = normalizeScan(options);
-        const scan = scanPattern(
+        const scan = scanPatternAvoiding(
           {
             module: options.module,
             executableOnly: scanOpts.executableOnly,
             maxResults: scanOpts.maxResults,
             chunkSize: scanOpts.mode === "thorough" ? 4096 : 16384
           },
-          Uint8Array.from(bytes)
+          Uint8Array.from(bytes),
+          scanOpts.badchars
         );
         const pointerSize = getPointerSize();
         const rows = scan.hits.map((hit) => ({
@@ -10476,7 +10602,8 @@ var osed_bundle = (() => {
         for (const warning of scan.warnings) {
           warn(`${warning.region}: ${warning.message}`);
         }
-        if (scan.stats.sectionsScanned > 0 && scan.hits.length === 0) {
+        reportBadcharDrops(scanOpts.badchars, scan.dropped);
+        if (scan.stats.sectionsScanned > 0 && scan.hits.length === 0 && scan.dropped === 0) {
           info(
             `Scanned ${scan.stats.sectionsScanned} section(s) in ${scan.stats.chunksRead} readable chunk(s); no byte matches found.`
           );
@@ -10492,21 +10619,23 @@ var osed_bundle = (() => {
           findings: scan.hits,
           warnings: scan.warnings.map((warning) => `${warning.region}: ${warning.message}`),
           errors: [],
-          stats: scan.stats
+          stats: __spreadProps(__spreadValues({}, scan.stats), { dropped: scan.dropped })
         };
       }
     };
     const ropSuggest = {
       name: "rop_suggest",
-      description: "Suggest common exploit-friendly gadget patterns.",
-      usage: "dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)",
+      description: "Suggest common exploit-friendly gadget patterns, optionally without bad chars in the address.",
+      usage: "dx @$osed().rop_suggest(module?, maxResults?, badchars?, executableOnly?, mode?, engine?)  // a boolean in the badchars slot is executableOnly, the older order",
       examples: [
         'dx @$osed().rop_suggest("essfunc")',
-        'dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")',
-        'dx @$osed().rop_suggest("", 50, true, "thorough", "legacy")'
+        'dx @$osed().rop_suggest("libbkup", 3, "00 09 0A 0B 0C 0D 20")',
+        'dx @$osed().rop_suggest("essfunc", 50, "00 0A 0D", true, "fast", "semantic")',
+        'dx @$osed().rop_suggest("", 50, "", true, "thorough", "legacy")'
       ],
       schema: {
         module: { type: "string" },
+        badchars: { type: "array", elementType: "number", default: [] },
         executableOnly: { type: "boolean", default: true },
         maxResults: { type: "number", min: 1, max: 200, default: 50 },
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
@@ -10526,27 +10655,31 @@ var osed_bundle = (() => {
     const retnGadgets = {
       name: "retn",
       description: "Scan for retn N gadgets that pop N bytes before returning.",
-      usage: "dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)",
+      usage: "dx @$osed().retn(module?, maxResults?, badchars?, executableOnly?, mode?)  // a boolean in the badchars slot is executableOnly, the older order",
       examples: [
         'dx @$osed().retn("essfunc")',
-        'dx @$osed().retn("essfunc", 100)'
+        'dx @$osed().retn("essfunc", 100)',
+        'dx @$osed().retn("libbkup", 20, "00 09 0A 0B 0C 0D 20")'
       ],
       schema: {
         module: { type: "string" },
+        badchars: { type: "array", elementType: "number", default: [] },
         executableOnly: { type: "boolean", default: true },
         maxResults: { type: "number", min: 1, max: 200, default: 50 },
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
       },
       execute(options) {
-        var _a2, _b;
+        var _a2, _b, _c;
         const pointerSize = getPointerSize();
         const maxResults = Math.min((_a2 = options.maxResults) != null ? _a2 : 50, 200);
         const executableOnly = (_b = options.executableOnly) != null ? _b : true;
         const moduleFilter = options.module;
         const chunkSize = options.mode === "thorough" ? 4096 : 16384;
-        const scan = scanPattern(
+        const badchars = normalizeByteArray((_c = options.badchars) != null ? _c : []).values;
+        const scan = scanPatternAvoiding(
           { module: moduleFilter, executableOnly, maxResults: 200, chunkSize },
-          Uint8Array.from([194])
+          Uint8Array.from([194]),
+          badchars
         );
         const warnings = [...scan.warnings.map((w) => `${w.region}: ${w.message}`)];
         const groups = /* @__PURE__ */ new Map();
@@ -10586,6 +10719,7 @@ var osed_bundle = (() => {
             rows
           );
         }
+        reportBadcharDrops(badchars, scan.dropped);
         whyItMatters("retn N pops N bytes before returning \u2014 used to skip arguments in stdcall ROP chains.");
         return {
           command: "retn",
@@ -10594,34 +10728,37 @@ var osed_bundle = (() => {
           findings,
           warnings,
           errors: [],
-          stats: scan.stats
+          stats: __spreadProps(__spreadValues({}, scan.stats), { dropped: scan.dropped })
         };
       }
     };
     const addEsp = {
       name: "add_esp",
       description: "Scan for add esp, N ; ret gadgets used to skip stack slots in ROP chains.",
-      usage: "dx @$osed().add_esp(module?, maxResults?, executableOnly?, mode?)",
+      usage: "dx @$osed().add_esp(module?, maxResults?, badchars?, executableOnly?, mode?)  // a boolean in the badchars slot is executableOnly, the older order",
       examples: [
         'dx @$osed().add_esp("essfunc")',
-        'dx @$osed().add_esp("essfunc", 100)'
+        'dx @$osed().add_esp("essfunc", 100)',
+        'dx @$osed().add_esp("libbkup", 20, "00 09 0A 0B 0C 0D 20")'
       ],
       schema: {
         module: { type: "string" },
+        badchars: { type: "array", elementType: "number", default: [] },
         executableOnly: { type: "boolean", default: true },
         maxResults: { type: "number", min: 1, max: 200, default: 50 },
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
       },
       execute(options) {
-        var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
+        var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s;
         const pointerSize = getPointerSize();
         const maxResults = Math.min((_a2 = options.maxResults) != null ? _a2 : 50, 200);
         const executableOnly = (_b = options.executableOnly) != null ? _b : true;
         const moduleFilter = options.module;
         const chunkSize = options.mode === "thorough" ? 4096 : 16384;
+        const badchars = normalizeByteArray((_c = options.badchars) != null ? _c : []).values;
         const warnings = [];
         const groups = /* @__PURE__ */ new Map();
-        const scan8 = scanPattern({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([131, 196]));
+        const scan8 = scanPatternAvoiding({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([131, 196]), badchars);
         warnings.push(...scan8.warnings.map((w) => `${w.region}: ${w.message}`));
         for (const hit of scan8.hits) {
           const bytes = tryReadMemory(hit, 4);
@@ -10635,7 +10772,7 @@ var osed_bundle = (() => {
             groups.set(n, { first: hit, count: 1, imm32: false });
           }
         }
-        const scan32 = scanPattern({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([129, 196]));
+        const scan32 = scanPatternAvoiding({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([129, 196]), badchars);
         warnings.push(...scan32.warnings.map((w) => `${w.region}: ${w.message}`));
         for (const hit of scan32.hits) {
           const bytes = tryReadMemory(hit, 7);
@@ -10674,13 +10811,15 @@ var osed_bundle = (() => {
             rows
           );
         }
+        reportBadcharDrops(badchars, scan8.dropped + scan32.dropped);
         whyItMatters("add esp, N skips N bytes of ROP chain slots \u2014 essential for aligning stdcall argument frames.");
         const stats = {
-          sectionsScanned: ((_d = (_c = scan8.stats) == null ? void 0 : _c.sectionsScanned) != null ? _d : 0) + ((_f = (_e = scan32.stats) == null ? void 0 : _e.sectionsScanned) != null ? _f : 0),
-          chunksRead: ((_h = (_g = scan8.stats) == null ? void 0 : _g.chunksRead) != null ? _h : 0) + ((_j = (_i = scan32.stats) == null ? void 0 : _i.chunksRead) != null ? _j : 0),
-          chunksSkipped: ((_l = (_k = scan8.stats) == null ? void 0 : _k.chunksSkipped) != null ? _l : 0) + ((_n = (_m = scan32.stats) == null ? void 0 : _m.chunksSkipped) != null ? _n : 0),
+          sectionsScanned: ((_e = (_d = scan8.stats) == null ? void 0 : _d.sectionsScanned) != null ? _e : 0) + ((_g = (_f = scan32.stats) == null ? void 0 : _f.sectionsScanned) != null ? _g : 0),
+          chunksRead: ((_i = (_h = scan8.stats) == null ? void 0 : _h.chunksRead) != null ? _i : 0) + ((_k = (_j = scan32.stats) == null ? void 0 : _j.chunksRead) != null ? _k : 0),
+          chunksSkipped: ((_m = (_l = scan8.stats) == null ? void 0 : _l.chunksSkipped) != null ? _m : 0) + ((_o = (_n = scan32.stats) == null ? void 0 : _n.chunksSkipped) != null ? _o : 0),
           results: findings.length,
-          stoppedEarly: ((_p = (_o = scan8.stats) == null ? void 0 : _o.stoppedEarly) != null ? _p : 0) + ((_r = (_q = scan32.stats) == null ? void 0 : _q.stoppedEarly) != null ? _r : 0)
+          stoppedEarly: ((_q = (_p = scan8.stats) == null ? void 0 : _p.stoppedEarly) != null ? _q : 0) + ((_s = (_r = scan32.stats) == null ? void 0 : _r.stoppedEarly) != null ? _s : 0),
+          dropped: scan8.dropped + scan32.dropped
         };
         return { command: "add_esp", args: options, success: true, findings, warnings, errors: [], stats };
       }
@@ -10746,31 +10885,40 @@ var osed_bundle = (() => {
     return {
       name: "pivots",
       description: "Scan for stack pivot candidates.",
-      usage: "dx @$osed().pivots(module?, maxResults?, executableOnly?, mode?)",
-      examples: ['dx @$osed().pivots("essfunc")', 'dx @$osed().pivots("", 50, true, "thorough")'],
+      usage: "dx @$osed().pivots(module?, maxResults?, badchars?, executableOnly?, mode?)  // a boolean in the badchars slot is executableOnly, the older order",
+      examples: [
+        'dx @$osed().pivots("essfunc")',
+        'dx @$osed().pivots("libbkup", 15, "00 09 0A 0B 0C 0D 20")',
+        'dx @$osed().pivots("", 50, "", true, "thorough")'
+      ],
       schema: {
         module: { type: "string" },
+        badchars: { type: "array", elementType: "number", default: [] },
         executableOnly: { type: "boolean", default: true },
         maxResults: { type: "number", min: 1, max: 200, default: 50 },
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
       },
       execute(options) {
-        var _a2, _b, _c, _d;
+        var _a2, _b, _c, _d, _e;
         const pointerSize = getPointerSize();
         const patterns = pointerSize === 8 ? X64_PIVOT_PATTERNS : PIVOT_PATTERNS;
         const warnings = [];
         const sequenceHits = [];
         const detailsByAddress = /* @__PURE__ */ new Map();
+        const badchars = normalizeByteArray((_a2 = options.badchars) != null ? _a2 : []).values;
+        let dropped = 0;
         for (const pivot of patterns) {
-          const scan = scanPattern(
+          const scan = scanPatternAvoiding(
             {
               module: options.module,
-              executableOnly: (_a2 = options.executableOnly) != null ? _a2 : true,
-              maxResults: (_b = options.maxResults) != null ? _b : 50,
+              executableOnly: (_b = options.executableOnly) != null ? _b : true,
+              maxResults: (_c = options.maxResults) != null ? _c : 50,
               chunkSize: options.mode === "thorough" ? 4096 : 16384
             },
-            Uint8Array.from(pivot.bytes)
+            Uint8Array.from(pivot.bytes),
+            badchars
           );
+          dropped += scan.dropped;
           warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
           for (const hit of scan.hits) {
             const candidate = readMemory(hit, pivot.bytes.length);
@@ -10790,7 +10938,7 @@ var osed_bundle = (() => {
           sequence: detail.sequence,
           offset: `0x${address.toString(16).toUpperCase()}`,
           flags: detail.flags
-        })).sort((left, right) => left.address < right.address ? -1 : 1).slice(0, Math.min((_c = options.maxResults) != null ? _c : 50, 200)) : buildCapabilityIndex(buildRopIndexFromSequences(sequenceHits)).query({
+        })).sort((left, right) => left.address < right.address ? -1 : 1).slice(0, Math.min((_d = options.maxResults) != null ? _d : 50, 200)) : buildCapabilityIndex(buildRopIndexFromSequences(sequenceHits)).query({
           capability: "STACK_PIVOT",
           executableOnly: true
         }).map((gadget) => {
@@ -10803,7 +10951,7 @@ var osed_bundle = (() => {
             offset: `0x${address.toString(16).toUpperCase()}`,
             flags: (_d2 = detail == null ? void 0 : detail.flags) != null ? _d2 : {}
           };
-        }).sort((left, right) => left.address < right.address ? -1 : 1).slice(0, Math.min((_d = options.maxResults) != null ? _d : 50, 200));
+        }).sort((left, right) => left.address < right.address ? -1 : 1).slice(0, Math.min((_e = options.maxResults) != null ? _e : 50, 200));
         section("Stack Pivot Candidates");
         table(
           [
@@ -10817,6 +10965,7 @@ var osed_bundle = (() => {
             python: `0x${finding.address.toString(16).toUpperCase()}`
           }))
         );
+        reportBadcharDrops(badchars, dropped);
         whyItMatters("Stack pivots transition execution into attacker-controlled ROP chains.");
         return {
           command: "pivots",
@@ -10824,7 +10973,8 @@ var osed_bundle = (() => {
           success: true,
           findings,
           warnings,
-          errors: []
+          errors: [],
+          stats: { dropped }
         };
       }
     };
@@ -11467,10 +11617,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-21T15:24:50.446Z" : globalThis[key2];
+        value = true ? "2026-11-21T18:29:54.416Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "320b97745398" : globalThis[key2];
+        value = true ? "32231d78be59" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12482,91 +12632,6 @@ var osed_bundle = (() => {
         };
       }
     };
-  }
-
-  // src/logic/pointer_filter_logic.ts
-  var REGISTER_CODE = {
-    eax: 0,
-    ecx: 1,
-    edx: 2,
-    ebx: 3,
-    esp: 4,
-    ebp: 5,
-    esi: 6,
-    edi: 7,
-    rax: 0,
-    rcx: 1,
-    rdx: 2,
-    rbx: 3,
-    rsp: 4,
-    rbp: 5,
-    rsi: 6,
-    rdi: 7
-  };
-  function encodeJumpToRegister(kind, register2) {
-    const code = REGISTER_CODE[register2.trim().toLowerCase()];
-    if (code === void 0) {
-      return void 0;
-    }
-    switch (kind) {
-      case "jmp":
-        return [255, 224 + code];
-      case "call":
-        return [255, 208 + code];
-      case "pushret":
-        return [80 + code, 195];
-      default:
-        return void 0;
-    }
-  }
-  function encodeInstructionSearch(text) {
-    const parts = text.trim().toLowerCase().split(/\s+/);
-    if (parts.length !== 2) {
-      return void 0;
-    }
-    const [mnemonic, register2] = parts;
-    if (mnemonic === "jmp" || mnemonic === "call") {
-      return encodeJumpToRegister(mnemonic, register2);
-    }
-    if (mnemonic === "pushret" || mnemonic === "push+ret") {
-      return encodeJumpToRegister("pushret", register2);
-    }
-    return void 0;
-  }
-  function addressToBytes(address, pointerSize) {
-    const bytes = [];
-    let value = address;
-    for (let index = 0; index < pointerSize; index += 1) {
-      bytes.push(Number(value & BigInt(255)));
-      value >>= BigInt(8);
-    }
-    return bytes;
-  }
-  function addressHasBadchar(address, pointerSize, badchars) {
-    if (badchars.length === 0) {
-      return false;
-    }
-    const bad = new Set(badchars.map((value) => value & 255));
-    return addressToBytes(address, pointerSize).some((byte) => bad.has(byte));
-  }
-  function badcharAddressFilter(badchars, pointerSize) {
-    return {
-      name: "badchar-free-address",
-      predicate: (candidate) => !addressHasBadchar(candidate.address, pointerSize, badchars)
-    };
-  }
-  function applyFilters(addresses, filters) {
-    const kept = [];
-    const rejected = [];
-    for (const address of addresses) {
-      const failing = filters.find((filter) => !filter.predicate({ address }));
-      if (failing) {
-        rejected.push({ address, failed: failing.name });
-      } else {
-        kept.push(address);
-      }
-    }
-    return { kept, rejected };
   }
 
   // src/commands/find_ptr.ts
@@ -17913,6 +17978,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
   var MODULE = (meaning = "Loaded module name, with or without the extension, such as essfunc or kernel32.") => ({ name: "module", meaning });
   var SCAN_MODE = { name: "mode", meaning: "fast scans the usual gadget shapes; thorough also decodes more starting offsets.", optional: true, default: "fast", values: { fast: "the quicker scan.", thorough: "the slower, wider scan." } };
   var EXEC_ONLY = { name: "executableOnly", meaning: "true keeps only addresses in executable sections.", optional: true, default: "true" };
+  var GADGET_BADCHARS = BADCHARS('Bytes the target corrupts, as one hex string such as "00 0A 0D". Every address that holds one is dropped. A boolean here is executableOnly, the older order.');
   var MAX_RESULTS = { name: "maxResults", meaning: "Upper limit on the number of hits printed.", optional: true, kind: "number" };
   var TEMPLATE_TASKS = {
     "winexec=": "builds the command line on the stack with null-free pushes and calls WinExec on it.",
@@ -18141,19 +18207,21 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     {
       name: "find_bytes",
       summary: "Search one module's sections for bytes",
-      what: "Searches the PE sections of <module> for the byte sequence <bytes>.",
-      how: "Reads the section table from the module's PE header and scans the bytes of each section (executable ones only by default). It does not look at the stack or the heap, and says so when nothing is found.",
+      what: "Searches the PE sections of <module> for the byte sequence <bytes>, and drops every hit whose address holds a byte from <badchars>.",
+      how: "Reads the section table from the module's PE header and scans the bytes of each section (executable ones only by default). With bad characters it reads more hits than it prints, writes each address as the little-endian bytes a payload would carry, and drops the address when one of those bytes is in <badchars>, the same test rop.scan_live applies. It does not look at the stack or the heap, and says so when nothing is found.",
       when: "Gadget and pointer search when you know the exact bytes, such as 58 C3 for pop eax ; ret.",
       args: [
         MODULE(),
         { name: "bytes", meaning: 'Byte sequence as hex, such as "FF E4".' },
         MAX_RESULTS,
+        GADGET_BADCHARS,
         EXEC_ONLY,
         SCAN_MODE
       ],
-      example: 'dx @$osed().find_bytes("essfunc", "FF E4")',
-      output: "One line per hit with the address and the section that holds it.",
-      report: "Located the byte sequence <bytes> in the sections of <module> with find_bytes."
+      example: 'dx @$osed().find_bytes("libbkup", "FF E4", 20, "00 09 0A 0B 0C 0D 20")',
+      output: "One line per hit with the address. With bad characters, a Bad chars line counts the candidate addresses dropped because they hold one.",
+      report: "Located the byte sequence <bytes> in the sections of <module> with find_bytes, excluding addresses that contain the bad characters <badchars>.",
+      positional: (args) => badcharSlotArgs(args, 3)
     },
     {
       name: "find_stack_bytes",
@@ -18230,52 +18298,57 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     {
       name: "rop_suggest",
       summary: "Common exploit gadgets in a module, by purpose",
-      what: "Scans a module and prints the common exploit gadgets grouped by what they do, such as register loads, stack pivots and memory writes.",
-      how: "Decodes instruction sequences that end in ret in the executable sections of <module> and sorts them by effect. It needs no corpus.",
+      what: "Scans a module and prints the common exploit gadgets grouped by what they do, such as register loads, stack pivots and memory writes. Gadgets whose address holds a byte from <badchars> are left out.",
+      how: "Searches the executable sections of <module> for the byte patterns of common gadgets that end in ret, decodes each hit to confirm the instructions, and sorts them by effect. With bad characters it reads more hits than it prints and drops every address whose little-endian bytes include one from <badchars>, the same test rop.scan_live applies, so up to <maxResults> clean addresses remain per pattern. It needs no corpus.",
       when: "Early ROP step, for a quick look at what a module offers before you build a full corpus with rop.scan_live.",
       args: [
         { name: "module", meaning: "Module to scan; every module when empty.", optional: true },
         MAX_RESULTS,
+        GADGET_BADCHARS,
         EXEC_ONLY,
         SCAN_MODE,
         { name: "engine", meaning: "semantic or legacy gadget classifier.", optional: true, values: { semantic: "the newer effect-based classifier.", legacy: "the older pattern classifier." } }
       ],
-      example: 'dx @$osed().rop_suggest("essfunc")',
-      output: "One group per purpose, each with addresses and instruction text.",
-      report: "Surveyed the gadgets available in <module> with rop_suggest to plan the ROP chain."
+      example: 'dx @$osed().rop_suggest("libbkup", 3, "00 09 0A 0B 0C 0D 20")',
+      output: "One group per purpose, each with addresses and instruction text. With bad characters, a Bad chars line counts the candidate addresses dropped because they hold one.",
+      report: "Surveyed the gadgets available in <module> with rop_suggest to plan the ROP chain, excluding addresses that contain the bad characters <badchars>.",
+      positional: (args) => badcharSlotArgs(args, 2)
     },
     {
       name: "retn",
       summary: "Find retn N gadgets",
       what: "Finds retn N gadgets, which return and then drop N more bytes from the stack.",
-      how: "Searches the executable sections of <module> for the C2 opcode with its 16-bit count. Each hit is a real return instruction at that address.",
+      how: "Searches the executable sections of <module> for the C2 opcode with its 16-bit count, and drops every address that holds a byte from <badchars>. Each hit is a real return instruction at that address.",
       when: "ROP chains and stack alignment, when you need to skip a few stack slots after a return.",
-      args: [MODULE("Module to scan; all modules when left out."), MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
-      example: 'dx @$osed().retn("essfunc")',
-      output: "One line per gadget with its address and N.",
-      report: "Located retn gadgets in <module> with retn to skip stack slots in the chain."
+      args: [MODULE("Module to scan; all modules when left out."), MAX_RESULTS, GADGET_BADCHARS, EXEC_ONLY, SCAN_MODE],
+      example: 'dx @$osed().retn("libbkup", 20, "00 09 0A 0B 0C 0D 20")',
+      output: "One line per gadget with its address and N. With bad characters, a Bad chars line counts the candidate addresses dropped because they hold one.",
+      report: "Located retn gadgets in <module> with retn to skip stack slots in the chain, excluding addresses that contain the bad characters <badchars>.",
+      positional: (args) => badcharSlotArgs(args, 2)
     },
     {
       name: "add_esp",
       summary: "Find add esp, N ; ret gadgets",
       what: "Finds add esp, N ; ret gadgets, which move the stack pointer up and skip stack slots.",
-      how: "Searches the executable sections of <module> for the byte patterns of add esp followed by ret.",
+      how: "Searches the executable sections of <module> for the byte patterns of add esp followed by ret, and drops every address that holds a byte from <badchars>.",
       when: "ROP chains, to step over data that sits between two parts of the chain.",
-      args: [MODULE("Module to scan; all modules when left out."), MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
-      example: 'dx @$osed().add_esp("essfunc")',
-      output: "One line per gadget with its address and the size of the skip.",
-      report: "Located add esp gadgets in <module> with add_esp to skip over data in the chain."
+      args: [MODULE("Module to scan; all modules when left out."), MAX_RESULTS, GADGET_BADCHARS, EXEC_ONLY, SCAN_MODE],
+      example: 'dx @$osed().add_esp("libbkup", 20, "00 09 0A 0B 0C 0D 20")',
+      output: "One line per gadget with its address and the size of the skip. With bad characters, a Bad chars line counts the candidate addresses dropped because they hold one.",
+      report: "Located add esp gadgets in <module> with add_esp to skip over data in the chain, excluding addresses that contain the bad characters <badchars>.",
+      positional: (args) => badcharSlotArgs(args, 2)
     },
     {
       name: "pivots",
       summary: "Find stack pivot gadgets in a module",
       what: "Finds stack pivot gadgets, which move ESP to a register or by a large offset, such as xchg eax, esp ; ret.",
-      how: "Scans the executable sections of <module> for instructions that write ESP, followed by ret. It needs no corpus.",
+      how: "Scans the executable sections of <module> for instructions that write ESP, followed by ret, and drops every address that holds a byte from <badchars>. It needs no corpus.",
       when: "When the buffer you control is not where ESP points, so the chain must first move the stack onto it.",
-      args: [{ name: "module", meaning: "Module to scan; every module when empty.", optional: true }, MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
-      example: 'dx @$osed().pivots("essfunc")',
-      output: "One line per gadget with its address and how it changes ESP.",
-      report: "Identified stack pivot gadgets in <module> with pivots to move the stack pointer onto the controlled buffer."
+      args: [{ name: "module", meaning: "Module to scan; every module when empty.", optional: true }, MAX_RESULTS, GADGET_BADCHARS, EXEC_ONLY, SCAN_MODE],
+      example: 'dx @$osed().pivots("libbkup", 15, "00 09 0A 0B 0C 0D 20")',
+      output: "One line per gadget with its address and how it changes ESP. With bad characters, a Bad chars line counts the candidate addresses dropped because they hold one.",
+      report: "Identified stack pivot gadgets in <module> with pivots to move the stack pointer onto the controlled buffer, excluding addresses that contain the bad characters <badchars>.",
+      positional: (args) => badcharSlotArgs(args, 2)
     },
     {
       name: "rop.find",
@@ -19615,7 +19688,8 @@ ${INDENT}`);
   }
   function buildExplanation(path, entry, call) {
     var _a2, _b;
-    const { fills, lines } = argumentFills(entry, call.args, call.ran || call.args.length > 0);
+    const args = entry.positional ? entry.positional(call.args) : call.args;
+    const { fills, lines } = argumentFills(entry, args, call.ran || call.args.length > 0);
     for (const result3 of (_a2 = entry.results) != null ? _a2 : []) {
       const value = resultValue(result3, call);
       if (value !== void 0) fills.set(result3.name, value);
@@ -20111,7 +20185,7 @@ ${INDENT}`)]);
     const patterns = knownPatternsForPointerSize(pointerSize);
     const filter = badcharAddressFilter((_a2 = options.badchars) != null ? _a2 : [], pointerSize);
     const maxPerPattern = (_b = options.maxPerPattern) != null ? _b : 40;
-    const scanDepth = Math.min(Math.max(maxPerPattern * 20, 1500), 4e3);
+    const scanDepth = badcharScanDepth(maxPerPattern);
     const hits = [];
     const warningSet = /* @__PURE__ */ new Set();
     let scanned = 0;
@@ -24873,14 +24947,15 @@ ${INDENT}`)]);
     if (typeof value !== "string") {
       return value;
     }
-    const tokens = value.split(/[,\s]+/).filter((token) => token.length > 0);
+    const tokens = value.split(/[,\s]+|(?=\\x)/i).filter((token) => token.length > 0);
     if (tokens.length === 0) {
       return [];
     }
     const parsed = [];
     for (const token of tokens) {
-      if (/^[0-9a-fA-F]{2}$/.test(token)) {
-        parsed.push(parseInt(token, 16));
+      const pair = /^(?:\\x|0x)?([0-9a-fA-F]{2})$/i.exec(token);
+      if (pair) {
+        parsed.push(parseInt(pair[1], 16));
         continue;
       }
       if (/^[0-9a-fA-F]+$/.test(token) && token.length % 2 === 0) {
@@ -24943,22 +25018,21 @@ ${INDENT}`)]);
       case "str_bytes":
         return { text: args[0], encoding: args[1], terminator: args[2], exclude: parseHexByteList(args[3]) };
       case "rop":
+        return { module: args[0], maxResults: args[1], executableOnly: args[2], mode: args[3] };
       case "rop_suggest":
       case "pivots":
       case "retn":
-      case "add_esp":
-        return commandName === "rop_suggest" ? {
-          module: args[0],
-          maxResults: args[1],
-          executableOnly: args[2],
-          mode: args[3],
-          engine: args[4]
-        } : {
-          module: args[0],
-          maxResults: args[1],
-          executableOnly: args[2],
-          mode: args[3]
+      case "add_esp": {
+        const slots = badcharSlotArgs(args, 2);
+        const scan = {
+          module: slots[0],
+          maxResults: slots[1],
+          badchars: parseHexByteList(slots[2]),
+          executableOnly: slots[3],
+          mode: slots[4]
         };
+        return commandName === "rop_suggest" ? __spreadProps(__spreadValues({}, scan), { engine: slots[5] }) : scan;
+      }
       case "nop":
         return { length: args[0], byte: args[1] };
       case "rop_template":
@@ -24992,14 +25066,17 @@ ${INDENT}`)]);
           exclude: parseHexByteList(args[1]),
           key: args[2]
         };
-      case "find_bytes":
+      case "find_bytes": {
+        const slots = badcharSlotArgs(args, 3);
         return {
-          module: args[0],
-          bytes: parseHexByteList(args[1]),
-          maxResults: args[2],
-          executableOnly: args[3],
-          mode: args[4]
+          module: slots[0],
+          bytes: parseHexByteList(slots[1]),
+          maxResults: slots[2],
+          badchars: parseHexByteList(slots[3]),
+          executableOnly: slots[4],
+          mode: slots[5]
         };
+      }
       case "find_stack_bytes":
         return {
           bytes: parseHexByteList(args[0]),
