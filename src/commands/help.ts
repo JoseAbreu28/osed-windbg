@@ -7,7 +7,7 @@ const SHELLCODE_WRITERS = ["sc.push_string", "sc.call_frame", "sc.template", "sc
 
 export const categoryForName = (name: string): string => {
   if (SHELLCODE_WRITERS.includes(name)) return "shellcode";
-  if (name.startsWith("rop") || name === "dep_function" || name === "dep_plan" || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
+  if (name.startsWith("rop") || name === "dep_function" || name === "dep_plan" || name === "dep_candidates" || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
   if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
   if (name.startsWith("sc.")) return "pe-api";
   if (name.startsWith("str.")) return "strings";
@@ -70,8 +70,9 @@ const LISTING_SUMMARIES: Record<string, string> = {
   rop_find: "Flat alias for legacy ROP helper triage",
   rop_suggest: "Suggest exploit-friendly gadget patterns",
   rop_template: "Print a commented ROP chain skeleton (skeleton or PUSHAD style)",
-  dep_function: "Print a VirtualAlloc, VirtualProtect or WriteProcessMemory call-frame skeleton",
+  dep_function: "Print a VirtualAlloc, VirtualProtect or WriteProcessMemory call frame or PUSHAD map",
   dep_plan: "Run the whole DEP bypass discovery in seven sections",
+  dep_candidates: "Rank the best 3 gadgets per DEP chain job, as dep_plan step 4",
   pivots: "Scan for stack pivot candidates",
   retn: "Scan for retn N gadgets",
   add_esp: "Scan for add esp, N gadgets",

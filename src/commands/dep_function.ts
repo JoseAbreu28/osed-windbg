@@ -1,7 +1,9 @@
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
+import { DepApi, PUSHAD_MAPS, printPushadMap } from "./rop_template";
 
-type DepApi = "VirtualAlloc" | "VirtualProtect" | "WriteProcessMemory";
+type Style = "skeleton" | "pushad";
+const STYLES: Style[] = ["skeleton", "pushad"];
 
 const FRAMES: Record<DepApi, { alias: string; lines: string[] }> = {
   VirtualAlloc: {
@@ -50,26 +52,33 @@ function parseApi(input: string): DepApi | undefined {
 export function createDepFunctionCommand(): Command {
   return {
     name: "dep_function",
-    description: "Print a Python call-frame skeleton for VirtualAlloc, VirtualProtect or WriteProcessMemory. VA, VP and WPM work as short aliases.",
-    usage: 'dx @$osed().dep_function("VirtualAlloc" | "VirtualProtect" | "WriteProcessMemory")',
+    description: "Print the frame of VirtualAlloc, VirtualProtect or WriteProcessMemory: a Python call-frame skeleton by default, or with \"pushad\" the register each argument goes in for one PUSHAD. VA, VP and WPM work as short aliases.",
+    usage: 'dx @$osed().dep_function("VirtualAlloc" | "VirtualProtect" | "WriteProcessMemory", style?)',
     examples: [
       'dx @$osed().dep_function("VirtualAlloc")',
       'dx @$osed().dep_function("VirtualProtect")',
       'dx @$osed().dep_function("WriteProcessMemory")',
+      'dx @$osed().dep_function("VirtualProtect", "pushad")',
     ],
-    compactExampleCount: 3,
-    schema: { method: { type: "string", required: true } },
+    compactExampleCount: 4,
+    schema: { method: { type: "string", required: true }, style: { type: "string" } },
     execute(options: Record<string, unknown>): CommandResult {
       const method = parseApi(options.method as string);
-      if (!method) {
-        const error = 'Use "VirtualAlloc", "VirtualProtect" or "WriteProcessMemory" (aliases "VA", "VP", "WPM").';
-        return { command: "dep_function", args: options, success: false, findings: [], warnings: [], errors: [error] };
-      }
+      const style = String(options.style ?? "skeleton").trim().toLowerCase() as Style;
+      const fail = (error: string): CommandResult =>
+        ({ command: "dep_function", args: options, success: false, findings: [], warnings: [], errors: [error] });
+      if (!method) return fail('Use "VirtualAlloc", "VirtualProtect" or "WriteProcessMemory" (aliases "VA", "VP", "WPM").');
+      if (!STYLES.includes(style)) return fail('style must be "skeleton" or "pushad".');
 
+      if (style === "pushad") {
+        out.section(`${method} PUSHAD Register Map`);
+        printPushadMap(method);
+        return { command: "dep_function", args: { method, style }, success: true, findings: [{ method, style, lines: PUSHAD_MAPS[method] }], warnings: [], errors: [] };
+      }
       const { lines } = FRAMES[method];
       out.section(`${method} Python Call-Frame Skeleton`);
       for (const line of lines) out.print(line);
-      return { command: "dep_function", args: { method }, success: true, findings: [{ method, lines }], warnings: [], errors: [] };
+      return { command: "dep_function", args: { method, style }, success: true, findings: [{ method, style, lines }], warnings: [], errors: [] };
     },
   };
 }

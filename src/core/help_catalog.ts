@@ -205,7 +205,19 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       'dx @$osed().dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D")',
     ],
     details: "The draft is not a finished chain. It fills in the top-ranked gadget per job and marks with TODO the distances only a debugger run can give, with the commands that measure them. It does not check that one gadget's output register is the next gadget's input.",
-    seeAlso: ["rop.scan_live", "rop.query", "rop.construct"],
+    seeAlso: ["rop.scan_live", "rop.query", "rop.construct", "dep_candidates"],
+  },
+  {
+    name: "dep_candidates",
+    summary: "Best 3 gadgets per DEP chain job, ranked by side effects",
+    description: "Prints what step [4/7] of dep_plan prints: for each job of the skeleton or pushad chain, the 3 gadgets from the module with the fewest side effects, with what else each one does. The pushad style also lists jmp esp and call esp addresses. It scans the module itself and leaves the loaded corpus as it was.",
+    usage: 'dx @$osed().dep_candidates(module, badchars, style?)',
+    examples: [
+      'dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")',
+      'dx @$osed().dep_candidates("libbkup", "00 0A 0D", "pushad")',
+    ],
+    details: "Ranked by fewest side effects, then the smallest stack move. A gadget that moves ESP only counts for the pivot job. rop.query lists every gadget of one capability instead, in corpus order.",
+    seeAlso: ["dep_plan", "rop.query", "rop.scan_live"],
   },
   {
     name: "rop.query",

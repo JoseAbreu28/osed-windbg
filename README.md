@@ -218,7 +218,7 @@ dx @$osed().dep_function("VirtualProtect")
 dx @$osed().dep_function("WriteProcessMemory")
 ```
 
-Each prints the call frame of that API in the order it reads the stack. `VA`, `VP`, and `WPM` work as short aliases. `rop_template` prints the matching chain in the skeleton style by default, which patches that frame field by field, or with `"pushad"` as the third argument in the PUSHAD style. Fill in the addresses and argument values for the target before using either skeleton.
+Each prints the call frame of that API in the order it reads the stack. `VA`, `VP`, and `WPM` work as short aliases. With `"pushad"` as the second argument, `dep_function` prints the PUSHAD register map instead. `rop_template` prints the matching chain in the skeleton style by default, which patches that frame field by field, or with `"pushad"` as the third argument in the PUSHAD style. Fill in the addresses and argument values for the target before using either skeleton.
 
 ### 9. Defeat ASLR with a leak
 

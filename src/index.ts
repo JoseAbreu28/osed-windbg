@@ -41,9 +41,9 @@ import { createFindMspCommand } from "./commands/findmsp";
 import { createFindPtrCommand } from "./commands/find_ptr";
 import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
-import { createRopTemplateCommand, printPushadMap } from "./commands/rop_template";
+import { createRopTemplateCommand } from "./commands/rop_template";
 import type { RopGadget } from "./rop/types";
-import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, candidateLines, candidates as depPlanCandidates, draftLines, hex32 as dwordHex, jobsFor, type DepPlanStyle } from "./commands/dep_plan";
+import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, candidateLines, candidates as depPlanCandidates, draftLines, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, type DepPlanStyle } from "./commands/dep_plan";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./commands/code_caves";
@@ -649,6 +649,11 @@ function bindApi(): OsedApi {
     ]);
   };
 
+  const discoverLiveIndexes = (modules: Array<string | undefined>, options: Omit<LiveDiscoveryOptions, "module">) => {
+    const discoveries = modules.map((module) => discoverLiveGadgets({ ...options, module }));
+    return { discoveries, indexes: discoveries.map((discovery) => buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits))) };
+  };
+
   const scanLiveCorpus = (
     modules: Array<string | undefined>,
     options: Omit<LiveDiscoveryOptions, "module">,
@@ -658,9 +663,7 @@ function bindApi(): OsedApi {
     corpusOrigin = "live";
     corpusValidation = "sampled";
     corpusBadchars = Array.isArray(options.badchars) ? [...options.badchars] : [];
-    const discoveries = modules.map((module) => discoverLiveGadgets({ ...options, module }));
-    const discoveredIndexes = discoveries.map((discovery) =>
-      buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
+    const { discoveries, indexes: discoveredIndexes } = discoverLiveIndexes(modules, options);
     invalidateCorpusPlans();
     if (!append) resetCorpusModules();
     const indexes = append && currentRopCorpus
@@ -3111,6 +3114,70 @@ function bindApi(): OsedApi {
     return toDxResult("Chain Verifier", rows);
   };
 
+  // The body of dep_plan's [4/7] and all of dep_candidates, so pasting the echoed line repeats the section.
+  const printDepCandidates = (corpus: CapabilityIndex | undefined, moduleName: string, badSet: Set<number>, style: DepPlanStyle) => {
+    out.info("Ranked by fewest side effects, then the smallest stack move. Side effects are listed after each gadget.");
+    const best: Record<string, RopGadget | undefined> = {};
+    for (const job of jobsFor(style)) {
+      const found = corpus ? depPlanCandidates(corpus, job) : [];
+      best[job.key] = found[0];
+      for (const line of candidateLines(found, job)) out.print(line);
+    }
+    let jmpEsp: number | undefined;
+    if (style === "pushad") {
+      for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
+        out.echo("find_bytes", [moduleName, bytes, 20]);
+        invoke("find_bytes", [moduleName, bytes, 20]);
+        const hits = ((lastResult?.findings ?? []) as unknown[])
+          .map((hit) => Number(hit))
+          .filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0)
+          .slice(0, 3);
+        out.print(`  ${label}: ${hits.length > 0 ? hits.map(dwordHex).join("  ") : "none without bad bytes"}`);
+        jmpEsp = jmpEsp ?? hits[0];
+      }
+    }
+    const missing = jobsFor(style).filter((job) => !best[job.key]).map((job) => job.title);
+    if (missing.length > 0) out.warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
+    return { best, jmpEsp, missing };
+  };
+
+  const executeDepCandidates = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("dep_candidates");
+    }
+    const [moduleArg, badArg, styleArg] = args;
+    const style = String(styleArg ?? "skeleton").trim().toLowerCase() as DepPlanStyle;
+    const moduleName = typeof moduleArg === "string" ? moduleArg.trim() : "";
+    const badText = typeof badArg === "string" ? badArg : "";
+    const badchars = parseHexByteList(badText);
+    const fail = (message: string): DxResult => {
+      const rows = [{ Error: message }];
+      renderRows("DEP Candidates", rows);
+      out.info("Usage: dx @$osed().dep_candidates(module, badchars, style?)");
+      setResult({ command: "dep_candidates", args: { module: moduleArg, badchars: badArg, style: styleArg }, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult("DEP Candidates", rows);
+    };
+    if (!DEP_PLAN_STYLES.includes(style)) return fail(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
+    if (!Array.isArray(badchars)) return fail('badchars must be hex bytes such as "00 0A 0D".');
+    if (!moduleName || !moduleInfoByName(moduleName)) return fail(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
+    // Its own scan, so the loaded corpus stays as the user left it.
+    const corpus = mergeCapabilityIndexes(discoverLiveIndexes([moduleName], { badchars }).indexes);
+    const { best, missing } = printDepCandidates(corpus, moduleName, new Set(badchars), style);
+    const rows = jobsFor(style).map((job) => {
+      const gadget = best[job.key];
+      return { Job: job.title, Best: gadget ? dwordHex(depPlanAddress(gadget)) : "none" };
+    });
+    setResult({
+      command: "dep_candidates",
+      args: { module: moduleName, badchars: badText, style },
+      success: true,
+      findings: rows,
+      warnings: missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : [],
+      errors: [],
+    });
+    return toDxResult("DEP Candidates", rows);
+  };
+
   const executeDepPlan = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("dep_plan");
@@ -3189,28 +3256,8 @@ function bindApi(): OsedApi {
     summary.push({ Section: `[3/${n}] corpus`, Result: `${gadgetCount} gadgets` });
 
     out.section(`[4/${n}] Best 3 candidates per job (${style} style)`);
-    out.info("Ranked by fewest side effects, then the smallest stack move. Side effects are listed after each gadget.");
-    const best: Record<string, RopGadget | undefined> = {};
-    for (const job of jobsFor(style)) {
-      const found = corpus ? depPlanCandidates(corpus, job) : [];
-      best[job.key] = found[0];
-      for (const line of candidateLines(found, job)) out.print(line);
-    }
-    let jmpEsp: number | undefined;
-    if (style === "pushad") {
-      for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
-        out.echo("find_bytes", [moduleName, bytes, 20]);
-        invoke("find_bytes", [moduleName, bytes, 20]);
-        const hits = ((lastResult?.findings ?? []) as unknown[])
-          .map((hit) => Number(hit))
-          .filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0)
-          .slice(0, 3);
-        out.print(`  ${label}: ${hits.length > 0 ? hits.map(dwordHex).join("  ") : "none without bad bytes"}`);
-        jmpEsp = jmpEsp ?? hits[0];
-      }
-    }
-    const missing = jobsFor(style).filter((job) => !best[job.key]).map((job) => job.title);
-    if (missing.length > 0) out.warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
+    out.echo("dep_candidates", [moduleName, badText, style]);
+    const { best, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style);
     summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
 
     out.section(`[5/${n}] Clean recipes for the constants`);
@@ -3247,11 +3294,9 @@ function bindApi(): OsedApi {
     summary.push({ Section: `[5/${n}] constants`, Result: `${CONSTANTS[depApi].length} recipes` });
 
     out.section(`[6/${n}] ${style === "pushad" ? "PUSHAD register map" : "Call frame"} for ${depApi}`);
-    if (style === "pushad") printPushadMap(depApi);
-    else {
-      out.echo("dep_function", [depApi]);
-      invoke("dep_function", [depApi]);
-    }
+    const frameArgs = style === "pushad" ? [depApi, style] : [depApi];
+    out.echo("dep_function", frameArgs);
+    invoke("dep_function", frameArgs);
     summary.push({ Section: `[6/${n}] frame`, Result: style === "pushad" ? "register map" : "dep_function frame" });
 
     out.section(`[7/${n}] Python draft: verify it field by field, it is not a finished chain`);
@@ -3339,6 +3384,7 @@ function bindApi(): OsedApi {
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
   api.dep_plan = executeDepPlan;
+  api.dep_candidates = executeDepCandidates;
 
   // exploit.state and exploit.clear make exploit an object, which shadows the
   // registry command of the same name. The workflow command sits beside them so
@@ -3630,7 +3676,7 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
     case "rop_template":
       return { api: args[0], module: args[1], style: args[2] };
     case "dep_function":
-      return { method: args[0] };
+      return { method: args[0], style: args[1] };
     case "sc_push_string":
       return { text: args[0], badchars: args[1], register: args[2] };
     case "sc_call_frame": {

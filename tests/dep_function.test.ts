@@ -51,6 +51,22 @@ describe("dep_function", () => {
     expect(logs.join("")).toContain("bytesWrittenAddr");
   });
 
+  test("the pushad style prints only the register map, under its own title", () => {
+    const result = createDepFunctionCommand().execute({ method: "VP", style: "pushad" });
+    expect(result.findings[0]).toMatchObject({ method: "VirtualProtect", style: "pushad" });
+    const text = logs.join("");
+    expect(text).toContain("=== VirtualProtect PUSHAD Register Map ===");
+    expect(text).toContain("[ESP+16] = EBX        <- dwSize = 0x201");
+    expect(text).not.toContain("Call-Frame Skeleton");
+  });
+
+  test("rejects a style other than skeleton or pushad", () => {
+    const result = createDepFunctionCommand().execute({ method: "VirtualAlloc", style: "rop" });
+    expect(result.success).toBe(false);
+    expect(result.errors[0]).toContain('style must be "skeleton" or "pushad"');
+    expect(logs.join("")).toBe("");
+  });
+
   test.each([
     ["VA", "VirtualAlloc"], ["va", "VirtualAlloc"], ["virtualalloc", "VirtualAlloc"],
     ["VP", "VirtualProtect"], ["vp", "VirtualProtect"], [" VirtualProtect ", "VirtualProtect"],
@@ -71,6 +87,7 @@ describe("dep_function", () => {
   test("registers positional invocation and built-in help", () => {
     const api = loadApi();
     expect(normalizeInvocation("dep_function", ["VirtualProtect"])).toEqual({ method: "VirtualProtect" });
+    expect(normalizeInvocation("dep_function", ["VirtualProtect", "pushad"])).toEqual({ method: "VirtualProtect", style: "pushad" });
     expect((api.dep_function("VP") as { success: boolean }).success).toBe(true);
     expect(api.last_result()).toMatchObject({ command: "dep_function", success: true });
     logs.length = 0;

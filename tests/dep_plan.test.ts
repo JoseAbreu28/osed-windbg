@@ -3,7 +3,12 @@ import { stripDml } from "../src/core/output";
 import { initializeScript } from "../src/index";
 
 type Result = { success: boolean; errors: string[]; findings: Array<Record<string, unknown>> };
-type Api = { dep_plan: (...args: unknown[]) => unknown; last_result: () => Result };
+type Api = {
+  dep_plan: (...args: unknown[]) => unknown;
+  dep_candidates: (...args: unknown[]) => unknown;
+  rop: { query: (...args: unknown[]) => unknown };
+  last_result: () => Result;
+};
 
 const BASE = BigInt(0x11110000);
 const logs: string[] = [];
@@ -161,6 +166,7 @@ describe("dep_plan", () => {
       '[1/7] modules("libbkup")',
       '[2/7] sc.iat_find("VirtualAlloc")',
       '[3/7] rop.scan_live("libbkup", "00 0A 0D")',
+      '[4/7] dep_candidates("libbkup", "00 0A 0D", "skeleton")',
       '[5/7] rop.construct("eax", 0x1, "00 0A 0D")',
       '[5/7] rop.construct("eax", 0x1000, "00 0A 0D")',
       '[5/7] rop.construct("eax", 0x40, "00 0A 0D")',
@@ -170,12 +176,14 @@ describe("dep_plan", () => {
       '[1/7] modules("libbkup")',
       '[2/7] sc.iat_find("WriteProcessMemory")',
       '[3/7] rop.scan_live("libbkup", "00 0A 0D")',
+      '[4/7] dep_candidates("libbkup", "00 0A 0D", "pushad")',
       '[4/7] find_bytes("libbkup", "FF E4", 20)',
       '[4/7] find_bytes("libbkup", "FF D4", 20)',
       '[5/7] rop.construct("eax", 0xFFFFFFFF, "00 0A 0D")',
       '[5/7] rop.construct("eax", 0x210, "00 0A 0D")',
       '[5/7] code_caves("libbkup", 0x4, 25, "00 0A 0D", "STAGING")',
       '[5/7] code_caves("libbkup", 0x210, 25, "00 0A 0D", "EXEC")',
+      '[6/7] dep_function("WriteProcessMemory", "pushad")',
     ]],
   ])("%s %s prints each sub-command in its section before its output", (name, style, expected) => {
     api.dep_plan(name, "libbkup", "00 0A 0D", style);
@@ -188,17 +196,47 @@ describe("dep_plan", () => {
     expect(echoed).toEqual(expected);
   });
 
-  test("pasting an echoed line prints the same output dep_plan printed under it", () => {
-    api.dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D", "pushad");
+  test.each([
+    ["VirtualAlloc", "skeleton"],
+    ["WriteProcessMemory", "pushad"],
+  ])("pasting an echoed line of %s %s prints the same output dep_plan printed under it", (name, style) => {
+    api.dep_plan(name, "libbkup", "00 0A 0D", style);
     const report = text();
     const calls = report.split("\n").filter((line) => line.startsWith("dx @$osed().") && !line.includes("code_caves("));
-    expect(calls.length).toBeGreaterThan(5);
+    expect(calls.some((call) => call.includes(".dep_candidates("))).toBe(true);
+    expect(calls.some((call) => call.includes(".dep_function("))).toBe(true);
     const osed = (globalThis as unknown as { osed: unknown }).osed;
     for (const call of calls) {
       logs.length = 0;
       new Function("osed", `return osed.${call.slice("dx @$osed().".length)};`)(osed);
       expect(report, call).toContain(`${call}\n${text()}`);
     }
+  });
+
+  test.each(["skeleton", "pushad"])("dep_candidates in a fresh session prints the whole [4/7] %s section and loads no corpus", (style) => {
+    api.dep_plan("VirtualProtect", "libbkup", "00 0A 0D", style);
+    const report = text();
+    const section = report.slice(report.indexOf("=== [4/7]"), report.indexOf("\n=== [5/7]"));
+    const call = `dx @$osed().dep_candidates("libbkup", "00 0A 0D", "${style}")`;
+    expect(section.split("\n")[1]).toBe(call);
+
+    const fresh = loadApi();
+    fresh.dep_candidates("libbkup", "00 0A 0D", style);
+    expect(fresh.last_result()).toMatchObject({ command: "dep_candidates", success: true });
+    expect(section.slice(section.indexOf(call) + call.length + 1)).toBe(text());
+    fresh.rop.query("capability", "MEMORY_READ");
+    expect(fresh.last_result().success).toBe(false);
+  });
+
+  test.each([
+    [["nosuchmod", "00"], 'Module "nosuchmod" is not loaded'],
+    [["libbkup", "00", "rop"], "style must be one of skeleton, pushad"],
+    [["libbkup", "zz"], "badchars must be hex bytes"],
+  ])("dep_candidates rejects %j", (args, message) => {
+    api.dep_candidates(...args);
+    expect(api.last_result()).toMatchObject({ command: "dep_candidates", success: false });
+    expect(api.last_result().errors[0]).toContain(message);
+    expect(text()).not.toContain("Ranked by fewest side effects");
   });
 
   test.each([

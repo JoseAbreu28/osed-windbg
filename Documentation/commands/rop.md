@@ -12,8 +12,9 @@ Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../CO
 | [`pivots`](#pivots) | Find stack pivot gadgets, which move ESP to a register or an offset. |
 | [`rop.find`](#ropfind) | Run the older ROP helper that scans one module and prints a module summary. |
 | [`rop_template`](#rop_template) | Print a commented chain skeleton for one API in the skeleton or PUSHAD style, with the `dx` commands that find each address it needs. |
-| [`dep_function`](#dep_function) | Print a Python call-frame skeleton for VirtualAlloc, VirtualProtect, or WriteProcessMemory. |
+| [`dep_function`](#dep_function) | Print a Python call-frame skeleton, or the PUSHAD register map, for VirtualAlloc, VirtualProtect, or WriteProcessMemory. |
 | [`dep_plan`](#dep_plan) | Run the whole DEP bypass discovery for one API and module, each step under its own `[n/7]` header, ending in a Python draft to verify. |
+| [`dep_candidates`](#dep_candidates) | Rank the 3 gadgets with the fewest side effects for each job of a DEP chain, as step 4 of `dep_plan`. |
 | [`rop.scan_live`](#ropscan_live) | Find gadgets in one or more loaded modules and load them into the corpus that the other `rop.*` commands use. |
 | [`rop.scan`](#ropscan) | Load gadget text from RP++ output into the corpus. |
 | [`rop.capabilities`](#ropcapabilities) | Count the gadgets in the corpus by capability, such as `LOAD_REGISTER`, `MEMORY_WRITE`, or `STACK_PIVOT`. |
@@ -155,16 +156,17 @@ The skeleton prints `???` for each value that you still need to find. It reads n
 
 ### dep_function
 
-Print a Python call-frame skeleton for VirtualAlloc, VirtualProtect, or WriteProcessMemory without choosing addresses for the target.
+Print a Python call-frame skeleton for VirtualAlloc, VirtualProtect, or WriteProcessMemory without choosing addresses for the target. With `"pushad"` as the second argument it prints the PUSHAD register map instead: which register PUSHAD stores in each slot from ESP up, and what that register must hold.
 
 ```text
-dep_function(method)
+dep_function(method, style?)
 ```
 
 ```text
 dx @$osed().dep_function("VirtualAlloc")
 dx @$osed().dep_function("VirtualProtect")
 dx @$osed().dep_function("WriteProcessMemory")
+dx @$osed().dep_function("VirtualProtect", "pushad")
 ```
 
 `VA`, `VP`, and `WPM` work as short aliases, in any case. The frame follows the order the API reads the stack: the API address, the return address, then each argument. `VirtualAlloc` uses `shellcodeAddr` for `lpAddress`. `VirtualProtect` uses `0x40` for `flNewProtect` and a writable address for `lpflOldProtect`. `WriteProcessMemory` uses `0xFFFFFFFF` as the pseudo process handle and a code cave as the destination. Fill in the remaining addresses and argument values in the printed skeleton before using it.
@@ -193,7 +195,7 @@ dx @$osed().rop.construct("eax", 0x1, "00 09 0A 0B 0C 0D 20")
 === Value Construction: eax = 0x00000001 ===
 ```
 
-The ranking in step 4, the PUSHAD map in step 6, and the draft in step 7 are computed by `dep_plan` itself and have no such line. The `code_caves` line shows the search a cave address came from: run on its own, it lists every cave, and `dep_plan` keeps the first one with a clean address.
+Step 4 prints `dep_candidates` and step 6 prints `dep_function`, in the PUSHAD style with `"pushad"` as its second argument. Only the draft in step 7 is computed by `dep_plan` itself and has no such line. The `code_caves` line shows the search a cave address came from: run on its own, it lists every cave, and `dep_plan` keeps the first one with a clean address.
 
 It calls the existing commands in this order:
 
@@ -206,6 +208,21 @@ It calls the existing commands in this order:
 7. A Python draft. It fills in the slot, the cave addresses, and the top gadget per job. Lines marked `TODO measure` hold the values only a debugger run can give, such as the distance from the captured ESP to field 1 and to the shellcode, each with the `bp`, `s`, and `?` commands that measure it.
 
 The draft is not a finished chain. It picks the top gadget per job and does not check that the register one gadget leaves is the register the next one reads. Verify each field in WinDbg before you use it. In the course labs, build the chain by hand first with `dep_function` and `rop_template`, and use `dep_plan` once you know the method.
+
+### dep_candidates
+
+Rank, for each job of a skeleton or PUSHAD chain, the 3 gadgets from one module with the fewest side effects. This is step `[4/7]` of `dep_plan` on its own.
+
+```text
+dep_candidates(module, badchars, style?)
+```
+
+```text
+dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")
+dx @$osed().dep_candidates("libbkup", "00 0A 0D", "pushad")
+```
+
+The skeleton jobs are capture ESP, copy a register, add or subtract, negate, read a pointer, write a field, advance the pointer, and pivot ESP onto the frame. The PUSHAD jobs are a `pop` for each register, reading the IAT slot, and `pushad ; ret`, followed by the `jmp esp` and `call esp` addresses from `find_bytes`. Gadgets rank by fewest side effects, then the smallest stack move, and each one lists the registers it changes, how far it moves ESP, extra pops, a `ret N`, and memory writes. A gadget that moves ESP only counts for the pivot job. The command scans the module itself and leaves the loaded corpus as it was. `rop.query` lists every gadget of one capability instead, in corpus order.
 
 ## Build the gadget corpus
 

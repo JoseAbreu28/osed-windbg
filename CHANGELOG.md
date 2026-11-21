@@ -7,6 +7,11 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-21 - dep_candidates, and dep_function prints the PUSHAD map
+
+- `dep_candidates(module, badchars, style?)` prints what step `[4/7]` of `dep_plan` prints: the 3 gadgets per job with the fewest side effects, and in the PUSHAD style the `jmp esp` and `call esp` addresses. It scans the module on its own and leaves the loaded corpus as it was. `dep_plan` prints its line at the top of step 4, such as `dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")`, and both print through the same code.
+- `dep_function(method, style?)` takes `"pushad"` as its second argument and then prints only the PUSHAD register map, under `=== VirtualProtect PUSHAD Register Map ===`. Step `[6/7]` of a PUSHAD `dep_plan` now prints `dx @$osed().dep_function("VirtualProtect", "pushad")` and its output, so every step but the draft names the command that reproduces it.
+
 ### 2026-11-21 - dep_plan prints each command it runs
 
 - `dep_plan` opens with the call as typed, such as `=== dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20") ===`, so a log or a screenshot of the top names the API, the module, and the bad characters. `rop_template` opens the same way.
