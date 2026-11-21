@@ -6,6 +6,38 @@ osed-windbg is a WinDbg JavaScript extension for x86 exploit development. It doe
 
 ![triage example](Images/triage.gif)
 
+## Load it once, from a shortcut
+
+Typing `.scriptload` in every new session wastes time you do not have in an exam. WinDbg's `-c` flag runs commands at startup, so put it in a desktop shortcut and the script is ready the moment the debugger opens.
+
+Right click the desktop, New, Shortcut, and paste one line:
+
+```text
+"C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\windbg.exe" -c ".scriptload C:\tools\osed-legacy.js"
+```
+
+Keep the quotes around the WinDbg path: without them the space in `Program Files (x86)` splits the command. Check the path, since the Debuggers folder moves between SDK versions.
+
+To attach to a target and run straight away, add `-pn` and chain commands with `;`:
+
+```text
+"...\windbg.exe" -pn target.exe -c ".scriptload C:\tools\osed-legacy.js; g"
+```
+
+For more than one startup command, put them in a text file, one per line, and run that file instead:
+
+```text
+"...\windbg.exe" -c "$$><C:\tools\startup.txt"
+```
+
+```text
+.scriptload C:\tools\osed-legacy.js
+sxd av
+sxd gp
+```
+
+Inside a session the script stays loaded across crashes. You only reload it after restarting WinDbg, or with `.scriptunload` then `.scriptload` when the file itself changes.
+
 ## What you need
 
 You need WinDbg and one `.js` file. You do not need Python, mona, an internet connection, or a build step.
