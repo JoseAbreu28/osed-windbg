@@ -11616,7 +11616,19 @@ var osed_bundle = (() => {
         'dx @$osed().dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D")'
       ],
       details: "The draft is not a finished chain. It fills in the top-ranked gadget per job and marks with TODO the distances only a debugger run can give, with the commands that measure them. It does not check that one gadget's output register is the next gadget's input.",
-      seeAlso: ["rop.scan_live", "rop.query", "rop.construct"]
+      seeAlso: ["rop.scan_live", "rop.query", "rop.construct", "dep_candidates"]
+    },
+    {
+      name: "dep_candidates",
+      summary: "Best 3 gadgets per DEP chain job, ranked by side effects",
+      description: "Prints what step [4/7] of dep_plan prints: for each job of the skeleton or pushad chain, the 3 gadgets from the module with the fewest side effects, with what else each one does. The pushad style also lists jmp esp and call esp addresses. It scans the module itself and leaves the loaded corpus as it was.",
+      usage: "dx @$osed().dep_candidates(module, badchars, style?)",
+      examples: [
+        'dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")',
+        'dx @$osed().dep_candidates("libbkup", "00 0A 0D", "pushad")'
+      ],
+      details: "Ranked by fewest side effects, then the smallest stack move. A gadget that moves ESP only counts for the pivot job. rop.query lists every gadget of one capability instead, in corpus order.",
+      seeAlso: ["dep_plan", "rop.query", "rop.scan_live"]
     },
     {
       name: "rop.query",
@@ -12088,10 +12100,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-21T19:44:12.542Z" : globalThis[key2];
+        value = true ? "2026-11-21T20:26:20.227Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "7d6622fd3285" : globalThis[key2];
+        value = true ? "98cbb43e286f" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12290,7 +12302,7 @@ var osed_bundle = (() => {
   var categoryForName = (name) => {
     if (SHELLCODE_WRITERS.includes(name))
       return "shellcode";
-    if (name.startsWith("rop") || name === "dep_function" || name === "dep_plan" || name === "retn" || name === "add_esp" || name === "pivots")
+    if (name.startsWith("rop") || name === "dep_function" || name === "dep_plan" || name === "dep_candidates" || name === "retn" || name === "add_esp" || name === "pivots")
       return "rop";
     if (name === "seh" || name === "seh_ppr" || name.startsWith("seh."))
       return "seh";
@@ -12361,8 +12373,9 @@ var osed_bundle = (() => {
     rop_find: "Flat alias for legacy ROP helper triage",
     rop_suggest: "Suggest exploit-friendly gadget patterns",
     rop_template: "Print a commented ROP chain skeleton (skeleton or PUSHAD style)",
-    dep_function: "Print a VirtualAlloc, VirtualProtect or WriteProcessMemory call-frame skeleton",
+    dep_function: "Print a VirtualAlloc, VirtualProtect or WriteProcessMemory call frame or PUSHAD map",
     dep_plan: "Run the whole DEP bypass discovery in seven sections",
+    dep_candidates: "Rank the best 3 gadgets per DEP chain job, as dep_plan step 4",
     pivots: "Scan for stack pivot candidates",
     retn: "Scan for retn N gadgets",
     add_esp: "Scan for add esp, N gadgets",
@@ -14243,6 +14256,7 @@ var osed_bundle = (() => {
   }
 
   // src/commands/dep_function.ts
+  var STYLES = ["skeleton", "pushad"];
   var FRAMES = {
     VirtualAlloc: {
       alias: "VA",
@@ -14287,26 +14301,35 @@ var osed_bundle = (() => {
   function createDepFunctionCommand() {
     return {
       name: "dep_function",
-      description: "Print a Python call-frame skeleton for VirtualAlloc, VirtualProtect or WriteProcessMemory. VA, VP and WPM work as short aliases.",
-      usage: 'dx @$osed().dep_function("VirtualAlloc" | "VirtualProtect" | "WriteProcessMemory")',
+      description: 'Print the frame of VirtualAlloc, VirtualProtect or WriteProcessMemory: a Python call-frame skeleton by default, or with "pushad" the register each argument goes in for one PUSHAD. VA, VP and WPM work as short aliases.',
+      usage: 'dx @$osed().dep_function("VirtualAlloc" | "VirtualProtect" | "WriteProcessMemory", style?)',
       examples: [
         'dx @$osed().dep_function("VirtualAlloc")',
         'dx @$osed().dep_function("VirtualProtect")',
-        'dx @$osed().dep_function("WriteProcessMemory")'
+        'dx @$osed().dep_function("WriteProcessMemory")',
+        'dx @$osed().dep_function("VirtualProtect", "pushad")'
       ],
-      compactExampleCount: 3,
-      schema: { method: { type: "string", required: true } },
+      compactExampleCount: 4,
+      schema: { method: { type: "string", required: true }, style: { type: "string" } },
       execute(options) {
+        var _a2;
         const method = parseApi(options.method);
-        if (!method) {
-          const error2 = 'Use "VirtualAlloc", "VirtualProtect" or "WriteProcessMemory" (aliases "VA", "VP", "WPM").';
-          return { command: "dep_function", args: options, success: false, findings: [], warnings: [], errors: [error2] };
+        const style = String((_a2 = options.style) != null ? _a2 : "skeleton").trim().toLowerCase();
+        const fail3 = (error2) => ({ command: "dep_function", args: options, success: false, findings: [], warnings: [], errors: [error2] });
+        if (!method)
+          return fail3('Use "VirtualAlloc", "VirtualProtect" or "WriteProcessMemory" (aliases "VA", "VP", "WPM").');
+        if (!STYLES.includes(style))
+          return fail3('style must be "skeleton" or "pushad".');
+        if (style === "pushad") {
+          section(`${method} PUSHAD Register Map`);
+          printPushadMap(method);
+          return { command: "dep_function", args: { method, style }, success: true, findings: [{ method, style, lines: PUSHAD_MAPS[method] }], warnings: [], errors: [] };
         }
         const { lines } = FRAMES[method];
         section(`${method} Python Call-Frame Skeleton`);
         for (const line of lines)
           print(line);
-        return { command: "dep_function", args: { method }, success: true, findings: [{ method, lines }], warnings: [], errors: [] };
+        return { command: "dep_function", args: { method, style }, success: true, findings: [{ method, style, lines }], warnings: [], errors: [] };
       }
     };
   }
@@ -18936,21 +18959,24 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     },
     {
       name: "dep_function",
-      summary: "Call-frame skeleton for a DEP bypass API",
-      what: "Prints a Python call-frame skeleton for VirtualAlloc, VirtualProtect or WriteProcessMemory, the three usual DEP bypass APIs.",
-      how: "Writes the stack frame in the order the API reads it: the API address, the return address, then each argument. It chooses no addresses; you fill them in for the target.",
-      when: "DEP bypass, when you write the frame by hand before building it with gadgets.",
-      args: [{ name: "method", meaning: "Which API frame to print. VA, VP and WPM work as aliases.", values: { VirtualAlloc: "VirtualAlloc (alias VA).", VirtualProtect: "VirtualProtect (alias VP).", WriteProcessMemory: "WriteProcessMemory (alias WPM).", VA: "VirtualAlloc.", VP: "VirtualProtect.", WPM: "WriteProcessMemory." } }],
+      summary: "Call frame or PUSHAD map for a DEP bypass API",
+      what: "Prints the <method> call frame for a DEP bypass in the <style> style: a Python call-frame skeleton, or the register PUSHAD puts in each argument slot.",
+      how: "Writes the stack frame in the order the API reads it: the API address, the return address, then each argument. The pushad style lists, from ESP up, which register PUSHAD stores in each slot and what that register must hold. It chooses no addresses; you fill them in for the target.",
+      when: "DEP bypass, when you write the frame by hand before building it with gadgets, or when you load the registers for one PUSHAD.",
+      args: [
+        { name: "method", meaning: "Which API frame to print. VA, VP and WPM work as aliases.", values: { VirtualAlloc: "VirtualAlloc (alias VA).", VirtualProtect: "VirtualProtect (alias VP).", WriteProcessMemory: "WriteProcessMemory (alias WPM).", VA: "VirtualAlloc.", VP: "VirtualProtect.", WPM: "WriteProcessMemory." } },
+        { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "a Python call frame with one line per stack word.", pushad: "the register map that one PUSHAD writes." } }
+      ],
       example: 'dx @$osed().dep_function("VirtualAlloc")',
-      output: "A commented Python skeleton with one line per stack word.",
-      report: "Prepared the <method> call frame skeleton with dep_function and replaced each placeholder with target addresses.",
+      output: "A commented Python skeleton with one line per stack word, or in the pushad style one line per slot from ESP up with the register and the value it must hold.",
+      report: "Took the <method> frame layout from dep_function in the <style> style and replaced each placeholder with target addresses.",
       quick: true
     },
     {
       name: "dep_plan",
       summary: "Whole DEP bypass discovery in seven sections",
       what: "Runs the discovery for a <api> DEP bypass from <module> in one go, in the <style> style, and prints each step under its own [n/7] header.",
-      how: "Calls the existing commands in order: modules for <module>, sc.iat_find for <api>, rop.scan_live with <badchars>, a ranked rop.query per job with each gadget's side effects, rop.construct for each constant, code_caves for writable and executable addresses, then dep_function or the PUSHAD map, and last a Python draft. The draft fills in the top gadget per job and marks with TODO the distances only a debugger run can give, with the bp and dd commands that measure them. It does not check that the registers of one gadget feed the next.",
+      how: "Calls the existing commands in order: modules for <module>, sc.iat_find for <api>, rop.scan_live with <badchars>, dep_candidates to rank 3 gadgets per job by side effects, rop.construct for each constant, code_caves for writable and executable addresses, then dep_function in the <style> style, and last a Python draft. The draft fills in the top gadget per job and marks with TODO the distances only a debugger run can give, with the bp and dd commands that measure them. It does not check that the registers of one gadget feed the next.",
       when: "Later labs and the exam, once you know the method by hand and want every piece on one screen. Verify the draft field by field before you trust it.",
       args: [
         { name: "api", meaning: "DEP bypass API.", values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into a code cave." } },
@@ -18961,6 +18987,21 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       example: 'dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20")',
       output: "Seven sections: [1/7] module protections, [2/7] IAT slot, [3/7] gadget corpus, [4/7] the best 3 gadgets per job with side effects, [5/7] clean recipes for the constants and the writable or cave addresses, [6/7] the frame or PUSHAD map, [7/7] a Python draft with TODO lines to measure.",
       report: "Ran dep_plan for <api> from <module> with bad characters <badchars> in the <style> style, then verified each field of the draft in WinDbg before using it."
+    },
+    {
+      name: "dep_candidates",
+      summary: "Best 3 gadgets per DEP chain job, ranked",
+      what: "Ranks, for each job of a <style> DEP chain, the 3 gadgets from <module> with the fewest side effects, the same list as step [4/7] of dep_plan.",
+      how: "Scans <module> for gadgets whose address holds no byte from <badchars>, keeps for each job the gadgets that do it, and sorts them by fewest side effects, then the smallest stack move. After each gadget it lists the registers it changes, how far it moves ESP, extra pops, a ret N and memory writes. A gadget that moves ESP only counts for the pivot job. The pushad style also runs find_bytes for jmp esp and call esp. It scans on its own and leaves the loaded corpus as it was.",
+      when: "DEP bypass, to pick the gadget for each step of the chain, or to repeat step [4/7] of dep_plan on its own.",
+      args: [
+        { name: "module", meaning: "Module without ASLR that supplies the gadgets." },
+        BADCHARS('Bytes the target corrupts or cuts, as one hex string such as "00 0A 0D". Every gadget address that holds one is dropped.', "none"),
+        { name: "style", meaning: "Which chain the jobs are for.", optional: true, default: "skeleton", values: { skeleton: "capture ESP, copy, add, negate, read, write, advance, pivot.", pushad: "a pop for each register, read the IAT slot, pushad ; ret, and jmp esp." } }
+      ],
+      example: 'dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")',
+      output: "One block per job with up to 3 gadgets, each with its address, its instructions and its side effects, and a warning naming any job with no gadget.",
+      report: "Ranked the gadgets of <module> for each job of the <style> chain with dep_candidates, with bad characters <badchars>, and took the gadget with the fewest side effects for each step."
     },
     // Gadget corpus
     {
@@ -22957,14 +22998,17 @@ ${INDENT}`)]);
         { Corpus: "loaded", Gadgets: currentRopCorpus.gadgets.length.toString(), Filtered: filteredCount.toString(), Capabilities: rows.length.toString() }
       ]);
     };
+    const discoverLiveIndexes = (modules, options) => {
+      const discoveries = modules.map((module) => discoverLiveGadgets(__spreadProps(__spreadValues({}, options), { module })));
+      return { discoveries, indexes: discoveries.map((discovery) => buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits))) };
+    };
     const scanLiveCorpus = (modules, options, append) => {
       var _a2;
       pendingImportedCorpus = void 0;
       corpusOrigin = "live";
       corpusValidation = "sampled";
       corpusBadchars = Array.isArray(options.badchars) ? [...options.badchars] : [];
-      const discoveries = modules.map((module) => discoverLiveGadgets(__spreadProps(__spreadValues({}, options), { module })));
-      const discoveredIndexes = discoveries.map((discovery) => buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
+      const { discoveries, indexes: discoveredIndexes } = discoverLiveIndexes(modules, options);
       invalidateCorpusPlans();
       if (!append)
         resetCorpusModules();
@@ -25246,8 +25290,71 @@ ${INDENT}`)]);
       });
       return toDxResult("Chain Verifier", rows);
     };
+    const printDepCandidates = (corpus, moduleName, badSet, style) => {
+      var _a2;
+      info("Ranked by fewest side effects, then the smallest stack move. Side effects are listed after each gadget.");
+      const best = {};
+      for (const job of jobsFor(style)) {
+        const found = corpus ? candidates2(corpus, job) : [];
+        best[job.key] = found[0];
+        for (const line of candidateLines(found, job))
+          print(line);
+      }
+      let jmpEsp;
+      if (style === "pushad") {
+        for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
+          echo("find_bytes", [moduleName, bytes, 20]);
+          invoke("find_bytes", [moduleName, bytes, 20]);
+          const hits = ((_a2 = lastResult == null ? void 0 : lastResult.findings) != null ? _a2 : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit) && addressBadBytes(__bi(hit), 4, badSet).length === 0).slice(0, 3);
+          print(`  ${label}: ${hits.length > 0 ? hits.map(hex325).join("  ") : "none without bad bytes"}`);
+          jmpEsp = jmpEsp != null ? jmpEsp : hits[0];
+        }
+      }
+      const missing = jobsFor(style).filter((job) => !best[job.key]).map((job) => job.title);
+      if (missing.length > 0)
+        warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
+      return { best, jmpEsp, missing };
+    };
+    const executeDepCandidates = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("dep_candidates");
+      }
+      const [moduleArg, badArg, styleArg] = args;
+      const style = String(styleArg != null ? styleArg : "skeleton").trim().toLowerCase();
+      const moduleName = typeof moduleArg === "string" ? moduleArg.trim() : "";
+      const badText = typeof badArg === "string" ? badArg : "";
+      const badchars = parseHexByteList(badText);
+      const fail3 = (message) => {
+        const rows2 = [{ Error: message }];
+        renderRows("DEP Candidates", rows2);
+        info("Usage: dx @$osed().dep_candidates(module, badchars, style?)");
+        setResult({ command: "dep_candidates", args: { module: moduleArg, badchars: badArg, style: styleArg }, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("DEP Candidates", rows2);
+      };
+      if (!DEP_PLAN_STYLES.includes(style))
+        return fail3(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
+      if (!Array.isArray(badchars))
+        return fail3('badchars must be hex bytes such as "00 0A 0D".');
+      if (!moduleName || !moduleInfoByName(moduleName))
+        return fail3(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
+      const corpus = mergeCapabilityIndexes(discoverLiveIndexes([moduleName], { badchars }).indexes);
+      const { best, missing } = printDepCandidates(corpus, moduleName, new Set(badchars), style);
+      const rows = jobsFor(style).map((job) => {
+        const gadget = best[job.key];
+        return { Job: job.title, Best: gadget ? hex325(gadgetAddress(gadget)) : "none" };
+      });
+      setResult({
+        command: "dep_candidates",
+        args: { module: moduleName, badchars: badText, style },
+        success: true,
+        findings: rows,
+        warnings: missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : [],
+        errors: []
+      });
+      return toDxResult("DEP Candidates", rows);
+    };
     const executeDepPlan = (...args) => {
-      var _a2, _b, _c, _d, _e, _f;
+      var _a2, _b, _c, _d, _e;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("dep_plan");
       }
@@ -25336,27 +25443,8 @@ ${INDENT}`)]);
       info(`${gadgetCount} gadgets and ${corpus ? summarizeCapabilities(corpus).length : 0} capabilities, every address free of the bad bytes.`);
       summary.push({ Section: `[3/${n}] corpus`, Result: `${gadgetCount} gadgets` });
       section(`[4/${n}] Best 3 candidates per job (${style} style)`);
-      info("Ranked by fewest side effects, then the smallest stack move. Side effects are listed after each gadget.");
-      const best = {};
-      for (const job of jobsFor(style)) {
-        const found = corpus ? candidates2(corpus, job) : [];
-        best[job.key] = found[0];
-        for (const line of candidateLines(found, job))
-          print(line);
-      }
-      let jmpEsp;
-      if (style === "pushad") {
-        for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
-          echo("find_bytes", [moduleName, bytes, 20]);
-          invoke("find_bytes", [moduleName, bytes, 20]);
-          const hits = ((_f = lastResult == null ? void 0 : lastResult.findings) != null ? _f : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit) && addressBadBytes(__bi(hit), 4, badSet).length === 0).slice(0, 3);
-          print(`  ${label}: ${hits.length > 0 ? hits.map(hex325).join("  ") : "none without bad bytes"}`);
-          jmpEsp = jmpEsp != null ? jmpEsp : hits[0];
-        }
-      }
-      const missing = jobsFor(style).filter((job) => !best[job.key]).map((job) => job.title);
-      if (missing.length > 0)
-        warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
+      echo("dep_candidates", [moduleName, badText, style]);
+      const { best, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style);
       summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
       section(`[5/${n}] Clean recipes for the constants`);
       for (const constant of CONSTANTS[depApi]) {
@@ -25396,12 +25484,9 @@ ${INDENT}`)]);
       }
       summary.push({ Section: `[5/${n}] constants`, Result: `${CONSTANTS[depApi].length} recipes` });
       section(`[6/${n}] ${style === "pushad" ? "PUSHAD register map" : "Call frame"} for ${depApi}`);
-      if (style === "pushad")
-        printPushadMap(depApi);
-      else {
-        echo("dep_function", [depApi]);
-        invoke("dep_function", [depApi]);
-      }
+      const frameArgs = style === "pushad" ? [depApi, style] : [depApi];
+      echo("dep_function", frameArgs);
+      invoke("dep_function", frameArgs);
       summary.push({ Section: `[6/${n}] frame`, Result: style === "pushad" ? "register map" : "dep_function frame" });
       section(`[7/${n}] Python draft: verify it field by field, it is not a finished chain`);
       for (const line of draftLines({ api: depApi, style, module: moduleName, iatSlot, writable, cave, best, jmpEsp }))
@@ -25491,6 +25576,7 @@ ${INDENT}`)]);
     };
     api.rop_find = (...args) => invoke("rop", args);
     api.dep_plan = executeDepPlan;
+    api.dep_candidates = executeDepCandidates;
     api.exploit = {
       workflow: (...args) => {
         if (args.length === 1 && args[0] === "help")
@@ -25758,7 +25844,7 @@ ${INDENT}`)]);
       case "rop_template":
         return { api: args[0], module: args[1], style: args[2] };
       case "dep_function":
-        return { method: args[0] };
+        return { method: args[0], style: args[1] };
       case "sc_push_string":
         return { text: args[0], badchars: args[1], register: args[2] };
       case "sc_call_frame": {
