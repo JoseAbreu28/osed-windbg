@@ -333,8 +333,16 @@ export function createBadcharFindCommand(): Command {
       } else {
         const afterSlot = readAfterReturnSlot(anchor, pointerSize, expected.length + 64);
         if (!afterSlot) {
-          out.warn(`Test array not found within ${windowBytes} bytes of the anchor (min run ${minRun}).`);
-          out.warn("The overwritten return address was not found just before the anchor either. If the array sits before EIP, pass its address.");
+          out.warn(`Test array not found: scanned ${window.length} bytes from the anchor (min run ${minRun}).`);
+          const regs = readRegisters(pointerSize);
+          const ipModule = regs.ip !== undefined ? findModuleByAddress(regs.ip) : undefined;
+          if (regs.ip !== undefined && ipModule) {
+            out.warn(
+              `${regs.ipName ?? "ip"} ${out.formatAddress(regs.ip, pointerSize)} is inside ${ipModule.name}, not on an overwritten return address: the target has not crashed yet (break-in or breakpoint) or faulted inside a module. Let the payload crash it, or pass the array's address.`,
+            );
+          } else {
+            out.warn("The overwritten return address was not found just before the anchor either. If the array sits before EIP, pass its address.");
+          }
           return result("badchar_find", options, [{ located: false }], warnings.length > 0 ? warnings : ["Test array not found near anchor."]);
         }
         landing = afterSlot.landing;
