@@ -425,3 +425,83 @@ export function planLines(plan: JobPlan): string[] {
   for (const verdict of after) lines.push(...line(verdict, " ", "usable"));
   return lines;
 }
+
+// x86 register numbers, the order ModRM and the one-byte opcodes encode them in.
+const REGS = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+const NOT_ESP = [0, 1, 2, 3, 5, 6, 7];
+const rm = (mod: number, reg: number, base: number): number => (mod << 6) | (reg << 3) | base;
+const pairs = (): number[][] => NOT_ESP.flatMap((a) => NOT_ESP.filter((b) => b !== a).map((b) => [a, b]));
+
+// The plain encodings of each capability a job asks for: `push esp ; pop esi` is 54 5E, `mov eax, esp`
+// is 8B C4 or 89 E0. Memory forms skip esp and ebp as bases, which need a SIB byte or a displacement.
+const BODIES: Partial<Record<CapabilityKind, (register?: string) => number[][]>> = {
+  STACK_POINTER_CAPTURE: () => NOT_ESP.flatMap((r) => [[0x54, 0x58 + r], [0x8b, rm(3, r, 4)], [0x89, rm(3, 4, r)]]),
+  REGISTER_ADD: () => pairs().flatMap(([dest, source]) => [[0x01, rm(3, source, dest)], [0x03, rm(3, dest, source)]]),
+  MOVE_REGISTER: () => pairs().flatMap(([dest, source]) => [[0x89, rm(3, source, dest)], [0x8b, rm(3, dest, source)]]),
+  EXCHANGE_REGISTER: () => [...NOT_ESP.filter((r) => r > 0).map((r) => [0x90 + r]), ...pairs().filter(([a, b]) => a < b).map(([a, b]) => [0x87, rm(3, a, b)])],
+  MEMORY_READ: () => NOT_ESP.flatMap((r) => [0, 1, 2, 3, 6, 7].map((base) => [0x8b, rm(0, r, base)])),
+  MEMORY_WRITE: () => NOT_ESP.flatMap((r) => [0, 1, 2, 3, 6, 7].map((base) => [0x89, rm(0, r, base)])),
+  REGISTER_INCREMENT: () => NOT_ESP.map((r) => [0x40 + r]),
+  REGISTER_NEGATE: () => NOT_ESP.map((r) => [0xf7, 0xd8 + r]),
+  STACK_PIVOT: () => [[0x94], [0xc9], ...NOT_ESP.flatMap((r) => [[0x87, rm(3, r, 4)], [0x87, rm(3, 4, r)], [0x89, rm(3, r, 4)], [0x8b, rm(3, 4, r)]])],
+  LOAD_REGISTER: (register) => NOT_ESP.filter((r) => register === undefined || REGS[r] === register).map((r) => [0x58 + r]),
+  DISPATCH_PUSHAD: () => [[0x60]],
+};
+
+/** Every plain encoding of the job, each ending in `ret` or `ret N` (-1 is any byte). */
+export function encodingsFor(job: Job): number[][] {
+  return job.capabilities
+    .flatMap((kind) => BODIES[kind]?.(job.register) ?? [])
+    .flatMap((body) => [[...body, 0xc3], [...body, 0xc2, -1, -1]]);
+}
+
+/** What searching every byte of the modules for a job's encodings showed. */
+export type Settled = { modules: string; encodings: number; clean: number[]; dirty: number };
+
+// Only a job the scan left without a pick is searched, so this is the line that replaces "none".
+export function settledLines(plan: JobPlan, settled: Settled, exclude: number[]): string[] {
+  const searched = `every byte of ${settled.modules} searched for the ${settled.encodings} plain encodings of this job`;
+  if (plan.pick) {
+    return settled.clean.indexOf(gadgetAddress(plan.pick.gadget)) >= 0
+      ? [`      the scan had missed it: ${searched} found it`]
+      : [];
+  }
+  const usable = settled.clean.filter((address) => exclude.indexOf(address) < 0);
+  if (settled.clean.length > 0 && usable.length === 0) return [`      absent but for what you excluded: ${searched}, and each hit is one of them`];
+  if (settled.clean.length > 0) return [`      ${searched}: ${settled.clean.length} at a clean address, and none of them fits either`];
+  return [`      absent from ${settled.modules}: ${searched}, ${settled.dirty > 0 ? `${settled.dirty} hit(s), every one at an address holding a bad byte` : "no hit at all"}`];
+}
+
+/** KUSER_SHARED_DATA.NXSupportPolicy, the two low bits of the byte at 0x7FFE02D5: the system DEP
+ * policy the kernel applies when it creates a process, readable from any user-mode process. */
+export const NX_POLICY_ADDRESS = 0x7ffe02d5;
+export const NX_POLICIES = ["AlwaysOff", "AlwaysOn", "OptIn", "OptOut"] as const;
+export type NxPolicy = typeof NX_POLICIES[number];
+
+export type DepState = { enforced: boolean | undefined; why: string };
+
+/** Whether this process runs with DEP. The page protection cannot say: the stack is PAGE_READWRITE
+ * whether DEP is on or off, so can_execute(@esp) is false either way. Nor can NX_COMPAT alone: an
+ * Exploit Protection setting for the program turns DEP on whatever the flag says. Measured on the lab
+ * clone, policy OptIn, by running a ret written on the stack: vuln_vanilla.exe (NX_COMPAT disabled) ran
+ * it, vuln_dep.exe (enabled) faulted, and vuln_vanilla.exe faulted too once its MitigationOptions set DEP.
+ * `forced` is that per-program setting, undefined when the registry could not be read. */
+export function depState(policy: NxPolicy | undefined, exe: { name: string; nx: boolean; forced: boolean | undefined } | undefined, optIn: string[]): DepState {
+  if (policy === undefined) return { enforced: undefined, why: `the system DEP policy at ${hex32(NX_POLICY_ADDRESS)} is unreadable` };
+  if (policy === "AlwaysOn") return { enforced: true, why: "the system policy is AlwaysOn: every process runs with DEP" };
+  if (policy === "AlwaysOff") return { enforced: false, why: "the system policy is AlwaysOff: no process runs with DEP" };
+  if (policy === "OptOut") return { enforced: true, why: "the system policy is OptOut: every process runs with DEP unless it is on the exceptions list" };
+  if (!exe) return { enforced: undefined, why: "the system policy is OptIn and the main executable is not among the loaded modules" };
+  if (exe.nx) return { enforced: true, why: `the system policy is OptIn and ${exe.name} opts in (NX_COMPAT enabled)` };
+  if (exe.forced) return { enforced: true, why: `Exploit Protection turns DEP on for ${exe.name} (MitigationOptions in its Image File Execution Options key), whatever its NX_COMPAT flag says` };
+  if (exe.forced === undefined) return { enforced: undefined, why: `the system policy is OptIn and ${exe.name} does not opt in, but its Exploit Protection setting could not be read` };
+  if (optIn.length > 0) return { enforced: undefined, why: `the system policy is OptIn and ${exe.name} does not opt in, but ${optIn.join(", ")} imports SetProcessDEPPolicy and may have turned DEP on at run time` };
+  return { enforced: false, why: `the system policy is OptIn, ${exe.name} does not opt in (NX_COMPAT disabled) and no Exploit Protection setting turns DEP on for it` };
+}
+
+/** dep_plan(badchars, firstStage?, exclude?, anyway?) is the short call: the tool chooses the API, the
+ * modules and the style. This maps it onto the long form, so the command and its explain read one shape. */
+export function depPlanArgs(args: unknown[]): unknown[] {
+  const short = typeof args[0] === "string" && /^\s*((\\x|0x)?[0-9a-f]{2}[\s,]*)+$/i.test(args[0]);
+  return short ? ["", "", args[0], "auto", args[1], args[2], args[3]] : args;
+}

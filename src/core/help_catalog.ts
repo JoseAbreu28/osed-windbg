@@ -197,14 +197,14 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
     name: "dep_plan",
     summary: "Whole DEP bypass discovery in seven sections",
-    description: "Runs the DEP bypass discovery for VirtualAlloc, VirtualProtect or WriteProcessMemory in one command. Each step prints under its own [n/7] header: module protections, IAT slot, gadget corpus, the best 3 gadgets per job with side effects, clean constants, the frame or PUSHAD map, and a Python draft to verify field by field.",
-    usage: 'dx @$osed().dep_plan(api, module, badchars, style?)',
+    description: "Given the bad chars, decides whether DEP needs a chain at all, which modules give gadgets, which API to call and how to reach its address, and which style the gadgets support. Each step prints under its own [n/7] header, and the run ends on a verdict or on the one layer that failed: module, API or method.",
+    usage: 'dx @$osed().dep_plan(badchars)    or    dx @$osed().dep_plan(api, module, badchars, style?, firstStage?, exclude?, anyway?)',
     examples: [
+      'dx @$osed().dep_plan("00 09 0A 0B 0C 0D 20")',
       'dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20")',
       'dx @$osed().dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad")',
-      'dx @$osed().dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D")',
     ],
-    details: "The draft is not a finished chain. It fills in the top-ranked gadget per job and marks with TODO the distances only a debugger run can give, with the commands that measure them. It does not check that one gadget's output register is the next gadget's input.",
+    details: "The draft is not a finished chain until you have measured what it marks. It fills in the [4/7] pick per job and marks with hole() each value only a debugger run can give, with the command that measures it.",
     seeAlso: ["rop.scan_live", "rop.query", "rop.construct", "dep_candidates"],
   },
   {

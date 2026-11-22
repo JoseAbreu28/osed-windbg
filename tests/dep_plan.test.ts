@@ -485,58 +485,45 @@ describe("dep_plan", () => {
     expect(fresh.last_result().success).toBe(false);
   });
 
-  // The three ways a chain dies. They look alike from outside and each has a different fix, so each
-  // one names itself, stops the sections that would describe a call that cannot happen, and prints the
-  // one command that moves it forward.
-  test("no module imports the API: keep the API, change where the address comes from", () => {
+  // The layers a chain dies at. They look alike from outside and each has a different fix, so the run
+  // ends on one line that names the layer and its evidence, stops the sections that would describe a call
+  // that cannot happen, and never hands him a ladder of things to go and try.
+  test("no route to the API at all: one conclusion naming the API layer, and no list of things to try", () => {
     const fresh = loadApi({ imports: [] });
     fresh.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
     const output = text();
-    expect(output).toContain("=== STOP: no VirtualAlloc chain from libbkup.dll ===");
-    expect(output).toContain("[-] No module loaded right now imports VirtualAlloc");
-    expect(output).toContain("This is the rare one");
-    // The exam usually mandates the API, so the swap is last and conditional, never the headline.
-    const ladder = output.slice(output.indexOf("=== STOP:"));
-    expect(ladder).toContain("[-] Keep VirtualAlloc and change where its address comes from, in this order:");
-    expect(ladder.indexOf("Keep VirtualAlloc")).toBeLessThan(ladder.indexOf("Only if you are free to choose the API"));
-    expect(ladder.indexOf('sc.iat_find("VirtualAlloc")')).toBeLessThan(ladder.indexOf('sc.iat_find("GetProcAddress")'));
-    expect(ladder.indexOf('sc.iat_find("GetProcAddress")')).toBeLessThan(ladder.indexOf("fixed delta"));
-    expect(ladder).toContain("this is the last resort");
-    expect(ladder).toContain('Only if you are free to choose the API: dx @$osed().rop.generate("auto", "", "00 0A 0D", "libbkup")');
+    const conclusion = "[-] The API layer fails: no module with ASLR disabled imports VirtualAlloc, nor any other export of kernel32 or kernelbase to reach it from by a fixed distance. Its address needs a leak first.";
+    expect(output.split(conclusion).length - 1).toBe(2);
+    for (const homework of ["in this order", 'sc.iat_find("GetProcAddress")', "last resort", "rop.generate", "Only if you are free"]) {
+      expect(output, homework).not.toContain(homework);
+    }
     // The expensive half still prints: the module, the corpus and a gadget per job do not depend on the API.
     for (const header of ["=== [1/7]", "=== [3/7]", "=== [4/7]"]) expect(output).toContain(header);
     expect(output).toContain("push esp ; pop esi ; ret");
-    // The half that would describe the call does not.
     expect(output).toContain("[-] Skipped: these are the arguments of a VirtualAlloc call this chain cannot make.");
     expect(output).toContain("[-] Skipped: this is the frame of a VirtualAlloc call this chain cannot make.");
     expect(output).toContain("[-] Skipped: there is no chain to write.");
     expect(output).not.toContain("=== VirtualAlloc Python Call-Frame Skeleton ===");
     expect(output).not.toContain("return payload");
-    // Loud at the point of failure and again at the end, because the first one scrolls away.
-    expect(output.split("=== STOP:").length - 1).toBe(2);
     expect(fresh.last_result()).toMatchObject({ success: false });
-    expect(fresh.last_result().errors[0]).toContain("No module loaded right now imports VirtualAlloc");
-    expect(fresh.last_result().errors[1]).toContain("Keep VirtualAlloc");
+    expect(fresh.last_result().errors).toEqual([conclusion.slice(4)]);
   });
 
   test("a bad char in the slot address is the usual case here, and [5/7] already answers it", () => {
-    api.dep_plan("VirtualAlloc", "libbkup", "11 0A 0D");
+    api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D 30");
     const output = text();
-    expect(output).toContain("[+] The slot address holds the bad byte(s)");
+    expect(output).toContain("[+] The slot address holds the bad byte(s) 30.");
     expect(output).toContain("That is the usual case and nothing breaks");
     expect(output).not.toContain("=== STOP:");
     expect(api.last_result()).toMatchObject({ success: true });
   });
 
-  test("the only importer has ASLR: the fix is another importer, not another module", () => {
+  test("the API he named has no route, but another has: the conclusion is that route, in one line", () => {
     const fresh = loadApi({ imports: ["VirtualAlloc"], movable: ["WriteProcessMemory"] });
     fresh.dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D");
     const output = text();
-    expect(output).toContain("=== STOP: no WriteProcessMemory chain from libbkup.dll ===");
-    expect(output).toContain("every module that does has ASLR, starting with movable.dll");
-    expect(output).toContain("[-] Keep WriteProcessMemory and change where its address comes from, in this order:");
-    expect(output).toContain('sc.iat_find("WriteProcessMemory")    the Owner column lists every importer');
-    expect(output).toContain("the IAT you read and the module your gadgets come from are independent");
+    expect(output).toContain("[-] The API layer fails: no module with ASLR disabled imports WriteProcessMemory (movable.dll does, and it has ASLR)");
+    expect(output).toContain('[-] If you are free to choose the API, VirtualAlloc has a route: dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 0A 0D")');
     expect(output).toContain("=== [4/7]");
     expect(output).toContain("[-] Skipped: there is no chain to write.");
   });
@@ -550,15 +537,14 @@ describe("dep_plan", () => {
     expect(fresh.last_result()).toMatchObject({ success: true });
   });
 
-  test("the gadget module has ASLR: this is the one case where the fix is another module", () => {
+  test("the gadget module has ASLR: the module layer fails, and nothing is scanned for a chain it cannot hold", () => {
     const fresh = loadApi({ aslr: true });
     fresh.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
     const output = text();
     expect(output).toContain("=== STOP: no VirtualAlloc chain from libbkup.dll ===");
-    expect(output).toContain("[-] libbkup.dll has ASLR: every gadget address in it moves on each run");
-    expect(output).toContain("This is the one case where you change module, and the API stays as it is.");
-    expect(output).toContain("[-] Next: dx @$osed().modules()");
+    expect(output).toContain("[-] The module layer fails: libbkup.dll has ASLR: every gadget address in it moves on each run");
     expect(output).not.toContain("Keep VirtualAlloc and change where its address comes from");
+    expect(output).not.toContain("rop.scan_live(");
     expect(output).toContain("[-] Skipped: there is no chain to write.");
   });
 

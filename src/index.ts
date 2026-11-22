@@ -43,8 +43,11 @@ import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
 import type { RopGadget } from "./rop/types";
-import { CORPUS_BLOCK, HELPER_BLOCK, buildExploit, slotBlock, type Block } from "./commands/dep_build";
-import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, gadgetAddress as depPlanAddress, hex32 as dwordHex, planJobs, planLines, type DepPlanStyle } from "./commands/dep_plan";
+import type { DepApi } from "./commands/rop_template";
+import { findEncodings } from "./core/backward_scanner";
+import { badcharAddressFilter } from "./logic/pointer_filter_logic";
+import { CORPUS_BLOCK, HELPER_BLOCK, buildExploit, slotBlock, type Block, type Delta } from "./commands/dep_build";
+import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, planJobs, planLines, settledLines, type DepPlanStyle, type Job, type JobPlan, type Settled } from "./commands/dep_plan";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./commands/code_caves";
@@ -62,7 +65,7 @@ import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
 import { formatAddress } from "./core/output";
 import * as out from "./core/output";
 import { DxResult, toDxResult } from "./core/dx_result";
-import { getPointerSize, tryReadMemory } from "./core/memory";
+import { executeDebuggerCommand, getPointerSize, tryReadMemory } from "./core/memory";
 import { findHelpEntry, helpRows } from "./core/help_catalog";
 import { createMemoryCommand } from "./commands/memory";
 import { createLandingCommand, landingDxRows } from "./commands/landing";
@@ -92,6 +95,8 @@ let pendingImportedCorpus: ImportedCorpus | undefined;
 let corpusOrigin: CorpusReportOrigin = "rpplus";
 let corpusValidation: CorpusReportValidation = "unknown";
 let corpusBadchars: number[] | undefined;
+/** The live scan behind the corpus ran to the end of every module, so it holds every gadget there is. */
+let corpusComplete = false;
 let corpusGeneration = 0;
 let nextRopPlanId = 1;
 const ropPlans = new Map<number, { plan: RopStrategyPlan; generation: number }>();
@@ -613,6 +618,7 @@ function bindApi(): OsedApi {
   const scanCorpus = (text: string, options: RPPlusProviderOptions = {}, badchars?: number[]): DxResult => {
     pendingImportedCorpus = undefined;
     corpusOrigin = "rpplus";
+    corpusComplete = false;
     corpusValidation = "unknown";
     corpusBadchars = badchars ? [...badchars] : [];
     invalidateCorpusPlans();
@@ -689,6 +695,7 @@ function bindApi(): OsedApi {
       }),
       { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardDispatch: 0, backwardNonSequentialRejected: 0, backwardGadgets: 0, backwardRawCandidates: 0, backwardFiltered: 0, backwardLimit: 0, backwardComplete: 1 },
     );
+    corpusComplete = !append && stats.backwardComplete === 1;
     const warnings = discoveries.flatMap((discovery) => discovery.warnings);
     const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
     for (let i = 0; i < modules.length; i++) {
@@ -789,7 +796,9 @@ function bindApi(): OsedApi {
       : Array.isArray(options.module)
         ? options.module
         : [options.module];
+    // "libspp,libpal" is two modules, so a call dep_plan echoes for several modules pastes as one string.
     const modules = requested
+      .flatMap((module) => module === undefined ? [undefined] : String(module).split(","))
       .map((module) => module === undefined ? undefined : String(module).trim())
       .filter((module): module is string | undefined => module === undefined || module.length > 0);
     const parsedBadchars = parseHexByteList(options.badchars);
@@ -3115,29 +3124,201 @@ function bindApi(): OsedApi {
     return toDxResult("Chain Verifier", rows);
   };
 
+  // dep_plan decides three layers from evidence the debugger holds: the modules gadgets can come from,
+  // the API and where its address comes from, and the style the corpus supports. Each layer either has
+  // an answer or is the one line the run ends on.
+  const shortName = (name: string): string => name.split("\\").pop() ?? name;
+  // The loaded module a name he typed resolves to, as the module list shows it.
+  const moduleLabel = (name: string): string => shortName(moduleInfoByName(name)?.name ?? name);
+  const byteList = (bytes: number[]): string => bytes.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+  const sameModule = (left: string, right: string): boolean => {
+    const norm = (name: string): string => shortName(name).toLowerCase().replace(/\.(dll|exe)$/, "");
+    return norm(left) === norm(right);
+  };
+
+  // The bytes every address in the module shares. A bad one among them rules out every gadget in it.
+  const sharedBadBytes = (info: { base: bigint; size: bigint }, badSet: Set<number>): number[] => {
+    const first = Number(info.base);
+    const last = Number(info.base + info.size - BigInt(1));
+    const shared = [24, 16].filter((shift) => ((first >>> shift) & 0xff) === ((last >>> shift) & 0xff)).map((shift) => (first >>> shift) & 0xff);
+    return shared.filter((byte, i) => badSet.has(byte) && shared.indexOf(byte) === i);
+  };
+
+  // Every loaded module, and the reason it cannot give gadgets if it cannot.
+  const gadgetModules = (badSet: Set<number>) => listModulesWithMitigations().map((info) => {
+    const bad = sharedBadBytes(info, badSet);
+    const why = info.aslr === "enabled" ? "ASLR"
+      : info.aslr !== "disabled" ? "its PE header is unreadable"
+      : bad.length > 0 ? `every address holds the bad byte(s) ${byteList(bad)}` : undefined;
+    return { info, label: shortName(info.name), why };
+  });
+
+  const IFEO = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options";
+  // Exploit Protection keeps a program's DEP setting in its IFEO key, and the process itself cannot be
+  // asked from here. The debugger runs on the target in every OSED setup, so its registry is the target's.
+  const perProgramDep = (exe: string): boolean | undefined => {
+    let text = "";
+    try {
+      text = executeDebuggerCommand(`.shell -ci "x" reg query "${IFEO}\\${exe}" /s /v MitigationOptions`).join("\n");
+    } catch (_error) {
+      return undefined;
+    }
+    const value = /MitigationOptions\s+REG_BINARY\s+([0-9A-F]{2})/i.exec(text);
+    if (value) return (parseInt(value[1], 16) & 0x1) !== 0;
+    return /unable to find/i.test(text) ? false : undefined;
+  };
+
+  // Rows of sc.iat_find for exactly this symbol, without printing them.
+  const slotsOf = (symbol: string): Array<{ owner: string; slot: number; fixed: boolean }> => {
+    const rows = out.quietly(() => ((api.sc as { iat_find: (name: string) => unknown }).iat_find(symbol) as { rows?: { length: number; [i: number]: Record<string, string> } }).rows);
+    return Array.from({ length: rows?.length ?? 0 }, (_, i) => rows![i])
+      .filter((row) => new RegExp(`(^|!)${symbol}$`, "i").test(out.stripDml(String(row.Symbol ?? "")).trim()))
+      .map((row) => {
+        const owner = out.stripDml(String(row.Owner ?? ""));
+        const match = /0x([0-9a-fA-F]+)/.exec(out.stripDml(String(row.Slot ?? "")));
+        return { owner, slot: match ? parseInt(match[1], 16) >>> 0 : 0, fixed: moduleInfoByName(owner)?.aslr !== "enabled" };
+      })
+      .filter((row) => row.slot !== 0);
+  };
+
+  const depVerdict = () => {
+    const policyByte = tryReadMemory(BigInt(NX_POLICY_ADDRESS), 1);
+    const policy = policyByte ? NX_POLICIES[policyByte[0] & 0x3] : undefined;
+    const exe = listModulesWithMitigations().find((info) => info.name.toLowerCase().endsWith(".exe"));
+    const name = exe ? shortName(exe.name) : "the process";
+    const nx = exe?.nxcompat === "enabled";
+    const needsMore = policy === "OptIn" && exe !== undefined && !nx;
+    const forced = needsMore ? perProgramDep(name) : false;
+    const optIn = needsMore && forced === false ? slotsOf("SetProcessDEPPolicy").map((row) => shortName(row.owner)) : [];
+    return { name, ...depState(policy, exe ? { name, nx, forced } : undefined, optIn) };
+  };
+
+  // How the chain gets the API's address: its own slot in a module that does not move, else the slot of
+  // another export of the same DLL plus the distance between the two, which sc.api_plan measures live.
+  type Route = { api: DepApi; owner: string; slot: number; delta?: Delta & { anchorAt: number; apiAt: number } };
+  const routeFor = (depApi: DepApi, modules: string[], badchars: number[]): Route | undefined => {
+    const rows = slotsOf(depApi).filter((row) => row.fixed);
+    const own = rows.find((row) => modules.some((module) => sameModule(row.owner, module))) ?? rows[0];
+    if (own) return { api: depApi, owner: own.owner, slot: own.slot };
+    for (const dll of ["kernel32", "kernelbase"]) {
+      const snapshot = sc.api_plan(`${dll}!${depApi}`, badchars);
+      const anchors = snapshot.candidates.filter((candidate) => candidate.strategy === "derived-address" && candidate.anchor
+        && moduleInfoByName(candidate.ownerModule)?.aslr !== "enabled");
+      const anchor = anchors.find((candidate) => modules.some((module) => sameModule(candidate.ownerModule, module))) ?? anchors[0];
+      if (anchor && anchor.anchor) {
+        return {
+          api: depApi, owner: anchor.ownerModule, slot: Number(anchor.slot) >>> 0,
+          delta: { dll, anchor: anchor.anchor.symbol, value: Number(anchor.anchor.delta) >>> 0, anchorAt: Number(anchor.pointer) >>> 0, apiAt: Number(anchor.target.address) >>> 0 },
+        };
+      }
+    }
+    return undefined;
+  };
+
+  // Searching a module for a job's encodings reads every byte once, so a job no scan filled is settled
+  // here before anything says it is absent.
+  type Solved = { corpus: CapabilityIndex | undefined; plans: Record<DepPlanStyle, JobPlan[]>; settled: Record<string, Settled> };
+  const solveStyles = (scanned: CapabilityIndex | undefined, modules: string[], badchars: number[], exclude: number[]): Solved => {
+    const planBoth = (index: CapabilityIndex | undefined) => ({ skeleton: planJobs(index, "skeleton", exclude), pushad: planJobs(index, "pushad", exclude) });
+    let plans = planBoth(scanned);
+    const open: Job[] = [];
+    for (const plan of [...plans.skeleton, ...plans.pushad]) if (!plan.pick && open.every((job) => job.key !== plan.job.key)) open.push(plan.job);
+    if (open.length === 0 || modules.length === 0) return { corpus: scanned, plans, settled: {} };
+    const encodings: number[][] = [];
+    const owners = open.map((job) => encodingsFor(job).map((encoding) => encodings.push(encoding) - 1));
+    const clean = badcharAddressFilter(badchars, 4);
+    const known = new Set((scanned?.gadgets ?? []).map((gadget) => depPlanAddress(gadget)));
+    const hits: Array<{ mnemonic: string; address: bigint; module: string }> = [];
+    const found: Array<{ encoding: number; address: number }> = [];
+    const dirty = encodings.map(() => 0);
+    for (const module of modules) {
+      const search = findEncodings(module, encodings, (address) => clean.predicate({ address }), 8);
+      search.dirty.forEach((count, i) => { dirty[i] += count; });
+      for (const hit of search.hits) {
+        found.push({ encoding: hit.encoding, address: Number(hit.address) });
+        if (!known.has(Number(hit.address))) hits.push({ mnemonic: hit.mnemonic, address: hit.address, module });
+      }
+    }
+    const corpus = hits.length > 0
+      ? mergeCapabilityIndexes([...(scanned ? [scanned] : []), buildCapabilityIndexFromSequences(sequencesFromLiveHits(hits))])
+      : scanned;
+    if (hits.length > 0) plans = planBoth(corpus);
+    const settled: Record<string, Settled> = {};
+    open.forEach((job, i) => {
+      const mine = owners[i];
+      settled[job.key] = {
+        modules: modules.map(moduleLabel).join(", "),
+        encodings: mine.length,
+        clean: found.filter((hit) => mine.indexOf(hit.encoding) >= 0).map((hit) => hit.address),
+        dirty: mine.reduce((sum, index) => sum + dirty[index], 0),
+      };
+    });
+    return { corpus, plans, settled };
+  };
+
+  const otherStyle = (style: DepPlanStyle): DepPlanStyle => (style === "pushad" ? "skeleton" : "pushad");
+  // A job the other style has no counterpart for: no job of it asks for the same capability and register.
+  const neededBy = (job: Job, style: DepPlanStyle): boolean => jobsFor(style).some((other) =>
+    other.capabilities.some((kind) => job.capabilities.indexOf(kind) >= 0) && (other.register === undefined || other.register === job.register));
+  const WHY_NOT_NEEDED: Record<string, string> = { capture: ": pushad pushes ESP itself" };
+  const titles = (plans: JobPlan[]): string => plans.map((plan) => plan.job.title).join(", ");
+
+  // The style the corpus supports: one with a gadget for every job, the skeleton first when both have.
+  const chooseStyle = (solved: Solved): DepPlanStyle => {
+    const missing = (style: DepPlanStyle): number => solved.plans[style].filter((plan) => !plan.pick).length;
+    return missing("skeleton") <= missing("pushad") ? "skeleton" : "pushad";
+  };
+
   // The body of dep_plan's [4/7] and all of dep_candidates, so pasting the echoed line repeats the section.
-  const printDepCandidates = (corpus: CapabilityIndex | undefined, moduleName: string, badSet: Set<number>, style: DepPlanStyle, exclude: number[] = []) => {
+  const printDepCandidates = (solved: Solved, modules: string[], badSet: Set<number>, style: DepPlanStyle, exclude: number[] = []) => {
     out.info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
-    const plans = planJobs(corpus, style, exclude);
+    const plans = solved.plans[style];
     for (const plan of plans) {
-      for (const line of planLines(plan)) out.print(line);
+      const settled = solved.settled[plan.job.key];
+      const lines = planLines(plan);
+      if (settled && plan.verdicts.length === 0) lines[0] = `  ${plan.job.title}: none in ${settled.modules}`;
+      for (const line of lines) out.print(line);
+      if (settled) for (const line of settledLines(plan, settled, exclude)) out.print(line);
     }
     let jmpEsp: number | undefined;
     if (style === "pushad") {
       for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
-        out.echo("find_bytes", [moduleName, bytes, 20]);
-        invoke("find_bytes", [moduleName, bytes, 20]);
-        const hits = ((lastResult?.findings ?? []) as unknown[])
-          .map((hit) => Number(hit))
-          .filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0)
-          .slice(0, 3);
-        out.print(`  ${label}: ${hits.length > 0 ? hits.map(dwordHex).join("  ") : "none without bad bytes"}`);
+        const hits: number[] = [];
+        for (const module of modules) {
+          out.echo("find_bytes", [module, bytes, 20]);
+          invoke("find_bytes", [module, bytes, 20]);
+          hits.push(...((lastResult?.findings ?? []) as unknown[])
+            .map((hit) => Number(hit))
+            .filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0));
+        }
+        out.print(`  ${label}: ${hits.length > 0 ? hits.slice(0, 3).map(dwordHex).join("  ") : "none without bad bytes"}`);
         jmpEsp = jmpEsp ?? hits[0];
       }
     }
-    const missing = plans.filter((plan) => !plan.pick).map((plan) => plan.job.title);
-    if (missing.length > 0) out.warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
-    return { plans, jmpEsp, missing };
+    const missing = plans.filter((plan) => !plan.pick);
+    const where = modules.map(moduleLabel).join(", ");
+    if (missing.length > 0) out.warn(`No gadget in ${where} for: ${titles(missing)}. Each was searched for in every byte of it, so this is the module, not the scan.`);
+    // The method can be the only thing wrong: name the style that needs none of what is missing here.
+    const other = otherStyle(style);
+    const blocking = missing.filter((plan) => !neededBy(plan.job, other));
+    if (blocking.length > 0) {
+      const otherMissing = solved.plans[other].filter((plan) => !plan.pick);
+      out.warn(`${titles(blocking)} block${blocking.length === 1 ? "s" : ""} the ${style} style, and the ${other} style needs no such gadget${blocking.map((plan) => WHY_NOT_NEEDED[plan.job.key] ?? "").join("")}.`);
+      out.warn(otherMissing.length === 0
+        ? `In ${where} the ${other} style has a gadget for every job: dx @$osed().dep_candidates("${modules.join(",")}", "${byteList([...badSet])}", "${other}")`
+        : `In ${where} the ${other} style lacks ${titles(otherMissing)}, so it is blocked too.`);
+    }
+    return { plans, jmpEsp, missing: missing.map((plan) => plan.job.title) };
+  };
+
+  // A corpus already in memory serves when it was a complete live scan of these modules for these bad
+  // chars: scanning again could only return the same gadgets, and throwing it away cost him his scan.
+  const loadedCorpusCovers = (modules: string[], badchars: number[]): boolean => {
+    const loaded = corpusModules.map((entry) => entry.name);
+    const same = (left: number[], right: number[]): boolean => left.length === right.length && left.every((byte) => right.indexOf(byte) >= 0);
+    return currentRopCorpus !== undefined && corpusOrigin === "live" && corpusComplete
+      && loaded.length === modules.length && modules.every((module) => loaded.some((name) => sameModule(name, module)))
+      && same(corpusBadchars ?? [], badchars) && corpusStaleModules().length === 0;
   };
 
   const executeDepCandidates = (...args: unknown[]): DxResult => {
@@ -3145,8 +3326,8 @@ function bindApi(): OsedApi {
       return helperHelp("dep_candidates");
     }
     const [moduleArg, badArg, styleArg] = args;
-    const style = String(styleArg ?? "skeleton").trim().toLowerCase() as DepPlanStyle;
-    const moduleName = typeof moduleArg === "string" ? moduleArg.trim() : "";
+    const styleText = String(styleArg ?? "skeleton").trim().toLowerCase();
+    const modules = (typeof moduleArg === "string" ? moduleArg : "").split(",").map((name) => name.trim()).filter(Boolean);
     const badText = typeof badArg === "string" ? badArg : "";
     const badchars = parseHexByteList(badText);
     const fail = (message: string): DxResult => {
@@ -3156,12 +3337,17 @@ function bindApi(): OsedApi {
       setResult({ command: "dep_candidates", args: { module: moduleArg, badchars: badArg, style: styleArg }, success: false, findings: [], warnings: [], errors: [message] });
       return toDxResult("DEP Candidates", rows);
     };
-    if (!DEP_PLAN_STYLES.includes(style)) return fail(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
+    if (styleText !== "auto" && !DEP_PLAN_STYLES.includes(styleText as DepPlanStyle)) return fail(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
     if (!Array.isArray(badchars)) return fail('badchars must be hex bytes such as "00 0A 0D".');
-    if (!moduleName || !moduleInfoByName(moduleName)) return fail(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
-    // Its own scan, so the loaded corpus stays as the user left it.
-    const corpus = mergeCapabilityIndexes(discoverLiveIndexes([moduleName], { badchars }).indexes);
-    const { plans, missing } = printDepCandidates(corpus, moduleName, new Set(badchars), style);
+    const unknown = modules.length === 0 ? [""] : modules.filter((module) => !moduleInfoByName(module));
+    if (unknown.length > 0) return fail(`Module "${unknown[0]}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
+    // Its own scan unless his is already in memory, so the loaded corpus stays as the user left it.
+    const scanned = loadedCorpusCovers(modules, badchars as number[])
+      ? currentRopCorpus
+      : mergeCapabilityIndexes(discoverLiveIndexes(modules, { badchars }).indexes);
+    const solved = solveStyles(scanned, modules, badchars as number[], []);
+    const style = styleText === "auto" ? chooseStyle(solved) : styleText as DepPlanStyle;
+    const { plans, missing } = printDepCandidates(solved, modules, new Set(badchars as number[]), style);
     const rows = plans.map((plan) => ({
       Job: plan.job.title,
       Pick: plan.pick ? dwordHex(depPlanAddress(plan.pick.gadget)) : "none",
@@ -3169,7 +3355,7 @@ function bindApi(): OsedApi {
     }));
     setResult({
       command: "dep_candidates",
-      args: { module: moduleName, badchars: badText, style },
+      args: { module: modules.join(","), badchars: badText, style },
       success: true,
       findings: rows,
       warnings: missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : [],
@@ -3182,9 +3368,11 @@ function bindApi(): OsedApi {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("dep_plan");
     }
-    const [apiArg, moduleArg, badArg, styleArg, stageArg, excludeArg] = args;
-    const depApi = DEP_PLAN_APIS.find((name) => name.toLowerCase() === String(apiArg ?? "").trim().toLowerCase());
-    const style = String(styleArg ?? "skeleton").trim().toLowerCase() as DepPlanStyle;
+    const [apiArg, moduleArg, badArg, styleArg, stageArg, excludeArg, anywayArg] = depPlanArgs(args);
+    const apiText = String(apiArg ?? "").trim();
+    const autoApi = apiText === "";
+    const requestedApi = DEP_PLAN_APIS.find((name) => name.toLowerCase() === apiText.toLowerCase());
+    const styleText = styleArg === undefined ? "skeleton" : String(styleArg).trim().toLowerCase() || "auto";
     // The next free payloadN() in his file. dep_plan cannot know how many stages he already has, so the
     // resolved value is echoed below: pasting that line back reproduces the same numbering.
     const stage = stageArg === undefined ? 1 : Math.trunc(Number(stageArg));
@@ -3192,27 +3380,47 @@ function bindApi(): OsedApi {
     // changes the junk accounting throughout, which is why this re-solves rather than swapping by hand.
     const excludeText = typeof excludeArg === "string" ? excludeArg.trim() : "";
     const exclude = excludeText ? excludeText.split(/[\s,]+/).map((token) => parseInt(token.replace(/^0x/i, ""), 16) >>> 0) : [];
-    const moduleName = typeof moduleArg === "string" ? moduleArg.trim() : "";
+    const anyway = anywayArg === true;
+    const moduleText = typeof moduleArg === "string" ? moduleArg.trim() : "";
     const badText = typeof badArg === "string" ? badArg : "";
     const badchars = parseHexByteList(badText);
     const fail = (message: string): DxResult => {
       const rows = [{ Error: message }];
       renderRows("DEP Plan", rows);
-      out.info('Usage: dx @$osed().dep_plan(api, module, badchars, style?, firstStage?)');
+      out.info('Usage: dx @$osed().dep_plan(badchars)    or    dx @$osed().dep_plan(api, module, badchars, style?, firstStage?, exclude?, anyway?)');
       setResult({ command: "dep_plan", args: { api: apiArg, module: moduleArg, badchars: badArg, style: styleArg }, success: false, findings: [], warnings: [], errors: [message] });
       return toDxResult("DEP Plan", rows);
     };
-    if (!depApi) return fail(`api must be one of ${DEP_PLAN_APIS.join(", ")}.`);
-    if (!DEP_PLAN_STYLES.includes(style)) return fail(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
+    if (!autoApi && !requestedApi) return fail(`api must be one of ${DEP_PLAN_APIS.join(", ")}, or "" to let the tool choose.`);
+    if (styleText !== "auto" && !DEP_PLAN_STYLES.includes(styleText as DepPlanStyle)) return fail(`style must be one of ${DEP_PLAN_STYLES.join(", ")}, or "auto".`);
     if (!Number.isFinite(stage) || stage < 1) return fail("firstStage must be the number of the next free payloadN() in your file, 1 or more.");
     if (exclude.some((address) => !Number.isFinite(address) || address === 0)) return fail('exclude must be gadget addresses in hex, such as "6A42F3CD 6A411118".');
     if (!Array.isArray(badchars)) return fail('badchars must be hex bytes such as "00 0A 0D".');
-    const moduleInfo = moduleName ? moduleInfoByName(moduleName) : undefined;
-    if (!moduleInfo) return fail(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
-    out.section(out.dxCall("dep_plan", excludeText
-      ? [depApi, moduleName, badText, style, stage, excludeText]
-      : [depApi, moduleName, badText, style, stage]));
+    const named = moduleText.split(",").map((name) => name.trim()).filter(Boolean);
+    const missingModule = named.find((name) => !moduleInfoByName(name));
+    if (missingModule) return fail(`Module "${missingModule}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
     const badSet = new Set(badchars as number[]);
+
+    // Module layer. Named modules are his; otherwise every module that can give a gadget at all.
+    const candidates = gadgetModules(badSet);
+    const usable = candidates.filter((entry) => entry.why === undefined);
+    const chosen = named.length > 0
+      ? named.map((name) => candidates.find((entry) => sameModule(entry.info.name, moduleInfoByName(name)!.name))).filter((entry): entry is typeof candidates[number] => entry !== undefined)
+      : usable;
+    const modules = named.length > 0 ? named : usable.map((entry) => entry.label);
+    const modulesArg = modules.join(",");
+    const modulesLabel = chosen.map((entry) => entry.label).join(", ") || "no module";
+
+    // API layer, resolved before the header so the echoed call names what this run used.
+    const routes = (autoApi ? DEP_PLAN_APIS : [requestedApi as DepApi]).map((name) => routeFor(name, modules, badchars as number[]));
+    const route = routes.find((candidate) => candidate !== undefined && !candidate.delta) ?? routes.find((candidate) => candidate !== undefined);
+    const depApi: DepApi = route?.api ?? requestedApi ?? "VirtualAlloc";
+    const callArgs = (styleValue: string, force: boolean): unknown[] => [
+      autoApi && !route ? "" : depApi, modulesArg, badText, styleValue, stage,
+      ...(excludeText || force ? [excludeText] : []), ...(force ? [true] : []),
+    ];
+
+    out.section(out.dxCall("dep_plan", callArgs(styleText, anyway)));
     const n = DEP_PLAN_SECTIONS;
     const summary: Array<Record<string, string>> = [];
     // Below each section's output, so a screenshot of the output stops here and the block below it is one
@@ -3227,124 +3435,172 @@ function bindApi(): OsedApi {
       out.print(SEPARATOR);
       for (const line of block.lines) out.print(line);
     };
-    // What stops a chain for this API in this module. [1/7] to [4/7] stay true without it, because they
-    // describe the module and its gadgets. [5/7] to [7/7] would describe a call he cannot make, so they
-    // print one line instead of content: an answer-shaped section is worse than no section.
-    let blocker: { what: string; next: string[] } | undefined;
-    const shortName = (name: string): string => name.split("\\").pop() ?? name;
-    const moduleLabel = shortName(moduleInfo.name);
-    // The three ways a chain dies look alike from outside and have different fixes, so each one names
-    // itself and carries its own way forward.
-    const stop = (what: string, ...next: string[]): void => {
+
+    // Whether a chain is needed at all comes first: without DEP the stack runs the shellcode as it is.
+    const dep = depVerdict();
+    if (dep.enforced === false) {
+      out.section(`DEP is OFF for ${dep.name}: no chain needed`);
+      out.error(`The stack executes: ${dep.why}.`);
+      const jumps: number[] = [];
+      for (const module of modules) {
+        out.echo("find_bytes", [module, "FF E4", 20, badText]);
+        invoke("find_bytes", [module, "FF E4", 20, badText]);
+        jumps.push(...((lastResult?.findings ?? []) as unknown[]).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit)));
+      }
+      out.error(jumps.length > 0
+        ? `Jump straight to your shellcode: payload = b"A" * OFFSET + p32(${dwordHex(jumps[0])}) + b"\\x90" * 16 + shellcode    (${dwordHex(jumps[0])} is jmp esp, no bad byte)`
+        : `No jmp esp without a bad byte in ${modulesLabel}. dx @$osed().find_bytes("", "FF E4", 20, "${badText}") searches every module.`);
+      if (!anyway) {
+        out.error(`The chain sections are skipped: they solve a problem this process does not have. To build the chain anyway, as an exercise: ${out.dxCall("dep_plan", callArgs(styleText, true))}`);
+        setResult({ command: "dep_plan", args: { badchars: badText }, success: true, findings: [{ dep: "off", why: dep.why, jmpEsp: jumps[0] }], warnings: [], errors: [] });
+        return toDxResult("DEP Plan", [{ Section: "DEP", Result: `off: ${dep.why}` }]);
+      }
+    } else if (dep.enforced === true) {
+      out.section(`DEP is on for ${dep.name}`);
+      out.info(`${dep.why[0].toUpperCase()}${dep.why.slice(1)}. The stack does not execute, so the shellcode needs the chain below.`);
+    } else {
+      out.section(`DEP for ${dep.name}: unknown`);
+      out.warn(`Assumed on: ${dep.why}.`);
+    }
+    summary.push({ Section: "DEP", Result: dep.enforced === undefined ? "unknown, assumed on" : dep.enforced ? "on" : "off, built anyway" });
+
+    // What stops a chain. [1/7] to [4/7] stay true without it, because they describe the module and its
+    // gadgets. [5/7] to [7/7] would describe a call he cannot make, so they print one line instead of
+    // content: an answer-shaped section is worse than no section.
+    type Layer = "module" | "API" | "method";
+    let blocker: { layer: Layer; what: string; next: string[] } | undefined;
+    const stop = (layer: Layer, what: string, ...next: string[]): void => {
       if (blocker) return;
-      blocker = { what, next };
-      out.section(`STOP: no ${depApi} chain from ${moduleLabel}`);
-      out.error(what);
+      blocker = { layer, what, next };
+      out.section(`STOP: no ${depApi} chain from ${modulesLabel}`);
+      out.error(`The ${layer} layer fails: ${what}`);
       for (const line of next) out.error(line);
     };
-    // The exam usually fixes the API, so the first answer to a slot problem is never "call something else".
-    // It is "read the address from somewhere else", and the API swap comes last and conditionally.
-    const addressElsewhere = (first: string): string[] => [
-      `Keep ${depApi} and change where its address comes from, in this order:`,
-      `  1. ${first}`,
-      `  2. dx @$osed().sc.iat_find("GetProcAddress")    if that is imported, resolve ${depApi} at run time instead of reading a slot of its own.`,
-      `  3. A fixed delta from a neighbouring kernel32 import, worked out once and written into the exploit. Any Windows update moves it, so this is the last resort.`,
-      `Only if you are free to choose the API: dx @$osed().rop.generate("auto", "", "${badText}", "${moduleName}")    scores the six bypass APIs by slot and bad chars.`,
-    ];
-    const first = Number(moduleInfo.base);
-    const last = Number(moduleInfo.base + moduleInfo.size - BigInt(1));
-    const fixedByte = (shift: number): number | undefined =>
-      ((first >>> shift) & 0xff) === ((last >>> shift) & 0xff) ? (first >>> shift) & 0xff : undefined;
+    const usableNext = (): string[] => usable.length > 0
+      ? [`Next: dx @$osed().dep_plan(${JSON.stringify(badText)})    builds from the modules that can give gadgets: ${usable.map((entry) => entry.label).join(", ")}.`]
+      : [];
 
-    out.section(`[1/${n}] Module protections for ${moduleLabel}`);
-    out.echo("modules", [moduleName]);
-    invoke("modules", [moduleName]);
-    const sharedBad = [...new Set([24, 16].map(fixedByte).filter((byte): byte is number => byte !== undefined && badSet.has(byte)))];
-    const moduleWarnings = [
-      moduleInfo.aslr === "enabled" ? `${moduleLabel} has ASLR: its addresses change on every run, so a chain built from it needs a leak.` : undefined,
-      moduleInfo.preferredBase !== BigInt(0) && moduleInfo.base !== moduleInfo.preferredBase ? `${moduleLabel} is loaded at ${dwordHex(first)}, not at its preferred base ${dwordHex(Number(moduleInfo.preferredBase))}. Without ASLR it stays there for this boot, but every address below is this process's: never take one from the file on disk.` : undefined,
-      sharedBad.length > 0 ? `Every address in ${moduleLabel} (${dwordHex(first)} to ${dwordHex(last)}) holds the bad byte(s) ${sharedBad.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ")}, so no gadget from it is usable.` : undefined,
-    ].filter((warning): warning is string => warning !== undefined);
-    for (const warning of moduleWarnings) out.warn(warning);
-    if (moduleWarnings.length === 0) out.info(`${moduleLabel} spans ${dwordHex(first)} to ${dwordHex(last)}: no ASLR, and its fixed high bytes are clean. The scan in [3/${n}] drops each address whose low bytes are bad.`);
+    out.section(`[1/${n}] Module protections for ${modulesLabel}`);
+    out.echo("modules", named.length === 1 ? [named[0]] : []);
+    invoke("modules", named.length === 1 ? [named[0]] : []);
+    const moduleWarnings: string[] = [];
+    for (const entry of chosen) {
+      const info = entry.info;
+      const first = Number(info.base);
+      const last = Number(info.base + info.size - BigInt(1));
+      const bad = sharedBadBytes(info, badSet);
+      const warnings = [
+        info.aslr === "enabled" ? `${entry.label} has ASLR: its addresses change on every run, so a chain built from it needs a leak.` : undefined,
+        info.preferredBase !== BigInt(0) && info.base !== info.preferredBase ? `${entry.label} is loaded at ${dwordHex(first)}, not at its preferred base ${dwordHex(Number(info.preferredBase))}. Without ASLR it stays there for this boot, but every address below is this process's: never take one from the file on disk.` : undefined,
+        bad.length > 0 ? `Every address in ${entry.label} (${dwordHex(first)} to ${dwordHex(last)}) holds the bad byte(s) ${byteList(bad)}, so no gadget from it is usable.` : undefined,
+      ].filter((warning): warning is string => warning !== undefined);
+      for (const warning of warnings) out.warn(warning);
+      if (warnings.length === 0) out.info(`${entry.label} spans ${dwordHex(first)} to ${dwordHex(last)}: no ASLR, and its fixed high bytes are clean. The scan in [3/${n}] drops each address whose low bytes are bad.`);
+      moduleWarnings.push(...warnings);
+    }
+    if (named.length === 0) {
+      const fixedOut = candidates.filter((entry) => entry.why !== undefined && entry.info.aslr !== "enabled");
+      const moving = candidates.filter((entry) => entry.info.aslr === "enabled").length;
+      out.info(`Gadgets come from every module that can give one: ${modulesLabel}. Not usable: ${[...fixedOut.map((entry) => `${entry.label}, ${entry.why}`), `${moving} with ASLR`].join("; ")}.`);
+    }
     printBlock(HELPER_BLOCK);
-    if (moduleInfo.aslr === "enabled") {
-      stop(`${moduleLabel} has ASLR: every gadget address in it moves on each run, so no chain built from it survives a reboot. This is the one case where you change module, and the API stays as it is.`,
-        `Next: dx @$osed().modules()    pick one with ASLR disabled and run dep_plan again with it.`);
+    const unusable = chosen.find((entry) => entry.why !== undefined);
+    if (chosen.length === 0) {
+      const fixedOut = candidates.filter((entry) => entry.info.aslr !== "enabled");
+      stop("module", `no loaded module can give gadgets: ${fixedOut.length > 0 ? fixedOut.map((entry) => `${entry.label} (${entry.why})`).join(", ") : "every one has ASLR"}${fixedOut.length > 0 ? ", and the rest have ASLR" : ""}.`);
+    } else if (unusable?.info.aslr === "enabled") {
+      stop("module", `${unusable.label} has ASLR: every gadget address in it moves on each run, so no chain built from it survives a reboot. This is the one case where you change module, and the API stays as it is.`, ...usableNext());
+    } else if (unusable) {
+      stop("module", `${unusable.why?.replace(/^every address/, `every address in ${unusable.label}`)}, so no gadget from it is usable.`, ...usableNext());
     }
     summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
 
     out.section(`[2/${n}] IAT slot of ${depApi}`);
     out.echo("sc.iat_find", [depApi]);
-    const iatRows = ((api.sc as { iat_find: (symbol: string) => unknown }).iat_find(depApi) as { rows?: { length: number; [i: number]: Record<string, string> } }).rows;
-    const slotRows = Array.from({ length: iatRows?.length ?? 0 }, (_, i) => iatRows![i])
-      .filter((row) => new RegExp(`(^|!)${depApi}$`, "i").test(out.stripDml(String(row.Symbol ?? "")).trim()));
-    // The module's own slot first, then any importer that does not move, so the ASLR stop below fires
-    // only when every importer really does move.
-    const ownerAslrOf = (row: Record<string, string>): boolean =>
-      moduleInfoByName(out.stripDml(String(row.Owner ?? "")))?.aslr === "enabled";
-    const chosen = slotRows.find((row) => out.stripDml(String(row.Owner ?? "")).toLowerCase().includes(moduleName.toLowerCase()))
-      ?? slotRows.find((row) => !ownerAslrOf(row))
-      ?? slotRows[0];
-    const slotMatch = chosen ? /0x([0-9a-fA-F]+)/.exec(out.stripDml(String(chosen.Slot ?? ""))) : null;
-    const iatSlot = slotMatch ? parseInt(slotMatch[1], 16) >>> 0 : undefined;
+    (api.sc as { iat_find: (symbol: string) => unknown }).iat_find(depApi);
+    const iatSlot = route?.slot;
     const slotBad = iatSlot === undefined ? [] : addressBadBytes(BigInt(iatSlot), 4, badSet);
-    if (iatSlot === undefined) {
-      stop(`No module loaded right now imports ${depApi}, so there is no slot to read its address from. This is the rare one: an exam target is normally built so the API it mandates is importable.`,
-        ...addressElsewhere(`dx @$osed().sc.iat_find("${depApi}")    run it again at the crash, when more DLLs are mapped. Any importer serves, it does not have to be ${moduleLabel}: the IAT you read and the module your gadgets come from are independent. It only has to show ASLR disabled in modules().`));
+    const owner = route ? shortName(route.owner) : "";
+    if (!route) {
+      const moving = slotsOf(depApi).filter((row) => !row.fixed).map((row) => shortName(row.owner));
+      // He named the API, so another one is an alternative, not a fix: one line, and only if it exists.
+      const other = autoApi ? undefined : DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => routeFor(name, modules, badchars as number[])).find((found) => found !== undefined);
+      stop("API", `no module with ASLR disabled imports ${autoApi ? DEP_PLAN_APIS.join(", ") : depApi}${moving.length > 0 ? ` (${moving.join(", ")} ${moving.length === 1 ? "does, and it has" : "do, and they have"} ASLR)` : ""}, nor any other export of kernel32 or kernelbase to reach it from by a fixed distance. Its address needs a leak first.`,
+        ...(other ? [`If you are free to choose the API, ${other.api} has a route: dx @$osed().dep_plan("${other.api}", "${modulesArg}", "${badText}")`] : []));
+    } else if (route.delta) {
+      const delta = route.delta;
+      out.echo("rop.api_plan", [`${delta.dll}!${depApi}`, badText]);
+      executeRopApiPlan(`${delta.dll}!${depApi}`, badText);
+      const signed = delta.value > 0x7fffffff ? `- ${dwordHex(-delta.value >>> 0)}` : `+ ${dwordHex(delta.value)}`;
+      out.info(`No module with ASLR disabled imports ${depApi} itself, but ${owner} imports ${delta.dll}!${delta.anchor}, at slot ${dwordHex(route.slot)}. ${depApi} is a fixed distance from it inside ${delta.dll}: ${depApi} = [${dwordHex(route.slot)}] ${signed}, measured now with ${delta.anchor} at ${dwordHex(delta.anchorAt)} and ${depApi} at ${dwordHex(delta.apiAt)}. The chain reads the slot and adds API_DELTA.`);
+      out.warn(`That distance holds for this build of ${delta.dll} only. Any Windows update moves it, so the exploit is right for the machine it was measured on: run this again on the target.`);
+      const direct = DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => routeFor(name, modules, badchars as number[])).find((other) => other !== undefined && !other.delta);
+      if (direct) out.info(`If you are free to choose the API, ${direct.api} needs no distance: ${shortName(direct.owner)} imports it at ${dwordHex(direct.slot)}. dx @$osed().dep_plan("${direct.api}", "${modulesArg}", "${badText}")`);
     } else {
-      const owner = out.stripDml(String(chosen!.Owner));
-      out.info(`Slot ${dwordHex(iatSlot)} in ${owner}. The chain reads the API address from it with mov eax, [eax].`);
-      if (!owner.toLowerCase().includes(moduleName.toLowerCase())) {
-        if (ownerAslrOf(chosen!)) {
-          stop(`${moduleLabel} does not import ${depApi}, and every module that does has ASLR, starting with ${owner}: the slot address moves on every boot, so reading it needs a leak first.`,
-            ...addressElsewhere(`dx @$osed().sc.iat_find("${depApi}")    the Owner column lists every importer; you need one whose module shows ASLR disabled in modules(). It does not have to be ${moduleLabel}: the IAT you read and the module your gadgets come from are independent.`));
-        } else {
-          out.warn(`${moduleLabel} does not import ${depApi}; this slot belongs to ${owner}. Check the other importers with sc.iat_find if you would rather stay inside one module.`);
-        }
-      }
-      if (slotBad.length > 0) out.info(`The slot address holds the bad byte(s) ${slotBad.map((b) => dwordHex(b).slice(-2)).join(" ")}. That is the usual case and nothing breaks: [5/${n}] builds the address from clean constants and the chain never sends it raw.`);
-      else out.info("The slot address has no bad byte, so it can be popped as it is.");
+      out.info(`Slot ${dwordHex(route.slot)} in ${owner}. The chain reads the API address from it with mov eax, [eax].`);
+      if (!modules.some((module) => sameModule(route.owner, module))) out.warn(`${modulesLabel} does not import ${depApi}; this slot belongs to ${owner}, which does not move either. The IAT you read and the modules your gadgets come from are independent.`);
     }
-    printBlock(slotBlock(depApi, moduleName, iatSlot, badchars as number[]).block);
-    summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === undefined ? "not found" : `${dwordHex(iatSlot)}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
+    if (route && slotBad.length > 0) out.info(`The slot address holds the bad byte(s) ${byteList(slotBad)}. That is the usual case and nothing breaks: [5/${n}] builds the address from clean constants and the chain never sends it raw.`);
+    else if (route) out.info("The slot address has no bad byte, so it can be popped as it is.");
+    printBlock(slotBlock(depApi, owner || modulesLabel, iatSlot, badchars as number[], route?.delta).block);
+    summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === undefined ? "no route" : `${dwordHex(iatSlot)}${route?.delta ? ` + delta via ${route.delta.anchor}` : ""}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
 
-    out.section(`[3/${n}] Gadget corpus from ${moduleName}`);
-    out.echo("rop.scan_live", [moduleName, badText]);
-    executeRopScanLive(moduleName, badText);
-    const corpus = currentRopCorpus;
-    const gadgetCount = corpus?.gadgets.length ?? 0;
-    out.info(`${gadgetCount} gadgets and ${corpus ? summarizeCapabilities(corpus).length : 0} capabilities, every address free of the bad bytes.`);
+    // A module that can give no gadget makes the corpus and the picks meaningless, and scanning it costs time.
+    const moduleFailed = blocker !== undefined && (blocker as { layer: Layer }).layer === "module";
+    out.section(`[3/${n}] Gadget corpus from ${modulesLabel}`);
+    let scanned: CapabilityIndex | undefined;
+    if (moduleFailed) out.error("Skipped: no module here can give gadgets. See the STOP above.");
+    else if (loadedCorpusCovers(modules, badchars as number[])) {
+      scanned = currentRopCorpus;
+      out.info(`Using the corpus already loaded: a complete live scan of ${modulesLabel} for these bad chars, so scanning again could only find the same gadgets.`);
+    } else {
+      out.echo("rop.scan_live", [modulesArg, badText]);
+      executeRopScanLive(modulesArg, badText);
+      scanned = currentRopCorpus;
+    }
+    const gadgetCount = scanned?.gadgets.length ?? 0;
+    if (!moduleFailed) out.info(`${gadgetCount} gadgets and ${scanned ? summarizeCapabilities(scanned).length : 0} capabilities, every address free of the bad bytes.`);
     printBlock(CORPUS_BLOCK);
-    summary.push({ Section: `[3/${n}] corpus`, Result: `${gadgetCount} gadgets` });
+    summary.push({ Section: `[3/${n}] corpus`, Result: moduleFailed ? "skipped" : `${gadgetCount} gadgets` });
 
     // The caves are found here so the [4/7] block can name them; [5/7] prints what this found.
     const pickCave = (minSize: number, capability: string): number | undefined => {
-      const { caves } = findCodeCaves(moduleName, minSize, 25, badText, capability);
-      const found = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
-      if (!found) return undefined;
-      return Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address);
+      for (const module of modules) {
+        const { caves } = findCodeCaves(module, minSize, 25, badText, capability);
+        const found = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
+        if (found) return Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address);
+      }
+      return undefined;
     };
-    const writable = depApi === "VirtualAlloc" ? undefined : out.quietly(() => pickCave(4, "STAGING"));
-    const cave = depApi === "WriteProcessMemory" ? out.quietly(() => pickCave(0x210, "EXEC")) : undefined;
+    const writable = depApi === "VirtualAlloc" || moduleFailed ? undefined : out.quietly(() => pickCave(4, "STAGING"));
+    const cave = depApi === "WriteProcessMemory" && !moduleFailed ? out.quietly(() => pickCave(0x210, "EXEC")) : undefined;
 
-    out.section(`[4/${n}] The gadget picked per job (${style} style)`);
-    out.echo("dep_candidates", [moduleName, badText, style]);
-    if (exclude.length > 0) out.info(`Excluding ${exclude.length} gadget(s) by request: ${exclude.map(dwordHex).join(", ")}. The chain is solved again without them, so other jobs may pick differently.`);
-    const { plans, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style, exclude);
+    const solved = moduleFailed ? undefined : solveStyles(scanned, modules, badchars as number[], exclude);
+    const style: DepPlanStyle = styleText === "auto" ? (solved ? chooseStyle(solved) : "skeleton") : styleText as DepPlanStyle;
+    const corpus = solved?.corpus;
+    const otherBlocked = solved ? titles(solved.plans[otherStyle(style)].filter((plan) => !plan.pick)) : "";
+    out.section(`[4/${n}] The gadget picked per job (${style} style${styleText === "auto" && otherBlocked ? `: the ${otherStyle(style)} style lacks ${otherBlocked}` : ""})`);
+    let plans: JobPlan[] = [];
+    let jmpEsp: number | undefined;
+    let missing: string[] = [];
+    if (solved) {
+      out.echo("dep_candidates", [modulesArg, badText, style]);
+      if (exclude.length > 0) out.info(`Excluding ${exclude.length} gadget(s) by request: ${exclude.map(dwordHex).join(", ")}. The chain is solved again without them, so other jobs may pick differently.`);
+      ({ plans, jmpEsp, missing } = printDepCandidates(solved, modules, badSet, style, exclude));
+    } else out.error("Skipped: there is no corpus. See the STOP above.");
     // rop.construct and the [5/7] recipes search this one, so an excluded gadget cannot come back
     // through a recipe under another name.
     const solvable = corpus && exclude.length > 0
       ? buildCapabilities(corpus.gadgets.filter((gadget) => exclude.indexOf(depPlanAddress(gadget)) < 0))
       : corpus;
     const build = buildExploit({
-      api: depApi, style, module: moduleName, badchars: badchars as number[], index: corpus, plans,
-      iatSlot, writable, cave, jmpEsp, stage, exclude,
+      api: depApi, style, module: modulesLabel, badchars: badchars as number[], index: corpus, plans,
+      iatSlot, delta: route?.delta, writable, cave, jmpEsp, stage, exclude,
       solve: (register, value, keep) =>
         solvable ? solveValue(solvable, register, value, badchars as number[], keep, buildStableAddressPredicate()) : undefined,
     });
-    printBlock(build.blocks[4]);
-    summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
+    if (solved) printBlock(build.blocks[4]);
+    summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
 
     out.section(`[5/${n}] Clean recipes for the constants`);
     if (blocker) out.error(`Skipped: these are the arguments of a ${depApi} call this chain cannot make. See the STOP above.`);
@@ -3353,20 +3609,21 @@ function bindApi(): OsedApi {
       out.echo("rop.construct", ["eax", out.hex(constant.value), badText]);
       executeRopConstruct("eax", constant.value, badText);
     }
-    if (iatSlot !== undefined && slotBad.length > 0) {
-      out.info(`IAT slot = ${dwordHex(iatSlot)}`);
-      out.echo("rop.construct", ["eax", out.hex(iatSlot), badText]);
-      executeRopConstruct("eax", iatSlot, badText);
+    for (const [label, value] of [["IAT slot", iatSlot], ["API_DELTA", route?.delta?.value]] as Array<[string, number | undefined]>) {
+      if (blocker || value === undefined || addressBadBytes(BigInt(value), 4, badSet).length === 0) continue;
+      out.info(`${label} = ${dwordHex(value)}`);
+      out.echo("rop.construct", ["eax", out.hex(value), badText]);
+      executeRopConstruct("eax", value, badText);
     }
     if (depApi !== "VirtualAlloc" && !blocker) {
       const field = depApi === "VirtualProtect" ? "lpflOldProtect" : "lpNumberOfBytesWritten";
-      out.echo("code_caves", [moduleName, out.hex(4), 25, badText, "STAGING"]);
-      if (writable === undefined) out.warn(`${field}: no clean writable cave in ${moduleName}. Try dx @$osed().code_caves("", 4, 25, "${badText}", "STAGING").`);
+      out.echo("code_caves", [modules[0], out.hex(4), 25, badText, "STAGING"]);
+      if (writable === undefined) out.warn(`${field}: no clean writable cave in ${modulesLabel}. Try dx @$osed().code_caves("", 4, 25, "${badText}", "STAGING").`);
       else out.info(`${field} = ${dwordHex(writable)}, a writable cave with no bad byte (code_caves STAGING).`);
     }
     if (depApi === "WriteProcessMemory" && !blocker) {
-      out.echo("code_caves", [moduleName, out.hex(0x210), 25, badText, "EXEC"]);
-      if (cave === undefined) out.warn(`Code cave: none of 0x210 bytes with a clean address in ${moduleName}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
+      out.echo("code_caves", [modules[0], out.hex(0x210), 25, badText, "EXEC"]);
+      if (cave === undefined) out.warn(`Code cave: none of 0x210 bytes with a clean address in ${modulesLabel}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
       else out.info(`Code cave (return address and lpBaseAddress) = ${dwordHex(cave)}, executable (code_caves EXEC).`);
     }
     if (!blocker) printBlock(build.blocks[5]);
@@ -3385,7 +3642,7 @@ function bindApi(): OsedApi {
 
     out.section(`[7/${n}] The exploit, with a placeholder for every value only a run can give`);
     if (blocker) {
-      out.error(`Skipped: there is no chain to write. See the STOP above.`);
+      out.error("Skipped: there is no chain to write. See the STOP above.");
     } else {
       out.info(build.holes.length === 0
         ? "Nothing left to measure: paste the seven blocks and the file runs."
@@ -3394,20 +3651,33 @@ function bindApi(): OsedApi {
     }
     summary.push({ Section: `[7/${n}] exploit`, Result: blocker ? "skipped" : build.holes.length === 0 ? "no holes" : `${build.holes.length} hole(s)` });
 
+    // The method layer is judged last and on both styles, because only the whole corpus can rule it out.
+    if (!blocker && solved && missing.length > 0 && solved.plans[otherStyle(style)].some((plan) => !plan.pick)) {
+      const lacks = (name: DepPlanStyle): string => `the ${name} style lacks ${titles(solved.plans[name].filter((plan) => !plan.pick))}`;
+      blocker = { layer: "method", what: `no style has a gadget for every job in ${modulesLabel}: ${lacks("skeleton")}, and ${lacks("pushad")}. Each was searched for in every byte of it.`, next: [] };
+    }
     // Again at the end: the first one is 300 lines up by now.
-    if (blocker) {
-      out.section(`STOP: no ${depApi} chain from ${moduleLabel}`);
-      out.error(blocker.what);
-      for (const line of blocker.next) out.error(line);
+    const ending = blocker as { layer: Layer; what: string; next: string[] } | undefined;
+    if (ending) {
+      out.section(`STOP: no ${depApi} chain from ${modulesLabel}`);
+      out.error(`The ${ending.layer} layer fails: ${ending.what}`);
+      for (const line of ending.next) out.error(line);
+    } else if (missing.length > 0) {
+      out.section("Verdict");
+      out.warn(`No complete ${depApi} chain in the ${style} style: ${modulesLabel} has no gadget for ${missing.join(", ")}, so [7/7] holds a hole for each. The ${otherStyle(style)} style has a gadget for every job: ${out.dxCall("dep_plan", [depApi, modulesArg, badText, otherStyle(style), stage, ...(excludeText || anyway ? [excludeText] : []), ...(anyway ? [true] : [])])}`);
+    } else {
+      out.section("Verdict");
+      out.info(`A ${depApi} chain from ${modulesLabel} in the ${style} style${route?.delta ? `, the API reached from ${route.delta.dll}!${route.delta.anchor} by a distance measured on this machine` : ""}${build.holes.length > 0 ? `, with ${build.holes.length} hole(s) to fill` : ""}.`);
+      out.info(`The same run with every choice written out: ${out.dxCall("dep_plan", callArgs(style, anyway))}`);
     }
 
     setResult({
       command: "dep_plan",
-      args: { api: depApi, module: moduleName, badchars: badText, style },
-      success: blocker === undefined,
-      findings: [{ api: depApi, module: moduleName, style, iatSlot, writable, cave, gadgets: gadgetCount, missing, holes: blocker ? [] : build.holes }],
+      args: { api: depApi, module: modulesArg, badchars: badText, style },
+      success: ending === undefined && missing.length === 0,
+      findings: [{ api: depApi, module: modulesArg, style, dep: dep.enforced, iatSlot, delta: route?.delta?.value, writable, cave, gadgets: gadgetCount, missing, holes: ending ? [] : build.holes }],
       warnings: [...moduleWarnings, ...(missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : [])],
-      errors: blocker ? [blocker.what, ...blocker.next] : [],
+      errors: ending ? [`The ${ending.layer} layer fails: ${ending.what}`, ...ending.next] : [],
     });
     return toDxResult("DEP Plan", summary);
   };

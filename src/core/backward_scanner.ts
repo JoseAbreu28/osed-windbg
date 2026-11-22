@@ -436,3 +436,53 @@ export function scanBackward(options: BackwardScanOptions): {
     stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 },
   };
 }
+
+export type EncodingSearch = {
+  /** Up to `keep` addresses per encoding that pass `clean`, decoded as scanBackward decodes them. */
+  hits: Array<{ encoding: number; address: bigint; mnemonic: string }>;
+  /** Per encoding, every match whose address failed `clean`. */
+  dirty: number[];
+  /** Executable bytes read; zero means nothing was searched. */
+  bytes: number;
+};
+
+/**
+ * Every place in the module's executable sections where one of `encodings` starts, -1 matching any byte.
+ * Each encoding ends in `ret` (C3) or `ret N` (C2 imm16). Each section is read once and nothing is
+ * capped but the addresses kept, so a zero is a fact about the module, not about a scan budget.
+ */
+export function findEncodings(module: string, encodings: number[][], clean: (address: bigint) => boolean, keep: number): EncodingSearch {
+  const byFirst: Record<number, number[]> = {};
+  encodings.forEach((encoding, index) => { (byFirst[encoding[0]] = byFirst[encoding[0]] ?? []).push(index); });
+  const longest = Math.max(1, ...encodings.map((encoding) => encoding.length));
+  const result: EncodingSearch = { hits: [], dirty: encodings.map(() => 0), bytes: 0 };
+  const kept = encodings.map(() => 0);
+  for (const section of forEachSection({ module, executableOnly: true, maxResults: 0, chunkSize: 0x4000 }).sections) {
+    for (let offset = 0; offset < section.size; offset += 0x4000) {
+      const start = section.start + BigInt(offset);
+      const length = Math.min(section.size - offset, 0x4000);
+      const bytes = tryReadMemory(start, Math.min(section.size - offset, 0x4000 + longest));
+      if (!bytes) continue;
+      result.bytes += length;
+      for (let i = 0; i < length; i += 1) {
+        for (const index of (byFirst[bytes[i]] ?? []) as number[]) {
+          const encoding: number[] = encodings[index];
+          if (i + encoding.length > bytes.length || encoding.some((byte, j) => byte >= 0 && bytes[i + j] !== byte)) continue;
+          const address = start + BigInt(i);
+          if (!clean(address)) {
+            result.dirty[index] += 1;
+            continue;
+          }
+          if (kept[index] >= keep) continue;
+          const retImm: number = encoding[encoding.length - 1] === 0xc3 ? 0 : bytes[i + encoding.length - 2] | (bytes[i + encoding.length - 1] << 8);
+          const terminator = i + encoding.length - (retImm === 0 ? 1 : 3);
+          const insns = tryDecodeSequence(bytes, i, terminator, 6);
+          if (!insns || (retImm === 0 && bytes[terminator] !== 0xc3) || (retImm !== 0 && retImm > 0x1000)) continue;
+          kept[index] += 1;
+          result.hits.push({ encoding: index, address, mnemonic: [...insns.map((insn) => insn.mnemonic), retImm ? `ret ${formatHex(retImm)}` : "ret"].join(" ; ") });
+        }
+      }
+    }
+  }
+  return result;
+}

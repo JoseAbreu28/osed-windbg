@@ -4,6 +4,7 @@
  * real call. tests/explain.test.ts fails when a command has no entry or a placeholder is unknown.
  */
 import { badcharSlotArgs } from "../analysis/badchar_scan";
+import { depPlanArgs } from "../commands/dep_plan";
 
 export type ExplainArg = {
   name: string;
@@ -473,24 +474,28 @@ export const EXPLANATIONS: ExplainEntry[] = [
   {
     name: "dep_plan",
     summary: "Whole DEP bypass discovery in seven sections",
-    what: "Runs the discovery for a <api> DEP bypass from <module> in one go, in the <style> style, and prints each step under its own [n/7] header.",
-    how: "Calls the existing commands in order: modules for <module>, sc.iat_find for <api>, rop.scan_live with <badchars>, dep_candidates to pick one gadget per job that keeps the registers the chain still needs, rop.construct for each constant, code_caves for writable and executable addresses, then dep_function in the <style> style, and last a Python draft. The draft fills in the [4/7] pick per job, marks with TODO the moves a pick needs and the distances only a debugger run can give, with the bp and dd commands that measure them.",
+    what: "Decides from what the debugger can see whether a DEP chain is needed, which modules can give gadgets, which API to call and how to reach its address, and which style the gadgets support, then prints each step under its own [n/7] header. Given only <badchars> it chooses all of that itself.",
+    how: "First it reads the system DEP policy at 0x7FFE02D5, the executable's NX_COMPAT flag and its Exploit Protection setting; the stack's page protection cannot say, because the stack is PAGE_READWRITE with DEP on or off. With DEP off it hands over a clean jmp esp and stops. Then it keeps every module without ASLR whose fixed high bytes are clean, takes the API's IAT slot from a module that does not move, or else the slot of another kernel32 export plus the distance to the API, measured now, and scans the modules to the end. A job no scan filled is searched for in every byte of the modules before anything is called absent. Both styles are solved, and the run ends on a chain or on one line naming the layer that failed: module, API or method.",
     when: "Later labs and the exam, once you know the method by hand and want every piece on one screen. Verify the draft field by field before you trust it.",
+    positional: depPlanArgs,
     args: [
-      { name: "api", meaning: "DEP bypass API.", values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into a code cave." } },
-      { name: "module", meaning: "Module without ASLR that supplies the gadgets and the IAT slot." },
-      BADCHARS("Bytes the target corrupts or cuts, as one hex string such as \"00 0A 0D\". Every address and constant is checked against them.", "none"),
-      { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "registers loaded, then one PUSHAD writes the frame." } },
+      { name: "api", meaning: "DEP bypass API, or \"\" to let the tool choose.", optional: true, values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into a code cave." } },
+      { name: "module", meaning: "Modules without ASLR that supply the gadgets, comma separated, or \"\" for every one that can.", optional: true },
+      BADCHARS("Bytes the target corrupts or cuts, as one hex string such as \"00 0A 0D\". Every address and constant is checked against them. Passed alone, it is the whole call.", "none"),
+      { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "registers loaded, then one PUSHAD writes the frame.", auto: "the style the gadgets support, the skeleton first." } },
+      { name: "firstStage", meaning: "The number of the next free payloadN() in your file.", optional: true, default: "1", kind: "number" },
+      { name: "exclude", meaning: "Gadget addresses the chain must not use, in hex.", optional: true },
+      { name: "anyway", meaning: "Build the chain even when DEP is off, as an exercise.", optional: true, default: "false" },
     ],
-    example: "dx @$osed().dep_plan(\"VirtualAlloc\", \"libbkup\", \"00 09 0A 0B 0C 0D 20\")",
-    output: "Seven sections: [1/7] module protections, [2/7] IAT slot, [3/7] gadget corpus, [4/7] the gadget picked per job, the ones rejected above it and why, and the alternatives, [5/7] clean recipes for the constants and the writable or cave addresses, [6/7] the frame or PUSHAD map, [7/7] a Python draft with TODO lines to measure.",
-    report: "Ran dep_plan for <api> from <module> with bad characters <badchars> in the <style> style, then verified each field of the draft in WinDbg before using it.",
+    example: "dx @$osed().dep_plan(\"00 09 0A 0B 0C 0D 20\")",
+    output: "Whether DEP is on and why, then seven sections: [1/7] module protections and the modules chosen, [2/7] the IAT slot or the neighbour and distance, [3/7] gadget corpus, [4/7] the gadget picked per job, what was rejected and why, and what searching the module showed for a job no scan filled, [5/7] clean recipes for the constants, [6/7] the frame or PUSHAD map, [7/7] a Python draft. The last line is the verdict, or the layer that failed.",
+    report: "Ran dep_plan with bad characters <badchars>; it chose <api> from <module> in the <style> style, and each field of the draft was verified in WinDbg before use.",
   },
   {
     name: "dep_candidates",
     summary: "The gadget picked for each DEP chain job, and why",
     what: "Picks, for each job of a <style> DEP chain, the gadget from <module> with the fewest side effects that keeps every register the chain still needs, the same list as step [4/7] of dep_plan.",
-    how: "Scans <module> for gadgets whose address holds no byte from <badchars>, keeps for each job the gadgets that do it, and sorts them by fewest side effects, then the smallest stack move. Walking the jobs in chain order, it rejects a gadget that writes a register still holding the captured ESP, the field address, the value to write or an already loaded pushad register, and picks the first one left. After each gadget it lists the registers it changes, how far it moves ESP, extra pops, a ret N and memory writes. A gadget that moves ESP only counts for the pivot job. The pushad style also runs find_bytes for jmp esp and call esp. It scans on its own and leaves the loaded corpus as it was.",
+    how: "Scans <module> for gadgets whose address holds no byte from <badchars>, keeps for each job the gadgets that do it, and sorts them by fewest side effects, then the smallest stack move. Walking the jobs in chain order, it rejects a gadget that writes a register still holding the captured ESP, the field address, the value to write or an already loaded pushad register, and picks the first one left. After each gadget it lists the registers it changes, how far it moves ESP, extra pops, a ret N and memory writes. A gadget that moves ESP only counts for the pivot job. A job no gadget fills is searched for in every byte of the modules before it is called absent, and when the other style needs no such gadget it says so. The pushad style also runs find_bytes for jmp esp and call esp. It uses the loaded corpus when that is a complete scan of the same modules for the same bad chars, and otherwise scans on its own and leaves the loaded corpus as it was.",
     when: "DEP bypass, to pick the gadget for each step of the chain, or to repeat step [4/7] of dep_plan on its own.",
     args: [
       { name: "module", meaning: "Module without ASLR that supplies the gadgets." },
@@ -515,7 +520,7 @@ export const EXPLANATIONS: ExplainEntry[] = [
       { name: "append", meaning: "true keeps the current corpus and adds to it.", optional: true, default: "false" },
       { name: "maxPerPattern", meaning: "Cap on gadgets kept per pattern.", optional: true, kind: "number" },
       { name: "maxInstructionsPerGadget", meaning: "Longest gadget, 1 to 12 instructions.", optional: true, default: "6", kind: "number" },
-      { name: "maxBackwardGadgets", meaning: "Cap on the backward scan.", optional: true, default: "10000", kind: "number" },
+      { name: "maxBackwardGadgets", meaning: "Cap on the backward scan. The default is the ceiling, so the scan covers the whole module unless you lower it.", optional: true, default: "100000", kind: "number" },
     ],
     example: "dx @$osed().rop.scan_live(\"libspp.dll\", \"00 0A 0D\")",
     output: "The summary counts the gadgets kept and says whether the backward scan finished or hit its cap.",

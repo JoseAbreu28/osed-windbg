@@ -68,7 +68,9 @@ export function discoverLiveGadgets(options: LiveDiscoveryOptions = {}): LiveDis
   const seenAddresses = new Set(hits.map((h) => h.address.toString()));
   const backward = scanBackward({
     module: options.module,
-    maxResults: Math.min(Math.max(Math.floor(options.maxBackwardGadgets ?? 10000), 1), 100000),
+    // The scanner's own ceiling, not a budget. On the lab clone kernelbase's 2 MB of code scans fully in
+    // about 90 s; the old default of 10000 took 86 s there and stopped halfway, hiding half the module.
+    maxResults: Math.min(Math.max(Math.floor(options.maxBackwardGadgets ?? 100000), 1), 100000),
     maxInstructionsPerGadget: Math.min(Math.max(Math.floor(options.maxInstructionsPerGadget ?? 6), 1), 12),
     maxBackwardBytes: 12,
   });
