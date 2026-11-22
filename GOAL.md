@@ -78,6 +78,73 @@ shape it adds, not just that it was added.
 4. Re-run the whole corpus. No regressions.
 5. Append what was learned, with the evidence, so the next agent does not rediscover it.
 
+## The harness
+
+`tools/harness/run_corpus.py` does step 1. The manifest it reads, the per-target protocol adapters
+and every result live outside this repository, because they name course labs; the runner takes the
+manifest path as its argument:
+
+    py -3.12 tools/harness/run_corpus.py <manifest.json> [--only NAME ...] [--ref] [--out DIR]
+
+Per target it starts the program on the lab clone (and refuses any other VM), attaches cdb x86 by PID,
+loads `dist/osed-legacy.js`, sends the target's own crash input, and runs `dep_plan(badchars, 1)` with
+nothing else. The transcript is kept verbatim. It then pastes the copy blocks of `[1/7]` to `[7/7]`
+under `OFFSET` and `BADCHARS` into one file, puts a marker shellcode where `[7/7]` leaves its shellcode
+hole, runs the file, and fires the payload at a fresh copy of the target under cdb with a breakpoint on
+each DEP API. Pass is observed, never read off the chain: the marker file appeared. Short of that it
+records whether the chain reached an API and where the process faulted. `--ref` fires the lab's own
+reference exploit instead, which grades the target rather than the tool.
+
+The manifest's `holdout` list names the targets kept back for the readiness call. The runner refuses
+them by that list, and refuses a manifest without one, so their names never enter this public repo.
+
+The screenshot rule is `src/core/screenshot_rule.ts`. `tests/screenshot_rule.test.ts` pins one check
+per clause and a ratchet over the fixture output; the harness runs the same module on every real
+capture. The budget is 40 rows and 130 columns per section. The guides draw the command pane in 15 px
+Consolas with a 7 px gap, 22 px a row (`lab/v2/guides/Workflows/headless.py`), and a 1080 px screen
+leaves about 880 px of pane under the title bar, the ribbon and the input line. The same renderer
+clamps a figure to 130 columns and cuts every longer line there, so a character past 130 never reaches
+a guide. Rows count the evidence above the separator; columns count every line, the copy block too,
+because the editor figures photograph it at the same font.
+
+## Corpus run, 2026-11-23, measured at `6b0a8ef`
+
+`dist/osed-legacy.js` sha256 `607b9550f1349a7690e983923af2cf7f21ec595919dffbf9fb8d5aa5b84c7902`, on the
+lab clone. Targets are listed by id; the manifest outside this repo maps each id to its lab. The three
+holdout targets were not run, opened or read. Every class A target was given only its bad chars and stage
+1. Nothing passed.
+
+Ranked by size of honest failure: a silent wrong answer first, then a wrong verdict, then an incomplete
+exit. Nothing was slow: `dep_plan` finished in 30 to 70 seconds per target in the engine, and Sync Breeze's
+368 seconds are service restarts and a second fire.
+
+| Rank | Target | Shape | What happened | Where it stopped | Whose |
+|---|---|---|---|---|---|
+| 1 | T01, T02, T04, T09 | skeleton style, VirtualAlloc, exe or dll at a fixed base | `[7/7]` says the only hole is the shellcode. The file runs and the payload carries `0x00000014`, which is three `00` bytes, from `c.rop(POP_ECX, neg(-20))` in the pivot. The value is static and never checked against the bad chars. The string copy stops there. | payload: bad char, then a fault in the cut chain | tool. T02's own reference also fails on the clone, so T02 alone does not separate tool from target |
+| 2 | Sync Breeze (T12) | pushad, VirtualAlloc by a kernel32 distance | `[7/7]` says the only hole is the shellcode. The vulnerable function returns with `ret 4`, so ESP lands at OFFSET + 8, and the chain assumes OFFSET + 4: every value is popped one dword late. Even so it reached the pushad with dwSize, flAllocationType and flProtect right and ESI wrong (`QueryDosDeviceA+4`). With 4 junk bytes after the EIP dword and nothing else changed, **the marker landed**. A diagnostic, not a pass: nothing told the user to add them. The crash state shows the gap, so the tool could. | chain, misaligned by the target's `ret 4` | tool |
+| 3 | T07 | pushad, VirtualAlloc; the overwrite is a job pointer, not a saved EIP | `[7/7]` says the only hole is the shellcode. The payload puts the chain where the pointer is, so it faults at `0x0040126C` before any gadget runs. | chain, never reached | tool. The reference also fails on the clone, so the target is unverified |
+| 4 | T03, T05 | exe only (T03); two fixed modules (T05) | Refuses at the method layer: "the skeleton style lacks negate, and the pushad style lacks pop eax. Each was searched for in every byte of it." The gadgets exist at clean addresses and the reference uses them: `neg eax ; ret` and `xchg ecx, eax ; ret` at `0x6C91164C` and `0x6C911649` in T03, and `pop eax ; pop ebp ; ret` and `neg eax ; pop ebp ; ret` at `0x6E2C85F9` and `0x6E2D47E6` in T05. `[4/7]` itself lists `neg eax ; pop ebp ; ret` and rejects it because EAX still holds the field address in that recipe. The absence claimed is the recipe's register order, not the module. | dep_plan, method layer | tool |
+| 5 | T06, T08, T10 | WriteProcessMemory in the reference; eight bad chars (T06), a short offset (T08), three offsets in play (T10) | Refuses at the method layer: the skeleton style lacks "copy a register" and the pushad style lacks several pops and `pushad ; ret`. Each reference exploits the target on the clone with a chain that needs no register copy, so a chain exists that the tool's one skeleton recipe cannot express. | dep_plan, method layer | tool |
+| 6 | T13, T15 | class B: nothing at a fixed base | Refuses correctly ("the module layer fails: no loaded module can give gadgets: every one has ASLR") but never names the leak as the next step. | dep_plan, module layer | tool: the exit is honest but incomplete |
+| - | T11 | two fixed modules, unfinished lab | Not attempted. A 1200 byte cyclic pattern faults inside its dll at `0x63C80D80` before any return reads the pattern (`findmsp`: EIP does not hold pattern bytes), and the lab has no solution to say where EIP is reachable. | no offset | target |
+| - | T14 | class B | Not attempted: not built, no reference. | no build | target |
+
+The reference exploits, fired by `--ref` on the same clone, land their marker on T01, T03, T04, T05, T06,
+T08, T09, T10, T13 and T15, and fail on T02 and T07. Sync Breeze, T11 and T14 have no reference.
+
+Every route the tool chose, against the API each reference used. T05 matched (VirtualProtect), and so did T07
+(VirtualAlloc). T06 and T10 matched (WriteProcessMemory) and still refused. T02, T04, T08 and T09 got
+VirtualAlloc where their references used VirtualProtect or WriteProcessMemory. T01, T03 and Sync Breeze are
+open to all three.
+
+The screenshot rule on the 13 real transcripts. `[5/7]` is past 40 rows in 9 of them, and prints Python
+above the separator in 10. `[6/7]` prints Python above the separator in 8, all of them skeleton runs.
+Those are the two violations already recorded below, and the harness flags both. It also found ones this
+file did not list. `[4/7]` is past 40 rows in 11 (79 on Sync Breeze). `[1/7]` is 58 rows and has 53 lines
+past 130 columns on Sync Breeze. The echoed first line says `"auto"` for the style in all 6 runs that
+built a chain: it prints before the style is chosen. Every run has a line past 130 columns somewhere, the
+widest 368 characters (T05).
+
 ## Known gaps, newest first
 
 - ~~Register loading follows one recipe, compute in EAX then move, instead of searching for a path.~~
