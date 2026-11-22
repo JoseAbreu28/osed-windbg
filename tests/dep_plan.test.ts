@@ -363,6 +363,30 @@ describe("dep_plan", () => {
     expect(negate).not.toContain("!! every candidate for this job");
   });
 
+  // pop ebp ; add esp, 0x1008 ; ret 0x4 does pop ebp, and swapping it in adds four kilobytes of junk.
+  const FAR_POP_EBP: [number, number[]] = [0x1381, [0x5d, 0x81, 0xc4, 0x08, 0x10, 0x00, 0x00, 0xc2, 0x04, 0x00]];
+  const NEAR_POP_EBP: [number, number[]] = [0x1391, [0x5d, 0xc2, 0x04, 0x00]];
+
+  test("a gadget that takes a frame of stack is no drop-in swap, while a near one is", () => {
+    const fresh = loadApi({ extra: [FAR_POP_EBP, NEAR_POP_EBP] });
+    fresh.dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad");
+    const output = text();
+    expect(output.slice(output.indexOf("  pop ebp"), output.indexOf("  pop ebx"))).toContain("0x11111381");
+    const table = blocksOf(output)[2];
+    expect(table.some((line) => /^# POP_EBP.*= 0x11111391 .*drop-in swap/.test(line)), table.join("\n")).toBe(true);
+    expect(table.join("\n")).not.toContain("0x11111381");
+  });
+
+  test("a frame-sized move wins a job only when nothing else does it, and says what it costs", () => {
+    const fresh = loadApi({ extra: [[0x1381, [0x5f, 0x81, 0xc4, 0x08, 0x10, 0x00, 0x00, 0xc3]]] }); // pop edi ; add esp, 0x1008 ; ret
+    fresh.dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad", 1, "11111211");
+    const output = text();
+    const job = output.slice(output.indexOf("  pop edi"), output.indexOf("  pop eax"));
+    expect(job).toMatch(/> 0x11111381 {2}pop edi ; add esp, 0x1008 ; ret/);
+    expect(job).toContain("!! every usable candidate for this job takes more than 0x40 bytes of stack");
+    expect(blocksOf(output)[2].find((line) => line.startsWith("POP_EDI"))).toContain("<<< takes 0x100c bytes of stack");
+  });
+
   test("warns only about base bytes that every address in the module shares", () => {
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
     expect(text()).toContain("libbkup.dll spans 0x11110000 to 0x11114FFF: no ASLR, and its fixed high bytes are clean.");

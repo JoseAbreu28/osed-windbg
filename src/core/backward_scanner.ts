@@ -302,9 +302,10 @@ function isPatternScannerGadget(mnemonic: string): boolean {
   return false;
 }
 
-function hasUsefulEffect(insns: DecodedInsn[]): boolean {
+// The pattern scanner finds `X ; ret` only, so a lone pop before `ret N` is this scanner's to keep.
+function hasUsefulEffect(insns: DecodedInsn[], retImm: number): boolean {
   if (insns.every((insn) => insn.mnemonic === "nop")) return false;
-  if (insns.length === 1 && isPatternScannerGadget(insns[0].mnemonic)) return false;
+  if (insns.length === 1 && retImm === 0 && isPatternScannerGadget(insns[0].mnemonic)) return false;
   return true;
 }
 
@@ -402,7 +403,7 @@ export function scanBackward(options: BackwardScanOptions): {
           const candidateStart = termStart - back;
           const insns = tryDecodeSequence(bytes, candidateStart, termStart, maxInsns);
           if (!insns || insns.length === 0) continue;
-          if (!hasUsefulEffect(insns)) continue;
+          if (!hasUsefulEffect(insns, retImm)) continue;
           if (!isSequentialRetChain(insns.map((insn) => insn.mnemonic))) {
             nonSequentialRejected++;
             continue;

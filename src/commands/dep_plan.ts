@@ -206,10 +206,28 @@ export function dereferencedRegisters(gadget: RopGadget, own: string): string[] 
   return found;
 }
 
+/** Above this many bytes of stack beyond its ret, a gadget is releasing a function's local frame, not
+ * doing a job: `pop ebp ; add esp, 0x1008 ; ret 0x4` pads 1026 junk dwords into the payload. Every gadget
+ * in libbkup's corpus stays at 0x34 or under, so the line sits between the two kinds. */
+export const LARGE_STACK_MOVE = 0x40;
+
+/** Bytes of stack the gadget takes beyond its own ret, when the semantics know it exactly. */
+export function stackMove(gadget: RopGadget): number | undefined {
+  const deltas = [...gadget.semanticSummary.summary.stackDelta.values.exact];
+  return deltas.length === 1 ? Number(deltas[0]) - 4 : undefined;
+}
+
+export function movesStackFar(gadget: RopGadget, job: Job): boolean {
+  const move = stackMove(gadget);
+  return job.key !== "pivot" && move !== undefined && move > LARGE_STACK_MOVE;
+}
+
 export type Verdict = {
   gadget: RopGadget;
   at: Ports;
   usable: boolean;
+  /** It takes more than LARGE_STACK_MOVE bytes of stack, so using it grows the payload by that much. */
+  far: boolean;
   move?: string;
   /** Registers it dereferences that nothing in the chain has pointed anywhere by this job. */
   uncontrolled: string[];
@@ -312,26 +330,33 @@ export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle
       const leads = own !== "" && own === gadget.instructions[0]?.normalizedText;
       const controlled = [...pointed, at.address].filter((register): register is string => register !== undefined);
       const uncontrolled = dereferencedRegisters(gadget, own).filter((register) => controlled.indexOf(register) < 0);
-      const note = uncontrolled.length > 0
+      const far = movesStackFar(gadget, job);
+      const note = (uncontrolled.length > 0
         ? `; reads through ${uncontrolled.join(", ")}, which nothing in the chain has pointed anywhere yet`
-        : "";
+        : "") + (far ? `; takes 0x${(stackMove(gadget) ?? 0).toString(16)} bytes of stack, all of it junk in the payload` : "");
       const rejected = rejection(gadget, job, at, live, bound);
-      if (rejected) return { gadget, at, usable: false, uncontrolled, leads, reason: rejected };
+      if (rejected) return { gadget, at, usable: false, far, uncontrolled, leads, reason: rejected };
       const needed = moves(job, at, bound);
       if (needed.length > 0) {
         const back = readsOf(job).some((role) => later.indexOf(role) >= 0) ? ", and back after" : "";
         const move = `${needed.join(", ")} first${back}`;
-        return { gadget, at, usable: true, move, uncontrolled, leads, reason: `move ${move}${note}` };
+        return { gadget, at, usable: true, far, move, uncontrolled, leads, reason: `move ${move}${note}` };
       }
-      return { gadget, at, usable: true, uncontrolled, leads, reason: `${exactReason(gadget, job, at, live, bound)}${note}` };
+      return { gadget, at, usable: true, far, uncontrolled, leads, reason: `${exactReason(gadget, job, at, live, bound)}${note}` };
     });
     // A gadget that dereferences a register nothing points anywhere faults at run time however clean it
-    // looks, so it never wins while a candidate without that property exists.
-    const safe = (verdict: Verdict): boolean => verdict.uncontrolled.length === 0;
-    const pick = verdicts.filter((verdict) => verdict.usable && !verdict.move && safe(verdict))[0]
-      ?? verdicts.filter((verdict) => verdict.usable && safe(verdict))[0]
-      ?? verdicts.filter((verdict) => verdict.usable && !verdict.move)[0]
-      ?? verdicts.filter((verdict) => verdict.usable)[0];
+    // looks, and one that takes kilobytes of stack can push the payload past the space the overflow gives,
+    // so neither wins while a candidate without that property exists.
+    const tiers: Array<(verdict: Verdict) => boolean> = [
+      (verdict) => !verdict.move && verdict.uncontrolled.length === 0 && !verdict.far,
+      (verdict) => verdict.uncontrolled.length === 0 && !verdict.far,
+      (verdict) => !verdict.move && verdict.uncontrolled.length === 0,
+      (verdict) => verdict.uncontrolled.length === 0,
+      (verdict) => !verdict.move,
+      () => true,
+    ];
+    const usable = verdicts.filter((verdict) => verdict.usable);
+    const pick = tiers.map((tier) => usable.filter(tier)[0]).filter((verdict) => verdict !== undefined)[0];
     const sets = job.flow.sets;
     if (pick && sets) {
       const register = ports(pick.gadget, job)[sets.port];
@@ -393,7 +418,10 @@ export function planLines(plan: JobPlan): string[] {
   if (pick && pick.uncontrolled.length > 0) {
     lines.push(`      !! every candidate for this job reads through ${pick.uncontrolled.join(", ")}. Point ${pick.uncontrolled.join(" and ")} at readable memory before this gadget runs, or the chain dies here.`);
   }
-  else lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
+  if (pick && pick.far) {
+    lines.push(`      !! every usable candidate for this job takes more than 0x${LARGE_STACK_MOVE.toString(16)} bytes of stack. This one grows the payload by 0x${(stackMove(pick.gadget) ?? 0).toString(16)} bytes of junk: check the overflow has room for it.`);
+  }
+  if (!pick) lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
   for (const verdict of after) lines.push(...line(verdict, " ", "usable"));
   return lines;
 }

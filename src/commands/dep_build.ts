@@ -2,7 +2,7 @@ import { CapabilityIndex } from "../rop/capabilities";
 import { rankCandidates } from "../rop/emitter";
 import { RopGadget } from "../rop/types";
 import { ValueRecipe } from "../rop/value_solver";
-import { DepPlanStyle, JobPlan, Verdict, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, writtenRegisters } from "./dep_plan";
+import { DepPlanStyle, JobPlan, LARGE_STACK_MOVE, Verdict, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, stackMove, writtenRegisters } from "./dep_plan";
 import { DepApi } from "./rop_template";
 
 // Where each argument of the call comes from. One list of slots per API serves both styles: the skeleton
@@ -113,6 +113,7 @@ const REGISTERS = ["eax", "ecx", "edx", "ebx", "esi", "edi", "ebp"];
 const hex = (value: number): string => hex32(value);
 const isClean = (value: number, bad: number[]): boolean => [0, 8, 16, 24].every((shift) => bad.indexOf((value >>> shift) & 0xff) < 0);
 const ident = (name: string): string => name.replace(/[^A-Za-z0-9]/g, "_").toLowerCase();
+const far = (gadget: RopGadget): boolean => !movesEsp(gadget) && (stackMove(gadget) ?? 0) > LARGE_STACK_MOVE;
 const ownsEsp = (operands: string[], mnemonic: string): boolean =>
   operands[0] === "esp" || mnemonic === "leave" || (mnemonic === "xchg" && operands.indexOf("esp") >= 0);
 
@@ -210,8 +211,9 @@ export function buildExploit(input: BuildInput): Build {
   const pick = (key: string): Verdict | undefined => input.plans.filter((plan) => plan.job.key === key)[0]?.pick;
 
   // Alternatives that swap in by moving the comment marker: same job, same registers, no move needed,
-  // and nothing the chain cannot point anywhere. A candidate rejected for clobbering a live register is
-  // not a fallback, it is a trap, so it never appears here.
+  // nothing the chain cannot point anywhere, and no frame-sized stack move that would silently grow the
+  // payload. A candidate rejected for clobbering a live register is not a fallback, it is a trap, so it
+  // never appears here.
   const swapsFor = (address: number, loads: number): Swap[] => {
     const plan = input.plans.filter((candidate) => candidate.pick && gadgetAddress(candidate.pick.gadget) === address)[0];
     if (!plan || !plan.pick) return [];
@@ -224,7 +226,7 @@ export function buildExploit(input: BuildInput): Build {
       && verdict.at.address === chosen.at.address && (verdict.at.offset ?? 0) === (chosen.at.offset ?? 0);
     return plan.verdicts
       .slice(plan.verdicts.indexOf(chosen) + 1)
-      .filter((verdict) => verdict.usable && !verdict.move && verdict.uncontrolled.length === 0
+      .filter((verdict) => verdict.usable && !verdict.move && verdict.uncontrolled.length === 0 && !verdict.far
         && verdict.leads && chosen.leads && sameAt(verdict)
         && input.exclude.indexOf(gadgetAddress(verdict.gadget)) < 0)
       .slice(0, 2)
@@ -275,16 +277,20 @@ export function buildExploit(input: BuildInput): Build {
     && memoryWrites(gadget, "").length === 0
     && writtenRegisters(gadget).every((register) => own.indexOf(register) >= 0 || keep.indexOf(register) < 0);
 
-  const popGadget = (register: string, keep: string[]): RopGadget | undefined => rankCandidates(gadgets.filter((gadget) => {
+  // The ranking puts fewer side effects before a smaller stack move, so a frame-sized move can still rank
+  // first; it only wins when nothing else does the job.
+  const near = (ranked: RopGadget[]): RopGadget[] => [...ranked.filter((gadget) => !far(gadget)), ...ranked.filter(far)];
+
+  const popGadget = (register: string, keep: string[]): RopGadget | undefined => near(rankCandidates(gadgets.filter((gadget) => {
     const first = gadget.instructions[0];
     return first?.mnemonic === "pop" && first.operands[0]?.trim().toLowerCase() === register && usable(gadget, keep, [register]);
-  }))[0];
+  })))[0];
 
-  const moveGadget = (from: string, to: string, keep: string[]): RopGadget | undefined => rankCandidates(gadgets.filter((gadget) =>
+  const moveGadget = (from: string, to: string, keep: string[]): RopGadget | undefined => near(rankCandidates(gadgets.filter((gadget) =>
     gadget.capabilities.some((capability) =>
       (capability.kind === "MOVE_REGISTER" && capability.register === to && capability.targetRegister === from)
       || (capability.kind === "EXCHANGE_REGISTER" && [capability.register, capability.targetRegister].sort().join() === [from, to].sort().join()))
-    && holds(gadget, to, from) && usable(gadget, keep, keep.indexOf(from) >= 0 ? [to] : [to, from])))[0];
+    && holds(gadget, to, from) && usable(gadget, keep, keep.indexOf(from) >= 0 ? [to] : [to, from]))))[0];
 
   // A move through at most one other register, so a value reaches the register a gadget reads.
   const moveOps = (from: string, to: string, keep: string[]): Op[] | undefined => {
@@ -360,10 +366,10 @@ export function buildExploit(input: BuildInput): Build {
   // register += a distance popped into another register that `keep` does not need.
   const arithmetic = (register: string, keep: string[]): { pop: Entry; op: Entry; sub: boolean } | undefined => {
     for (const kind of ["REGISTER_SUB", "REGISTER_ADD"]) {
-      const options = rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability) =>
+      const options = near(rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability) =>
         capability.kind === kind && capability.register === register && REGISTERS.indexOf(capability.targetRegister ?? "") >= 0
         && capability.targetRegister !== register && keep.indexOf(capability.targetRegister ?? "") < 0)
-        && usable(gadget, keep, [register])));
+        && usable(gadget, keep, [register]))));
       for (const gadget of options) {
         const by = gadget.capabilities.filter((capability) => capability.kind === kind && capability.register === register)[0].targetRegister ?? "";
         const pop = popGadget(by, keep.concat(register));
@@ -581,7 +587,8 @@ export function buildExploit(input: BuildInput): Build {
       3: CORPUS_BLOCK,
       4: { lines: [
         ...table.flatMap((entry) => [
-          `${entry.name.padEnd(width)} = ${hex(entry.address)}   # ${entry.sequence}${warnings[entry.address] ? `   <<< ${warnings[entry.address]}` : ""}`,
+          `${entry.name.padEnd(width)} = ${hex(entry.address)}   # ${entry.sequence}${warnings[entry.address] ? `   <<< ${warnings[entry.address]}`
+            : byAddress[entry.address] && far(byAddress[entry.address]) ? `   <<< takes 0x${(stackMove(byAddress[entry.address]) ?? 0).toString(16)} bytes of stack: c.rop pads that much junk into the payload` : ""}`,
           ...swapsFor(entry.address, entry.loads).map((swap) =>
             `# ${entry.name.padEnd(width - 2)} = ${hex(swap.address)}   # ${swap.sequence}   drop-in swap, ranked lower: ${swap.why}`),
         ]),
