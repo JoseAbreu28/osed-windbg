@@ -51,7 +51,28 @@ const GADGETS: Array<[number, number[]]> = [
   [0x1361, [0xf7, 0xdf, 0xc3]], // neg edi ; ret  (ranks above neg eax ; pop ebp, but edi holds the field address)
 ];
 
-function installHost(): void {
+const ascii = (text: string): number[] => Array.from(text).map((char) => char.charCodeAt(0));
+const DEP_APIS = ["VirtualAlloc", "VirtualProtect", "WriteProcessMemory"];
+const MOVED = BigInt(0x22220000);
+
+/** A one-descriptor import directory for KERNEL32, so sc.iat_find has a slot per symbol. */
+function writeImports(image: Uint8Array, peOffset: number, base: bigint, symbols: string[]): void {
+  const [directory, int, iat, dllName, names] = [0x3000, 0x3020, 0x3040, 0x3100, 0x3200];
+  writeUint32LE(image, peOffset + 0x18 + 0x60 + 0x8, directory);   // data directory [1], the import table
+  writeUint32LE(image, peOffset + 0x18 + 0x60 + 0xc, 0x28);
+  writeUint32LE(image, directory + 0x0, int);                      // OriginalFirstThunk
+  writeUint32LE(image, directory + 0xc, dllName);                  // Name
+  writeUint32LE(image, directory + 0x10, iat);                     // FirstThunk, the slots themselves
+  image.set(ascii("KERNEL32.dll"), dllName);
+  symbols.forEach((symbol, i) => {
+    writeUint32LE(image, int + i * 4, names + i * 0x20);
+    writeUint32LE(image, iat + i * 4, Number(base) + 0x1111);      // resolved target, inside .text
+    image.set(ascii(symbol), names + i * 0x20 + 2);                // after the two-byte hint
+  });
+}
+
+/** One mapped module: a PE32 image with a .text section, optionally ASLR and an import table. */
+function peImage(base: bigint, options: { aslr?: boolean; imports?: string[]; gadgets?: boolean }): Uint8Array {
   const image = new Uint8Array(0x5000);
   const peOffset = 0x80;
   const sectionTable = peOffset + 0x18 + 0xe0;
@@ -60,30 +81,51 @@ function installHost(): void {
   writeUint32LE(image, peOffset, 0x4550);
   writeUint16LE(image, peOffset + 0x6, 1);
   writeUint16LE(image, peOffset + 0x14, 0xe0);
-  image.set(Array.from(".text").map((char) => char.charCodeAt(0)), sectionTable);
+  writeUint16LE(image, peOffset + 0x18, 0x10b);                     // PE32 optional header, or the parser refuses it
+  writeUint32LE(image, peOffset + 0x18 + 0x1c, Number(base));       // ImageBase, so nothing reads this as relocated
+  if (options.aslr) writeUint16LE(image, peOffset + 0x5e, 0x0040);  // DllCharacteristics DYNAMIC_BASE
+  image.set(ascii(".text"), sectionTable);
   writeUint32LE(image, sectionTable + 0x8, 0x2000);
   writeUint32LE(image, sectionTable + 0xc, 0x1000);
   writeUint32LE(image, sectionTable + 0x24, 0x60000020);
-  for (const [offset, bytes] of GADGETS) image.set(bytes, offset);
+  if (options.gadgets !== false) for (const [offset, bytes] of GADGETS) image.set(bytes, offset);
+  if (options.imports && options.imports.length > 0) writeImports(image, peOffset, base, options.imports);
+  return image;
+}
+
+/** `imports`: what libbkup imports. `movable`: a second module, with ASLR, importing these. */
+function installHost(options: { imports?: string[]; aslr?: boolean; movable?: string[] } = {}): void {
+  const image = peImage(BASE, { aslr: options.aslr, imports: options.imports ?? DEP_APIS });
+  const moved = options.movable ? peImage(MOVED, { aslr: true, imports: options.movable, gadgets: false }) : undefined;
+  const mapped: Array<{ name: string; base: bigint; image: Uint8Array }> = [{ name: "libbkup.dll", base: BASE, image }];
+  if (moved) mapped.push({ name: "movable.dll", base: MOVED, image: moved });
 
   (globalThis as unknown as { host: unknown }).host = {
     diagnostics: { debugLog: (line: string) => logs.push(line) },
     currentProcess: {
       Is64Bit: false,
-      Modules: [{ Name: "libbkup.dll", Path: "C:\\labs\\libbkup.dll", BaseAddress: BASE, EndAddress: BASE + BigInt(image.length), Size: image.length }],
+      Modules: mapped.map((entry) => ({
+        Name: entry.name,
+        Path: `C:\labs\${entry.name}`,
+        BaseAddress: entry.base,
+        EndAddress: entry.base + BigInt(entry.image.length),
+        Size: entry.image.length,
+      })),
     },
     memory: {
       readMemoryValues(address: bigint | number, length: number) {
-        const offset = Number(BigInt(address) - BASE);
-        if (offset < 0 || offset + length > image.length) throw new Error("out of range");
-        return Array.from(image.slice(offset, offset + length));
+        for (const entry of mapped) {
+          const offset = Number(BigInt(address) - entry.base);
+          if (offset >= 0 && offset + length <= entry.image.length) return Array.from(entry.image.slice(offset, offset + length));
+        }
+        throw new Error("out of range");
       },
     },
   };
 }
 
-function loadApi(): Api {
-  installHost();
+function loadApi(options: { imports?: string[]; aslr?: boolean; movable?: string[] } = {}): Api {
+  installHost(options);
   initializeScript();
   logs.length = 0;
   return (globalThis as unknown as { osed: Api }).osed;
@@ -383,6 +425,62 @@ describe("dep_plan", () => {
     expect(section.slice(section.indexOf(call) + call.length + 1)).toBe(text().replace(/\n$/, ""));
     fresh.rop.query("capability", "MEMORY_READ");
     expect(fresh.last_result().success).toBe(false);
+  });
+
+  // The three ways a chain dies. They look alike from outside and each has a different fix, so each
+  // one names itself, stops the sections that would describe a call that cannot happen, and prints the
+  // one command that moves it forward.
+  test("no module imports the API: the sections about the call are skipped, and the fix is another API", () => {
+    const fresh = loadApi({ imports: [] });
+    fresh.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
+    const output = text();
+    expect(output).toContain("=== STOP: no VirtualAlloc chain from libbkup.dll ===");
+    expect(output).toContain("[-] Nothing in this process imports VirtualAlloc");
+    expect(output).toContain('[-] Next: dx @$osed().rop.generate("auto", "", "00 0A 0D", "libbkup")');
+    // The expensive half still prints: the module, the corpus and a gadget per job do not depend on the API.
+    for (const header of ["=== [1/7]", "=== [3/7]", "=== [4/7]"]) expect(output).toContain(header);
+    expect(output).toContain("push esp ; pop esi ; ret");
+    // The half that would describe the call does not.
+    expect(output).toContain("[-] Skipped: these are the arguments of a VirtualAlloc call this chain cannot make.");
+    expect(output).toContain("[-] Skipped: this is the frame of a VirtualAlloc call this chain cannot make.");
+    expect(output).toContain("[-] Skipped: there is no chain to write.");
+    expect(output).not.toContain("=== VirtualAlloc Python Call-Frame Skeleton ===");
+    expect(output).not.toContain("return payload");
+    // Loud at the point of failure and again at the end, because the first one scrolls away.
+    expect(output.split("=== STOP:").length - 1).toBe(2);
+    expect(fresh.last_result()).toMatchObject({ success: false });
+    expect(fresh.last_result().errors[0]).toContain("you change API, not module");
+  });
+
+  test("the only importer has ASLR: the fix is another importer, not another module", () => {
+    const fresh = loadApi({ imports: ["VirtualAlloc"], movable: ["WriteProcessMemory"] });
+    fresh.dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D");
+    const output = text();
+    expect(output).toContain("=== STOP: no WriteProcessMemory chain from libbkup.dll ===");
+    expect(output).toContain("every module that does has ASLR, starting with movable.dll");
+    expect(output).toContain('[-] Next: dx @$osed().sc.iat_find("WriteProcessMemory")');
+    expect(output).toContain("=== [4/7]");
+    expect(output).toContain("[-] Skipped: there is no chain to write.");
+  });
+
+  test("an importer without ASLR is preferred, so the ASLR stop does not fire when one exists", () => {
+    const fresh = loadApi({ imports: ["VirtualAlloc", "WriteProcessMemory"], movable: ["WriteProcessMemory"] });
+    fresh.dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D");
+    const output = text();
+    expect(output).not.toContain("=== STOP:");
+    expect(output).toContain("in libbkup.dll. The chain reads the API address from it");
+    expect(fresh.last_result()).toMatchObject({ success: true });
+  });
+
+  test("the gadget module has ASLR: this is the one case where the fix is another module", () => {
+    const fresh = loadApi({ aslr: true });
+    fresh.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
+    const output = text();
+    expect(output).toContain("=== STOP: no VirtualAlloc chain from libbkup.dll ===");
+    expect(output).toContain("[-] libbkup.dll has ASLR: every gadget address in it moves on each run");
+    expect(output).toContain("This is the one case where you change module.");
+    expect(output).toContain("[-] Next: dx @$osed().modules()");
+    expect(output).toContain("[-] Skipped: there is no chain to write.");
   });
 
   test.each([
