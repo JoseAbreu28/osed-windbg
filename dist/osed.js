@@ -1929,11 +1929,11 @@ var osed_bundle = (() => {
       return void 0;
     }
     const low = Number(raw & BigInt(4294967295));
-    const candidates3 = [
+    const candidates2 = [
       { kind: "msf", haystack: generateMsfPattern(Math.min(maxLen, 20280)) },
       { kind: "cyclic", haystack: generateCyclicPattern(Math.max(maxLen, 2e4)) }
     ];
-    for (const candidate of candidates3) {
+    for (const candidate of candidates2) {
       const needle = decodeOffsetNeedle(low);
       const offset = candidate.haystack.indexOf(needle);
       if (offset >= 0) {
@@ -1973,10 +1973,10 @@ var osed_bundle = (() => {
   }
   var TRIAGE_ASLR_TAIL_LIMIT = 6;
   function selectTriageModules(scored) {
-    const ranked = [...scored].sort((a, b) => b.score - a.score);
+    const ranked2 = [...scored].sort((a, b) => b.score - a.score);
     return [
-      ...ranked.filter((item) => item.aslr === "disabled"),
-      ...ranked.filter((item) => item.aslr !== "disabled").slice(0, TRIAGE_ASLR_TAIL_LIMIT)
+      ...ranked2.filter((item) => item.aslr === "disabled"),
+      ...ranked2.filter((item) => item.aslr !== "disabled").slice(0, TRIAGE_ASLR_TAIL_LIMIT)
     ];
   }
   function scanGadgets(pointerSize, moduleFilter) {
@@ -2759,20 +2759,20 @@ var osed_bundle = (() => {
     const v = value >>> 0;
     const lo = v & 255;
     const hi = v >>> 8 & 255;
-    const candidates3 = [];
-    if (v === 0) candidates3.push([49, 192]);
-    else if (v <= 127) candidates3.push([106, v, 88]);
-    else if (v <= 255) candidates3.push([49, 192, 176, v]);
-    else if (v <= 65535 && lo === 0) candidates3.push([49, 192, 180, hi]);
-    else if (v <= 65535) candidates3.push([49, 192, 102, 184, lo, hi]);
-    candidates3.push([184, ...dwordLE(v)]);
-    candidates3.push([184, ...dwordLE(~v >>> 0), 247, 208]);
-    return candidates3;
+    const candidates2 = [];
+    if (v === 0) candidates2.push([49, 192]);
+    else if (v <= 127) candidates2.push([106, v, 88]);
+    else if (v <= 255) candidates2.push([49, 192, 176, v]);
+    else if (v <= 65535 && lo === 0) candidates2.push([49, 192, 180, hi]);
+    else if (v <= 65535) candidates2.push([49, 192, 102, 184, lo, hi]);
+    candidates2.push([184, ...dwordLE(v)]);
+    candidates2.push([184, ...dwordLE(~v >>> 0), 247, 208]);
+    return candidates2;
   }
   function movEax(value, badSet) {
     var _a2;
-    const candidates3 = movEaxCandidates(value);
-    return (_a2 = candidates3.find((c) => c.every((b) => b !== 0 && !badSet.has(b)))) != null ? _a2 : candidates3[0];
+    const candidates2 = movEaxCandidates(value);
+    return (_a2 = candidates2.find((c) => c.every((b) => b !== 0 && !badSet.has(b)))) != null ? _a2 : candidates2[0];
   }
   function ntaccessX86(tag, mov) {
     return [
@@ -3850,7 +3850,7 @@ var osed_bundle = (() => {
     const evidence = semantic.instructionSemantics.flatMap((step) => step.evidence.length > 0 ? step.evidence : [step.instruction.normalizedText]);
     const instructionCount = semantic.instructionSemantics.length;
     const unsupportedCount = semantic.instructionSemantics.filter((step) => !step.supported).length;
-    const memoryWrites = semantic.summary.memoryWrites.values.exact.size + semantic.summary.memoryWrites.values.conservative.size;
+    const memoryWrites2 = semantic.summary.memoryWrites.values.exact.size + semantic.summary.memoryWrites.values.conservative.size;
     const memoryReads = semantic.summary.memoryReads.values.exact.size + semantic.summary.memoryReads.values.conservative.size;
     const flowTransfers = semantic.summary.flowEffects.values.exact.size;
     const stackWrites = semantic.summary.writes.values.exact.has("esp") || semantic.summary.writes.values.conservative.has("esp");
@@ -3880,8 +3880,8 @@ var osed_bundle = (() => {
       score -= penalty;
       addReason(reasons, "unknown-semantics", "unsupported instructions reduce confidence", evidence, -penalty);
     }
-    if (memoryWrites > 0) {
-      const penalty = memoryWrites * 35;
+    if (memoryWrites2 > 0) {
+      const penalty = memoryWrites2 * 35;
       score -= penalty;
       addReason(reasons, "memory-write", "memory writes are expensive and risky", evidence, -penalty);
     }
@@ -4092,7 +4092,7 @@ var osed_bundle = (() => {
     const capabilities = normalizeKinds(query.capability);
     const terminators = normalizeKinds(query.terminator);
     const memoryReads = (_b = query.memoryReads) != null ? _b : query.memoryRead;
-    const memoryWrites = (_c = query.memoryWrites) != null ? _c : query.memoryWrite;
+    const memoryWrites2 = (_c = query.memoryWrites) != null ? _c : query.memoryWrite;
     return gadgets.filter((gadget) => {
       if (query.executableOnly && !matchesExecutableOnly(gadget)) {
         return false;
@@ -4127,9 +4127,9 @@ var osed_bundle = (() => {
           return false;
         }
       }
-      if (memoryWrites !== void 0) {
+      if (memoryWrites2 !== void 0) {
         const field = gadget.semanticSummary.summary.memoryWrites;
-        if (memoryWrites ? !hasKnownValues(field) : !isDefinitelyEmpty(field)) {
+        if (memoryWrites2 ? !hasKnownValues(field) : !isDefinitelyEmpty(field)) {
           return false;
         }
       }
@@ -4431,10 +4431,10 @@ var osed_bundle = (() => {
     return pop.mnemonic === "pop" && pop.operands.length === 1 && pop.operands[0].trim().toLowerCase() === register2 && ret.mnemonic === "ret";
   }
   function selectPopGadget(index, register2) {
-    const candidates3 = index.loadRegister(register2).filter((g) => isSinglePopRetLike(g, register2) && firstKnownAddress(g) !== void 0);
-    const plainRet = candidates3.filter((g) => retImmBytes(g) === 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
+    const candidates2 = index.loadRegister(register2).filter((g) => isSinglePopRetLike(g, register2) && firstKnownAddress(g) !== void 0);
+    const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
     if (plainRet) return { gadget: plainRet, retImm: 0 };
-    const withImm = candidates3.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+    const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
       const stab = gadgetStability(a) - gadgetStability(b);
       if (stab !== 0) return stab;
       const diff = retImmBytes(a) - retImmBytes(b);
@@ -4449,10 +4449,10 @@ var osed_bundle = (() => {
     return xor.mnemonic === "xor" && xor.operands.length === 2 && xor.operands[0].trim().toLowerCase() === register2 && xor.operands[1].trim().toLowerCase() === register2 && ret.mnemonic === "ret";
   }
   function selectZeroGadget(index, register2) {
-    const candidates3 = index.zeroRegister(register2).filter((g) => isZeroRetLike(g, register2) && firstKnownAddress(g) !== void 0);
-    const plainRet = candidates3.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
+    const candidates2 = index.zeroRegister(register2).filter((g) => isZeroRetLike(g, register2) && firstKnownAddress(g) !== void 0);
+    const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
     if (plainRet) return { gadget: plainRet, retImm: 0 };
-    const withImm = candidates3.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+    const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
       const diff = retImmBytes(a) - retImmBytes(b);
       return diff !== 0 ? diff : b.score - a.score;
     })[0];
@@ -5127,8 +5127,8 @@ var osed_bundle = (() => {
     const addr = firstKnownAddress(gadget);
     return addr === void 0 ? true : isAddressStable(addr);
   }
-  function selectBest(candidates3, preserve) {
-    const withAddr = candidates3.map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) })).filter((s) => s.retImm >= 0 && s.retImm <= MAX_RET_IMM && firstKnownAddress(s.gadget) !== void 0).filter((s) => s.effects.safe).filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
+  function selectBest(candidates2, preserve) {
+    const withAddr = candidates2.map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) })).filter((s) => s.retImm >= 0 && s.retImm <= MAX_RET_IMM && firstKnownAddress(s.gadget) !== void 0).filter((s) => s.effects.safe).filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
     if (withAddr.length === 0) return void 0;
     withAddr.sort((a, b) => {
       const aStable = gadgetIsStable(a.gadget) ? 0 : 1;
@@ -5156,8 +5156,8 @@ var osed_bundle = (() => {
   }
   function findPopGadget(index, reg, preserve) {
     var _a2;
-    const candidates3 = (_a2 = index.capabilityMap.get(capKey("LOAD_REGISTER", reg))) != null ? _a2 : [];
-    const purePopRet = candidates3.filter((g) => {
+    const candidates2 = (_a2 = index.capabilityMap.get(capKey("LOAD_REGISTER", reg))) != null ? _a2 : [];
+    const purePopRet = candidates2.filter((g) => {
       var _a3;
       if (g.instructions.length < 2) return false;
       const last = g.instructions[g.instructions.length - 1];
@@ -5168,8 +5168,8 @@ var osed_bundle = (() => {
   }
   function findZeroGadget(index, reg, preserve) {
     var _a2;
-    const candidates3 = (_a2 = index.capabilityMap.get(capKey("ZERO_REGISTER", reg))) != null ? _a2 : [];
-    const pureXorRet = candidates3.filter((g) => {
+    const candidates2 = (_a2 = index.capabilityMap.get(capKey("ZERO_REGISTER", reg))) != null ? _a2 : [];
+    const pureXorRet = candidates2.filter((g) => {
       var _a3, _b;
       if (g.instructions.length !== 2) return false;
       const [xor, ret] = g.instructions;
@@ -5179,9 +5179,9 @@ var osed_bundle = (() => {
   }
   function findUnaryGadget(index, kind, reg, preserve) {
     var _a2;
-    const candidates3 = (_a2 = index.capabilityMap.get(capKey(kind, reg))) != null ? _a2 : [];
+    const candidates2 = (_a2 = index.capabilityMap.get(capKey(kind, reg))) != null ? _a2 : [];
     const expected = OPERATION_MNEMONIC[kind];
-    const valid = candidates3.filter((g) => {
+    const valid = candidates2.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
       if ((last == null ? void 0 : last.mnemonic) !== "ret") return false;
       return expected === void 0 || registerFinalWriteMnemonic(g, reg) === expected;
@@ -5190,9 +5190,9 @@ var osed_bundle = (() => {
   }
   function findBinaryGadget(index, kind, dst, src, preserve) {
     var _a2;
-    const candidates3 = (_a2 = index.capabilityMap.get(capKey(kind, dst, src))) != null ? _a2 : [];
+    const candidates2 = (_a2 = index.capabilityMap.get(capKey(kind, dst, src))) != null ? _a2 : [];
     const expected = OPERATION_MNEMONIC[kind];
-    const valid = candidates3.filter((g) => {
+    const valid = candidates2.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
       if ((last == null ? void 0 : last.mnemonic) !== "ret") return false;
       return expected === void 0 || registerFinalWriteMnemonic(g, dst) === expected;
@@ -5541,9 +5541,9 @@ var osed_bundle = (() => {
       return addr === void 0 || addressBadcharFree(addr, bc);
     }));
     const MAX_RET_IMM2 = 64;
-    const candidates3 = workingIndex.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.retImm <= MAX_RET_IMM2 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
+    const candidates2 = workingIndex.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.retImm <= MAX_RET_IMM2 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
     const clobberFrequency = /* @__PURE__ */ new Map();
-    for (const c of candidates3) {
+    for (const c of candidates2) {
       for (const reg of c.shape.writes) clobberFrequency.set(reg, ((_a2 = clobberFrequency.get(reg)) != null ? _a2 : 0) + 1);
     }
     const pending = new Set(targetValues.keys());
@@ -5560,7 +5560,7 @@ var osed_bundle = (() => {
     while (pending.size > 0) {
       let best;
       let bestKey;
-      for (const candidate of candidates3) {
+      for (const candidate of candidates2) {
         if (!addressBadcharFree(candidate.address, bc)) continue;
         let corrupts = false;
         for (const reg of candidate.shape.writes) {
@@ -5615,7 +5615,7 @@ var osed_bundle = (() => {
       done.add(arith.register);
       ordered.push(arith.register);
     }
-    const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates3, done, targetValues, badchars, bc) }));
+    const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates2, done, targetValues, badchars, bc) }));
     const finalSteps = fixRetImmPadding(steps);
     return { steps: finalSteps, ordered, unresolved, stackBytes: finalSteps.length * 4, success: unresolved.length === 0 };
   }
@@ -5636,7 +5636,7 @@ var osed_bundle = (() => {
     }
     return best;
   }
-  function reasonFor(reg, index, candidates3, done, targetValues, badcharList, badchars) {
+  function reasonFor(reg, index, candidates2, done, targetValues, badcharList, badchars) {
     const buildableSomehow = solveValue(index, reg, targetValues.get(reg), badcharList) !== void 0;
     const buildablePreserving = solveValue(index, reg, targetValues.get(reg), badcharList, [...done]) !== void 0;
     if (buildableSomehow && !buildablePreserving) {
@@ -5645,7 +5645,7 @@ var osed_bundle = (() => {
     if (!buildableSomehow) {
       return `no pop/arithmetic construction found for ${hex32(targetValues.get(reg))} under these badchars and gadgets`;
     }
-    const setters = candidates3.filter((c) => c.shape.cleanPops.has(reg));
+    const setters = candidates2.filter((c) => c.shape.cleanPops.has(reg));
     if (setters.length === 0) return `no safe gadget cleanly pops ${reg}`;
     if (!isBadcharFree2(targetValues.get(reg), badchars)) {
       return `value ${hex32(targetValues.get(reg))} contains badchars; build it with rop.construct("${reg}", ...) and set it separately`;
@@ -5920,18 +5920,18 @@ var osed_bundle = (() => {
     return [chain.popPtr, chain.deref, chain.dispatch].filter((g) => isAddressStable(firstKnownAddress(g))).length;
   }
   function findDerefChain(index) {
-    const candidates3 = [];
+    const candidates2 = [];
     for (const valReg of REGS) {
       const dispatch = findJmp(index, valReg);
       if (!dispatch) continue;
       for (const ptrReg of REGS) {
         const deref = findMemLoad(index, valReg, ptrReg);
         const popPtr = findPop(index, ptrReg);
-        if (deref && popPtr) candidates3.push({ popPtr, deref, dispatch, ptrReg, valReg });
+        if (deref && popPtr) candidates2.push({ popPtr, deref, dispatch, ptrReg, valReg });
       }
     }
-    if (candidates3.length === 0) return void 0;
-    return candidates3.sort((a, b) => {
+    if (candidates2.length === 0) return void 0;
+    return candidates2.sort((a, b) => {
       if (stableCount(a) !== stableCount(b)) return stableCount(b) - stableCount(a);
       const selfA = a.ptrReg === a.valReg ? 0 : 1;
       const selfB = b.ptrReg === b.valReg ? 0 : 1;
@@ -6033,7 +6033,7 @@ var osed_bundle = (() => {
     return left !== void 0 && normalize(left) === normalize(right);
   }
   function planApiResolution(target, imports, badchars = []) {
-    const candidates3 = [];
+    const candidates2 = [];
     for (const entry of imports) {
       const pointerResolved = entry.pointer !== BigInt(0);
       const targetModuleVerified = sameModule(entry.actualModule, target.module) && entry.actualModuleBase !== void 0;
@@ -6052,7 +6052,7 @@ var osed_bundle = (() => {
       };
       if (entry.importedSymbol.toLowerCase() === target.symbol.toLowerCase()) {
         const exportRvaVerified = targetModuleVerified && exactExport;
-        candidates3.push(__spreadProps(__spreadValues({}, base), {
+        candidates2.push(__spreadProps(__spreadValues({}, base), {
           strategy: "direct-slot",
           state: exportRvaVerified && slotPayloadSafe ? "ENCODABLE" : exportRvaVerified ? "ADDRESS_VALIDATED" : "DISCOVERED",
           exportRvaVerified,
@@ -6063,7 +6063,7 @@ var osed_bundle = (() => {
       const anchorExact = entry.nearestOffset === BigInt(0) && !!entry.nearestSymbol;
       if (!targetModuleVerified || !anchorExact || !pointerResolved) continue;
       const delta = target.address - entry.pointer & BigInt(4294967295);
-      candidates3.push(__spreadProps(__spreadValues({}, base), {
+      candidates2.push(__spreadProps(__spreadValues({}, base), {
         strategy: "derived-address",
         state: slotPayloadSafe ? "ENCODABLE" : "ADDRESS_VALIDATED",
         exportRvaVerified: true,
@@ -6071,7 +6071,7 @@ var osed_bundle = (() => {
         recommendation: slotPayloadSafe ? "Candidate for gadget feasibility analysis; no chain has been constructed." : "Anchor is validated but its slot requires address construction before gadget feasibility analysis."
       }));
     }
-    return candidates3.sort((left, right) => {
+    return candidates2.sort((left, right) => {
       const strategy = left.strategy === right.strategy ? 0 : left.strategy === "direct-slot" ? -1 : 1;
       if (strategy !== 0) return strategy;
       if (left.slotPayloadSafe !== right.slotPayloadSafe) return left.slotPayloadSafe ? -1 : 1;
@@ -6196,9 +6196,9 @@ var osed_bundle = (() => {
       notes
     };
   }
-  function buildBestApiResolution(index, candidates3, options = {}) {
+  function buildBestApiResolution(index, candidates2, options = {}) {
     var _a2;
-    const attempts = candidates3.map((candidate) => {
+    const attempts = candidates2.map((candidate) => {
       if (!candidate.exportRvaVerified || !candidate.pointerResolved || !candidate.targetModuleVerified) {
         return { candidate, rejectionReasons: ["Phase 1 address evidence is incomplete."] };
       }
@@ -6579,13 +6579,13 @@ var osed_bundle = (() => {
     return { source: "memory", clobbers: ["esp"] };
   }
   function selectPivotGadget(index, state) {
-    const candidates3 = index.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress(g) !== void 0).sort((a, b) => {
+    const candidates2 = index.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress(g) !== void 0).sort((a, b) => {
       const aLen = a.instructions.length;
       const bLen = b.instructions.length;
       if (aLen !== bLen) return aLen - bLen;
       return b.score - a.score;
     });
-    for (const gadget of candidates3) {
+    for (const gadget of candidates2) {
       const addr = firstKnownAddress(gadget);
       const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
       if (source === "register" && sourceRegister) {
@@ -11163,14 +11163,14 @@ var osed_bundle = (() => {
     },
     {
       name: "dep_candidates",
-      summary: "Best 3 gadgets per DEP chain job, ranked by side effects",
-      description: "Prints what step [4/7] of dep_plan prints: for each job of the skeleton or pushad chain, the 3 gadgets from the module with the fewest side effects, with what else each one does. The pushad style also lists jmp esp and call esp addresses. It scans the module itself and leaves the loaded corpus as it was.",
+      summary: "The gadget picked for each DEP chain job, and why",
+      description: "Prints what step [4/7] of dep_plan prints: for each job of the skeleton or pushad chain, the gadget it picks, the higher-ranked ones it rejected and why, and up to two usable alternatives. The pick keeps every register the chain still needs at that job and takes its input from the register that holds it. The pushad style also lists jmp esp and call esp addresses. It scans the module itself and leaves the loaded corpus as it was.",
       usage: "dx @$osed().dep_candidates(module, badchars, style?)",
       examples: [
         'dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")',
         'dx @$osed().dep_candidates("libbkup", "00 0A 0D", "pushad")'
       ],
-      details: "Ranked by fewest side effects, then the smallest stack move. A gadget that moves ESP only counts for the pivot job. rop.query lists every gadget of one capability instead, in corpus order.",
+      details: "Ranked by fewest side effects, then the smallest stack move. The jobs run in chain order: each pick binds the value it produces (the captured ESP, the field address, the value to write, or a pushad register) to its register, and a later job rejects any gadget that writes a register still holding one of those values. A pick that reads the right value from another register says which move it needs first. A gadget that moves ESP only counts for the pivot job. rop.query lists every gadget of one capability instead, in corpus order.",
       seeAlso: ["dep_plan", "rop.query", "rop.scan_live"]
     },
     {
@@ -11643,10 +11643,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-21T20:26:20.221Z" : globalThis[key2];
+        value = true ? "2026-11-22T11:00:10.040Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "98cbb43e286f" : globalThis[key2];
+        value = true ? "5f16ae1da124" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12849,8 +12849,8 @@ var osed_bundle = (() => {
     return shellcode.map((b) => (b ^ key2) & 255);
   }
   function findXorKey(shellcode, exclude, hint) {
-    const candidates3 = hint !== void 0 ? [hint & 255] : Array.from({ length: 255 }, (_, i) => i + 1);
-    for (const key2 of candidates3) {
+    const candidates2 = hint !== void 0 ? [hint & 255] : Array.from({ length: 255 }, (_, i) => i + 1);
+    for (const key2 of candidates2) {
       if (key2 === 0 || exclude.has(key2)) continue;
       if (xorEncode(shellcode, key2).every((b) => !exclude.has(b))) return key2;
     }
@@ -13589,24 +13589,77 @@ var osed_bundle = (() => {
       { field: "nSize", value: 528 }
     ]
   };
+  var ROLE_NAMES = {
+    pointer: "the captured ESP",
+    field: "the field address",
+    value: "the value for the field"
+  };
+  function roleName(role) {
+    var _a2;
+    return (_a2 = ROLE_NAMES[role]) != null ? _a2 : `the ${role.toUpperCase()} of the frame`;
+  }
   var SKELETON_JOBS = [
-    { key: "capture", title: "capture ESP", capabilities: ["STACK_POINTER_CAPTURE"] },
-    { key: "copy", title: "copy a register", capabilities: ["MOVE_REGISTER", "EXCHANGE_REGISTER"] },
-    { key: "add", title: "add or subtract", capabilities: ["REGISTER_ADD", "REGISTER_SUB"] },
-    { key: "negate", title: "negate", capabilities: ["REGISTER_NEGATE"] },
-    { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"] },
-    { key: "write", title: "write a field", capabilities: ["MEMORY_WRITE"] },
-    { key: "advance", title: "advance the pointer (inc reg)", capabilities: ["REGISTER_INCREMENT"] },
-    { key: "pivot", title: "pivot ESP onto the frame", capabilities: ["STACK_PIVOT"] }
+    { key: "capture", title: "capture ESP", capabilities: ["STACK_POINTER_CAPTURE"], flow: { sets: { role: "pointer", port: "dest" } } },
+    {
+      key: "add",
+      title: "add the distance to field 1",
+      capabilities: ["REGISTER_ADD", "REGISTER_SUB"],
+      flow: { reads: { dest: "pointer" }, sets: { role: "pointer", port: "dest" } }
+    },
+    {
+      key: "copy",
+      title: "copy a register",
+      capabilities: ["MOVE_REGISTER", "EXCHANGE_REGISTER"],
+      flow: { reads: { source: "pointer" }, sets: { role: "field", port: "dest" } }
+    },
+    { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], flow: { sets: { role: "value", port: "dest" } } },
+    { key: "write", title: "write a field", capabilities: ["MEMORY_WRITE"], flow: { reads: { address: "field", source: "value" } } },
+    {
+      key: "advance",
+      title: "advance the pointer (inc reg)",
+      capabilities: ["REGISTER_INCREMENT"],
+      flow: { reads: { dest: "field" }, sets: { role: "field", port: "dest" } }
+    },
+    { key: "negate", title: "negate", capabilities: ["REGISTER_NEGATE"], flow: { sets: { role: "value", port: "dest" } } },
+    { key: "pivot", title: "pivot ESP onto the frame", capabilities: ["STACK_PIVOT"], flow: { reads: { source: "field" } } }
   ];
-  var PUSHAD_REGISTERS = ["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"];
+  var PUSHAD_REGISTERS = ["esi", "ebp", "ebx", "edx", "ecx", "edi", "eax"];
   var PUSHAD_JOBS = [
-    ...PUSHAD_REGISTERS.map((register2) => ({ key: `pop_${register2}`, title: `pop ${register2}`, capabilities: ["LOAD_REGISTER"], register: register2 })),
-    { key: "read", title: "read a pointer (the IAT slot)", capabilities: ["MEMORY_READ"] },
-    { key: "pushad", title: "pushad ; ret", capabilities: ["DISPATCH_PUSHAD"] }
+    { key: "read", title: "read a pointer (the IAT slot)", capabilities: ["MEMORY_READ"], flow: {} },
+    ...PUSHAD_REGISTERS.map((register2) => ({
+      key: `pop_${register2}`,
+      title: `pop ${register2}`,
+      capabilities: ["LOAD_REGISTER"],
+      register: register2,
+      flow: { sets: { role: register2, port: "dest" } }
+    })),
+    {
+      key: "pushad",
+      title: "pushad ; ret",
+      capabilities: ["DISPATCH_PUSHAD"],
+      flow: { reads: PUSHAD_REGISTERS.reduce((reads, register2) => __spreadProps(__spreadValues({}, reads), { [register2]: register2 }), {}) }
+    }
   ];
   function jobsFor(style) {
     return style === "pushad" ? PUSHAD_JOBS : SKELETON_JOBS;
+  }
+  function readsOf(job) {
+    var _a2;
+    const reads = (_a2 = job.flow.reads) != null ? _a2 : {};
+    return Object.keys(reads).map((port) => reads[port]);
+  }
+  function liveAfter(jobs, index, withOwn = false) {
+    var _a2;
+    const loop = jobs.filter((job) => ["write", "advance", "negate"].indexOf(job.key) >= 0);
+    const later = jobs.slice(index + 1).concat(loop.indexOf(jobs[index]) >= 0 ? loop : []);
+    const own = withOwn ? void 0 : (_a2 = jobs[index].flow.sets) == null ? void 0 : _a2.role;
+    const live = [];
+    const killed = [];
+    for (const job of later) {
+      for (const role of readsOf(job)) if (role !== own && killed.indexOf(role) < 0 && live.indexOf(role) < 0) live.push(role);
+      if (job.flow.sets) killed.push(job.flow.sets.role);
+    }
+    return live;
   }
   function movesEsp(gadget) {
     return gadget.categories.includes("STACK_PIVOT") || gadget.capabilities.some((capability2) => capability2.kind === "STACK_PIVOT");
@@ -13614,9 +13667,143 @@ var osed_bundle = (() => {
   function jobCapability(gadget, job) {
     return gadget.capabilities.find((capability2) => job.capabilities.includes(capability2.kind) && (job.register === void 0 || capability2.register === job.register) && capability2.register !== "esp");
   }
-  function candidates2(index, job, count = 3) {
-    const matching = index.gadgets.filter((gadget) => jobCapability(gadget, job) !== void 0 && (job.key === "pivot" || !movesEsp(gadget)));
-    return rankCandidates(matching).slice(0, count);
+  function ranked(index, job) {
+    return rankCandidates(index.gadgets.filter((gadget) => jobCapability(gadget, job) !== void 0 && (job.key === "pivot" || !movesEsp(gadget))));
+  }
+  var REGISTER = /^e(ax|bx|cx|dx|si|di|bp|sp)$/;
+  function memoryBase(text) {
+    const match = /\[\s*(e[a-z]{2})\s*(?:([+-])\s*(0x[0-9a-f]+|\d+))?\s*\]/i.exec(text);
+    if (!match) return { offset: 0 };
+    const offset = match[3] ? parseInt(match[3], match[3].indexOf("0x") === 0 ? 16 : 10) : 0;
+    return { base: match[1].toLowerCase(), offset: match[2] === "-" ? -offset : offset };
+  }
+  function pivotSource(gadget) {
+    var _a2;
+    for (const instruction of gadget.instructions) {
+      const operands = instruction.operands.map((operand) => operand.trim().toLowerCase());
+      if (instruction.mnemonic === "leave") return "ebp";
+      if (instruction.mnemonic === "mov" && operands[0] === "esp" && REGISTER.test((_a2 = operands[1]) != null ? _a2 : "")) return operands[1];
+      if (instruction.mnemonic === "xchg" && operands.indexOf("esp") >= 0) return operands[0] === "esp" ? operands[1] : operands[0];
+    }
+    return void 0;
+  }
+  function ports(gadget, job) {
+    var _a2;
+    const capability2 = jobCapability(gadget, job);
+    if (!capability2) return {};
+    const evidence = (_a2 = capability2.evidence[0]) != null ? _a2 : "";
+    if (job.key === "read") {
+      const memory = memoryBase(evidence);
+      return { dest: capability2.register, address: memory.base, offset: memory.offset };
+    }
+    if (job.key === "write") {
+      const memory = memoryBase(evidence);
+      return { source: capability2.register, address: memory.base, offset: memory.offset };
+    }
+    if (job.key === "pivot") return { source: pivotSource(gadget) };
+    return { dest: capability2.register, source: capability2.targetRegister };
+  }
+  function writtenRegisters(gadget) {
+    const summary = gadget.semanticSummary.summary;
+    const written = [];
+    for (const register2 of [...summary.writes.values.exact, ...summary.writes.values.conservative].map(String)) {
+      if (register2 !== "esp" && register2 !== "eip" && written.indexOf(register2) < 0) written.push(register2);
+    }
+    return written;
+  }
+  function memoryWrites(gadget, own) {
+    return gadget.instructions.filter((instruction) => {
+      var _a2;
+      return instruction.mnemonic !== "push" && ((_a2 = instruction.operands[0]) != null ? _a2 : "").indexOf("[") >= 0 && instruction.normalizedText !== own;
+    }).map((instruction) => instruction.operands[0].trim());
+  }
+  function holds(gadget, dest, source) {
+    var _a2;
+    const transforms = gadget.semanticSummary.summary.registerTransforms;
+    const transform = transforms[dest];
+    return transform !== void 0 && transform.kind === "affine" && transform.base === source && ((_a2 = transform.offset) == null ? void 0 : _a2.kind) === "constant" && transform.offset.value === 0;
+  }
+  function rejection(gadget, job, at, live, bound) {
+    var _a2, _b;
+    const capability2 = jobCapability(gadget, job);
+    if (job.key === "add") {
+      if ((capability2 == null ? void 0 : capability2.kind) === "REGISTER_SUB") return "subtracts: the distance to field 1 is negative, so pop it and add";
+      if (!REGISTER.test((_a2 = at.source) != null ? _a2 : "")) return `adds a fixed ${at.source}, not the distance you pop`;
+    }
+    if (job.key === "copy" && at.dest && at.source && !holds(gadget, at.dest, at.source)) return `${at.dest} does not keep the copy`;
+    if (job.key === "copy" && bound.pointer !== void 0 && at.source !== bound.pointer) return `copies ${at.source}, but the captured ESP is in ${bound.pointer}`;
+    if (job.key === "pivot" && !at.source) return "takes ESP from the stack, not from a register";
+    const extra = memoryWrites(gadget, (_b = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _b : "");
+    if (job.key !== "write" && extra.length > 0) return `also writes memory at ${extra[0]}`;
+    const written = writtenRegisters(gadget);
+    for (const { role, register: register2 } of live) {
+      if (job.key === "read" && at.address === register2) return `reads through ${register2}: loading the slot there clobbers ${roleName(role)}`;
+      if (written.indexOf(register2) >= 0) return `clobbers ${register2}, which still holds ${roleName(role)}`;
+    }
+    return void 0;
+  }
+  function sideNote(gadget, job, at) {
+    const notes = [];
+    if (at.offset) notes.push(`lands ${at.offset > 0 ? "+" : "-"}0x${Math.abs(at.offset).toString(16)} from ${at.address}`);
+    const reads = gadget.instructions.filter((instruction) => job.key !== "read" && instruction.operands.slice(1).some((operand) => operand.indexOf("[") >= 0 && operand.indexOf("esp") < 0));
+    if (reads.length > 0) notes.push(`also reads ${reads[0].operands[1].trim()}, which must be readable`);
+    return notes.join("; ");
+  }
+  function exactReason(gadget, job, at, live, bound) {
+    var _a2;
+    const reads = (_a2 = job.flow.reads) != null ? _a2 : {};
+    const takes = Object.keys(reads).filter((port) => bound[reads[port]] !== void 0 && at[port] !== void 0).map((port) => `${roleName(reads[port])} from ${at[port]}`);
+    const named2 = takes.join(" ");
+    const keeps = live.map((entry) => entry.register).filter((register2) => named2.indexOf(register2) < 0);
+    const parts = [
+      takes.length > 0 ? `takes ${takes.join(" and ")}` : "",
+      keeps.length > 0 ? `keeps ${keeps.join(", ")}` : "",
+      sideNote(gadget, job, at)
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join("; ") : "nothing to keep yet, so the first in the ranking";
+  }
+  function moves(job, at, bound) {
+    var _a2;
+    const reads = (_a2 = job.flow.reads) != null ? _a2 : {};
+    const out = [];
+    for (const port of Object.keys(reads)) {
+      const register2 = bound[reads[port]];
+      if (register2 !== void 0 && at[port] !== void 0 && at[port] !== register2) out.push(`${roleName(reads[port])} from ${register2} into ${at[port]}`);
+    }
+    const sets = job.flow.sets;
+    const target = sets ? bound[sets.role] : void 0;
+    if (sets && target !== void 0 && job.flow.reads === void 0 && at[sets.port] !== target) {
+      out.push(`${roleName(sets.role)} from ${at[sets.port]} into ${target}`);
+    }
+    return out;
+  }
+  function planJobs(index, style) {
+    const jobs = jobsFor(style);
+    const bound = {};
+    return jobs.map((job, position) => {
+      var _a2;
+      const later = liveAfter(jobs, position, true);
+      const live = liveAfter(jobs, position).filter((role) => bound[role] !== void 0).map((role) => ({ role, register: bound[role] }));
+      const verdicts = (index ? ranked(index, job) : []).map((gadget) => {
+        const at = ports(gadget, job);
+        const rejected = rejection(gadget, job, at, live, bound);
+        if (rejected) return { gadget, at, usable: false, reason: rejected };
+        const needed = moves(job, at, bound);
+        if (needed.length > 0) {
+          const back = readsOf(job).some((role) => later.indexOf(role) >= 0) ? ", and back after" : "";
+          const move = `${needed.join(", ")} first${back}`;
+          return { gadget, at, usable: true, move, reason: `move ${move}` };
+        }
+        return { gadget, at, usable: true, reason: exactReason(gadget, job, at, live, bound) };
+      });
+      const pick2 = (_a2 = verdicts.filter((verdict) => verdict.usable && !verdict.move)[0]) != null ? _a2 : verdicts.filter((verdict) => verdict.usable)[0];
+      const sets = job.flow.sets;
+      if (pick2 && sets) {
+        const register2 = ports(pick2.gadget, job)[sets.port];
+        if (register2 && (bound[sets.role] === void 0 || !pick2.move)) bound[sets.role] = register2;
+      }
+      return { job, live, verdicts, pick: pick2 };
+    });
   }
   function gadgetAddress(gadget) {
     var _a2, _b;
@@ -13631,7 +13818,7 @@ var osed_bundle = (() => {
   function sideEffects(gadget, job) {
     var _a2;
     const summary = gadget.semanticSummary.summary;
-    const written = [...summary.writes.values.exact, ...summary.writes.values.conservative].map(String).filter((register2) => !["esp", "eip"].includes(register2));
+    const written = writtenRegisters(gadget);
     const deltas = [...summary.stackDelta.values.exact];
     const stack = deltas.length === 1 ? `esp +0x${deltas[0].toString(16)}` : "esp ?";
     const intended = (_a2 = jobCapability(gadget, job)) == null ? void 0 : _a2.register;
@@ -13641,36 +13828,46 @@ var osed_bundle = (() => {
     }).length;
     const last = gadget.instructions[gadget.instructions.length - 1];
     const retN = (last == null ? void 0 : last.mnemonic) === "ret" && last.operands.length === 1 ? `ret ${last.operands[0]}` : "";
-    const memory = job.key !== "write" && gadget.instructions.some((instruction) => {
-      var _a3;
-      return instruction.mnemonic !== "push" && ((_a3 = instruction.operands[0]) != null ? _a3 : "").includes("[");
-    }) ? "writes memory" : "";
     return [
-      `writes ${written.length > 0 ? [...new Set(written)].join(" ") : "nothing"}`,
+      `writes ${written.length > 0 ? written.join(" ") : "nothing"}`,
       stack,
       pops > 0 ? `${pops} extra pop${pops > 1 ? "s" : ""}` : "",
-      retN,
-      memory
+      retN
     ].filter(Boolean).join(", ");
   }
-  function candidateLines(gadgets, job) {
-    if (gadgets.length === 0) return [`  ${job.title}: none in the corpus`];
-    return [
-      `  ${job.title}:`,
-      ...gadgets.map((gadget) => `    ${hex325(gadgetAddress(gadget))}  ${sequence(gadget).padEnd(40)}  ${sideEffects(gadget, job)}`)
+  function planLines(plan) {
+    const { job, live, verdicts, pick: pick2 } = plan;
+    if (verdicts.length === 0) return [`  ${job.title}: none in the corpus`];
+    const keep = live.length > 0 ? ` (keep ${live.map((entry) => ROLE_NAMES[entry.role] ? `${entry.register} = ${ROLE_NAMES[entry.role]}` : entry.register).join(", ")})` : "";
+    const at = pick2 ? verdicts.indexOf(pick2) : verdicts.length;
+    const above = verdicts.slice(0, at);
+    const after = pick2 ? verdicts.slice(at + 1).filter((verdict) => verdict.usable).slice(0, 2) : [];
+    const line = (verdict, mark, label) => [
+      `  ${mark} ${hex325(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}  ${sideEffects(verdict.gadget, job)}`,
+      `      ${label}: ${verdict.reason}`
     ];
+    const lines = [`  ${job.title}${keep}:`];
+    for (const verdict of above.slice(0, 3)) lines.push(...line(verdict, " ", verdict.usable ? "usable" : "no"));
+    if (above.length > 3) lines.push(`      ... and ${above.length - 3} more above it`);
+    if (pick2) lines.push(...line(pick2, ">", "PICK"));
+    else lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
+    for (const verdict of after) lines.push(...line(verdict, " ", "usable"));
+    return lines;
   }
   function slotLine(name, value, how) {
     return value === void 0 ? `${name.padEnd(9)}= 0x????????   # TODO ${how}` : `${name.padEnd(9)}= ${hex325(value)}   # ${how}`;
   }
-  function gadgetLine(best, key2, title) {
-    const gadget = best[key2];
-    return gadget ? `rop += p32(${hex325(gadgetAddress(gadget))})    # ${title}: ${sequence(gadget)}` : `rop += p32(0x????????)    # TODO ${title}: no candidate in the corpus`;
+  function gadgetLine(picks, key2, title) {
+    const pick2 = picks[key2];
+    if (!pick2) return `rop += p32(0x????????)    # TODO ${title}: no candidate keeps the live registers`;
+    const line = `rop += p32(${hex325(gadgetAddress(pick2.gadget))})    # ${title}: ${sequence(pick2.gadget)}`;
+    return pick2.move ? `# TODO move ${pick2.move}
+${line}` : line;
   }
   var FRAME_DWORDS = { VirtualAlloc: 6, VirtualProtect: 6, WriteProcessMemory: 7 };
   function measureLines(input) {
-    const capture = input.best.capture;
-    const at = capture ? hex325(gadgetAddress(capture)) : "<capture gadget>";
+    const capture = input.picks.capture;
+    const at = capture ? hex325(gadgetAddress(capture.gadget)) : "<capture gadget>";
     return [
       "# TODO measure: distance from the captured ESP to field 1 of the frame",
       `#   bp ${at} ; g ; r esp                      ESP here is the value push esp stores`,
@@ -13714,50 +13911,63 @@ var osed_bundle = (() => {
       "frame += p32(WRITABLE)     # lpNumberOfBytesWritten literal when clean"
     ];
   }
+  function slotLoad(read) {
+    const at = read == null ? void 0 : read.at;
+    if (!(at == null ? void 0 : at.address)) return "rop += p32(0x????????)    # TODO pop <reg> ; ret, followed by p32(IAT_SLOT) or its rop.construct recipe from [5/7]";
+    const target = at.offset ? `IAT_SLOT ${at.offset > 0 ? "-" : "+"} 0x${Math.abs(at.offset).toString(16)}` : "IAT_SLOT";
+    return `rop += p32(0x????????)    # TODO ${at.address} = ${target}: a pop, or the rop.construct recipe from [5/7] and a move`;
+  }
+  function writeNote(write2) {
+    const at = write2 == null ? void 0 : write2.at;
+    return (at == null ? void 0 : at.address) && at.offset ? [`# the write lands ${at.offset > 0 ? "+" : "-"}0x${Math.abs(at.offset).toString(16)} from ${at.address}: keep ${at.address} that far ${at.offset > 0 ? "before" : "after"} the field`] : [];
+  }
   function skeletonChain(input) {
-    const { best } = input;
+    const { picks } = input;
     const patched = input.api === "WriteProcessMemory" ? "fields 1, 5 and 6" : input.api === "VirtualProtect" ? "fields 1 to 5" : "fields 1 to 6";
     return [
       'rop  = b""',
-      gadgetLine(best, "capture", "capture ESP"),
-      gadgetLine(best, "copy", "keep it in a working register"),
-      "# working pointer -> field 1: load DIST_FIELD1 with a pop, then",
-      gadgetLine(best, "add", "add the distance"),
+      gadgetLine(picks, "capture", "capture ESP"),
+      "# captured ESP -> field 1: load DIST_FIELD1 with a pop, then",
+      gadgetLine(picks, "add", "add the distance"),
+      gadgetLine(picks, "copy", "keep the field address in its own register"),
       "# field 1: the API address",
-      "rop += p32(0x????????)    # TODO pop <reg> ; ret, followed by p32(IAT_SLOT) or its rop.construct recipe from [5/7]",
-      gadgetLine(best, "read", "read the API address from the slot"),
-      gadgetLine(best, "write", "write it into the field"),
-      gadgetLine(best, "advance", "advance to the next field, four times").replace(")    #", ") * 4  #"),
+      slotLoad(picks.read),
+      gadgetLine(picks, "read", "read the API address from the slot"),
+      ...writeNote(picks.write),
+      gadgetLine(picks, "write", "write it into the field"),
+      gadgetLine(picks, "advance", "advance to the next field, four times").replace(")    #", ") * 4  #"),
       `# repeat load / write / advance for ${patched}, with the recipes from [5/7]`,
       "# and the shellcode address = captured ESP + DIST_SHELLCODE",
       "# move the working pointer back to field 1, then",
-      gadgetLine(best, "pivot", "pivot ESP onto field 1")
+      gadgetLine(picks, "pivot", "pivot ESP onto field 1")
     ];
   }
   function pushadChain(input) {
-    const { best } = input;
+    var _a2, _b;
+    const { picks } = input;
+    const slot = (_b = (_a2 = picks.read) == null ? void 0 : _a2.at.address) != null ? _b : "eax";
     const lines = [
       'rop  = b""',
       "# ESI = the API address: read the slot, then move it to ESI",
-      gadgetLine(best, "pop_eax", "pop eax"),
+      gadgetLine(picks, `pop_${slot}`, `pop ${slot}`),
       "rop += p32(IAT_SLOT)",
-      gadgetLine(best, "read", "read the slot"),
+      gadgetLine(picks, "read", "read the slot"),
       'rop += p32(0x????????)    # TODO mov esi, eax / xchg eax, esi (rop.query("capability", "MOVE_REGISTER"))',
       "# the other registers, in an order where no later gadget overwrites an earlier register:",
       '#   dx @$osed().rop.setup("ebp=<jmp esp> ebx=... edx=... ecx=... edi=<ret> eax=0x90909090", "<bad chars>")'
     ];
     for (const register2 of ["ebp", "ebx", "edx", "ecx", "edi", "eax"]) {
-      lines.push(gadgetLine(best, `pop_${register2}`, `pop ${register2}`), `rop += p32(0x????????)    # TODO value for ${register2.toUpperCase()}, see the map in [6/7]`);
+      lines.push(gadgetLine(picks, `pop_${register2}`, `pop ${register2}`), `rop += p32(0x????????)    # TODO value for ${register2.toUpperCase()}, see the map in [6/7]`);
     }
-    lines.push(gadgetLine(best, "pushad", "pushad ; ret"));
+    lines.push(gadgetLine(picks, "pushad", "pushad ; ret"));
     if (input.jmpEsp !== void 0) lines.push(`# jmp esp for EBP: ${hex325(input.jmpEsp)}`);
     return lines;
   }
   function draftLines(input) {
     const head = [
       "# DRAFT. Verify every field in WinDbg before you trust it. This is not a finished chain:",
-      "# the gadgets below are the top-ranked candidate per job, and nothing checked that the",
-      "# register one gadget leaves is the register the next one reads.",
+      "# the gadgets below are the [4/7] picks. Each keeps the registers the chain still needs,",
+      "# and a '# TODO move' line marks where a value has to change register first.",
       "import struct",
       "def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)",
       "",
@@ -15051,11 +15261,11 @@ var osed_bundle = (() => {
         return { kind: "not_found", name };
       }
       const bestScore = Math.min(...scored.map((entry) => entry.score));
-      const candidates3 = scored.filter((entry) => entry.score === bestScore).map((entry) => entry.module).sort((a, b) => a.base < b.base ? -1 : 1);
-      if (candidates3.length === 1) {
-        return { kind: "ok", module: candidates3[0] };
+      const candidates2 = scored.filter((entry) => entry.score === bestScore).map((entry) => entry.module).sort((a, b) => a.base < b.base ? -1 : 1);
+      if (candidates2.length === 1) {
+        return { kind: "ok", module: candidates2[0] };
       }
-      return { kind: "ambiguous", candidates: candidates3 };
+      return { kind: "ambiguous", candidates: candidates2 };
     }
     findMainModule() {
       var _a2, _b, _c, _d, _e, _f;
@@ -15145,8 +15355,8 @@ var osed_bundle = (() => {
     isExecutableProtect(protect) {
       return (protect & 255) === 16 || (protect & 255) === 32 || (protect & 255) === 64 || (protect & 255) === 128;
     }
-    moduleCandidatesRows(candidates3) {
-      return candidates3.map((module) => ({
+    moduleCandidatesRows(candidates2) {
+      return candidates2.map((module) => ({
         Base: toDmlAddress(module.base, "db"),
         End: toDmlAddress(module.end, "db"),
         Name: module.name,
@@ -18431,7 +18641,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       name: "dep_plan",
       summary: "Whole DEP bypass discovery in seven sections",
       what: "Runs the discovery for a <api> DEP bypass from <module> in one go, in the <style> style, and prints each step under its own [n/7] header.",
-      how: "Calls the existing commands in order: modules for <module>, sc.iat_find for <api>, rop.scan_live with <badchars>, dep_candidates to rank 3 gadgets per job by side effects, rop.construct for each constant, code_caves for writable and executable addresses, then dep_function in the <style> style, and last a Python draft. The draft fills in the top gadget per job and marks with TODO the distances only a debugger run can give, with the bp and dd commands that measure them. It does not check that the registers of one gadget feed the next.",
+      how: "Calls the existing commands in order: modules for <module>, sc.iat_find for <api>, rop.scan_live with <badchars>, dep_candidates to pick one gadget per job that keeps the registers the chain still needs, rop.construct for each constant, code_caves for writable and executable addresses, then dep_function in the <style> style, and last a Python draft. The draft fills in the [4/7] pick per job, marks with TODO the moves a pick needs and the distances only a debugger run can give, with the bp and dd commands that measure them.",
       when: "Later labs and the exam, once you know the method by hand and want every piece on one screen. Verify the draft field by field before you trust it.",
       args: [
         { name: "api", meaning: "DEP bypass API.", values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into a code cave." } },
@@ -18440,14 +18650,14 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "registers loaded, then one PUSHAD writes the frame." } }
       ],
       example: 'dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20")',
-      output: "Seven sections: [1/7] module protections, [2/7] IAT slot, [3/7] gadget corpus, [4/7] the best 3 gadgets per job with side effects, [5/7] clean recipes for the constants and the writable or cave addresses, [6/7] the frame or PUSHAD map, [7/7] a Python draft with TODO lines to measure.",
+      output: "Seven sections: [1/7] module protections, [2/7] IAT slot, [3/7] gadget corpus, [4/7] the gadget picked per job, the ones rejected above it and why, and the alternatives, [5/7] clean recipes for the constants and the writable or cave addresses, [6/7] the frame or PUSHAD map, [7/7] a Python draft with TODO lines to measure.",
       report: "Ran dep_plan for <api> from <module> with bad characters <badchars> in the <style> style, then verified each field of the draft in WinDbg before using it."
     },
     {
       name: "dep_candidates",
-      summary: "Best 3 gadgets per DEP chain job, ranked",
-      what: "Ranks, for each job of a <style> DEP chain, the 3 gadgets from <module> with the fewest side effects, the same list as step [4/7] of dep_plan.",
-      how: "Scans <module> for gadgets whose address holds no byte from <badchars>, keeps for each job the gadgets that do it, and sorts them by fewest side effects, then the smallest stack move. After each gadget it lists the registers it changes, how far it moves ESP, extra pops, a ret N and memory writes. A gadget that moves ESP only counts for the pivot job. The pushad style also runs find_bytes for jmp esp and call esp. It scans on its own and leaves the loaded corpus as it was.",
+      summary: "The gadget picked for each DEP chain job, and why",
+      what: "Picks, for each job of a <style> DEP chain, the gadget from <module> with the fewest side effects that keeps every register the chain still needs, the same list as step [4/7] of dep_plan.",
+      how: "Scans <module> for gadgets whose address holds no byte from <badchars>, keeps for each job the gadgets that do it, and sorts them by fewest side effects, then the smallest stack move. Walking the jobs in chain order, it rejects a gadget that writes a register still holding the captured ESP, the field address, the value to write or an already loaded pushad register, and picks the first one left. After each gadget it lists the registers it changes, how far it moves ESP, extra pops, a ret N and memory writes. A gadget that moves ESP only counts for the pivot job. The pushad style also runs find_bytes for jmp esp and call esp. It scans on its own and leaves the loaded corpus as it was.",
       when: "DEP bypass, to pick the gadget for each step of the chain, or to repeat step [4/7] of dep_plan on its own.",
       args: [
         { name: "module", meaning: "Module without ASLR that supplies the gadgets." },
@@ -18455,8 +18665,8 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         { name: "style", meaning: "Which chain the jobs are for.", optional: true, default: "skeleton", values: { skeleton: "capture ESP, copy, add, negate, read, write, advance, pivot.", pushad: "a pop for each register, read the IAT slot, pushad ; ret, and jmp esp." } }
       ],
       example: 'dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")',
-      output: "One block per job with up to 3 gadgets, each with its address, its instructions and its side effects, and a warning naming any job with no gadget.",
-      report: "Ranked the gadgets of <module> for each job of the <style> chain with dep_candidates, with bad characters <badchars>, and took the gadget with the fewest side effects for each step."
+      output: "One block per job: the registers to keep in its title, up to 3 higher-ranked gadgets with why each was rejected, the pick marked >, and up to 2 usable alternatives, each with its address, instructions and side effects. A warning names any job with no pick.",
+      report: "Picked the gadgets of <module> for each job of the <style> chain with dep_candidates, with bad characters <badchars>, keeping at each step the registers the chain still needed."
     },
     // Gadget corpus
     {
@@ -21228,8 +21438,8 @@ ${INDENT}`)]);
     return false;
   }
   function verifyCallSite(returnAddress, pointerSize) {
-    const candidates3 = pointerSize === 8 ? [7, 6, 5, 3, 2] : [5, 6, 3, 2];
-    for (const len of candidates3) {
+    const candidates2 = pointerSize === 8 ? [7, 6, 5, 3, 2] : [5, 6, 3, 2];
+    for (const len of candidates2) {
       const callAddr = returnAddress - BigInt(len);
       const bytes = tryReadMemory(callAddr, len);
       if (bytes && isCallInstruction(bytes)) return true;
@@ -23216,14 +23426,14 @@ ${INDENT}`)]);
       const filterRegister = typeof options.register === "string" ? options.register.toLowerCase().trim() : void 0;
       const minDelta = typeof options.minDelta === "number" ? options.minDelta : void 0;
       const verbose = options.verbose === true;
-      const candidates3 = currentRopCorpus.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT" || c.kind === "STACK_ADJUST") && firstKnownAddress(g) !== void 0).sort((a, b) => {
+      const candidates2 = currentRopCorpus.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT" || c.kind === "STACK_ADJUST") && firstKnownAddress(g) !== void 0).sort((a, b) => {
         const aLen = a.instructions.length;
         const bLen = b.instructions.length;
         if (aLen !== bLen) return aLen - bLen;
         return b.score - a.score;
       });
       const rows = [];
-      for (const gadget of candidates3) {
+      for (const gadget of candidates2) {
         const addr = firstKnownAddress(gadget);
         const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
         const seq = gadgetSequence(gadget);
@@ -24142,7 +24352,7 @@ ${INDENT}`)]);
       if (isAutoApi) {
         section("API Auto-Selection");
         info("Evaluating DEP bypass candidates...");
-        const candidates3 = [];
+        const candidates2 = [];
         for (const apiName of DEP_BYPASS_APIS) {
           const slot = discoverIatSlot(apiName);
           const argCount = (_b = { VirtualProtect: 4, VirtualAlloc: 4, WriteProcessMemory: 5, VirtualProtectEx: 5, VirtualAllocEx: 5, WinExec: 2 }[apiName]) != null ? _b : 0;
@@ -24173,15 +24383,15 @@ ${INDENT}`)]);
             score -= 5;
             reasons.push("Ex variant (less common)");
           }
-          candidates3.push({ api: apiName, iatSlot: slot, slotClean, argCount, reason: reasons.join("; "), score });
+          candidates2.push({ api: apiName, iatSlot: slot, slotClean, argCount, reason: reasons.join("; "), score });
         }
-        candidates3.sort((a, b) => b.score - a.score);
-        for (const c of candidates3) {
+        candidates2.sort((a, b) => b.score - a.score);
+        for (const c of candidates2) {
           const status = c.iatSlot !== void 0 ? `${hex32(c.iatSlot)}${c.slotClean ? "" : " [BADCHAR]"}` : "not found";
-          const marker = c === candidates3[0] ? " \u2190 SELECTED" : "";
+          const marker = c === candidates2[0] ? " \u2190 SELECTED" : "";
           info(`  ${c.api.padEnd(20)} IAT: ${status.padEnd(24)} Score: ${String(c.score).padStart(3)}  (${c.reason})${marker}`);
         }
-        const best = candidates3[0];
+        const best = candidates2[0];
         if (best.iatSlot === void 0) {
           warn("No API found in IAT. The selected candidate will require a manual iatSlot override.");
         }
@@ -24630,12 +24840,12 @@ ${INDENT}`)]);
     };
     const printDepCandidates = (corpus, moduleName, badSet, style) => {
       var _a2;
-      info("Ranked by fewest side effects, then the smallest stack move. Side effects are listed after each gadget.");
-      const best = {};
-      for (const job of jobsFor(style)) {
-        const found = corpus ? candidates2(corpus, job) : [];
-        best[job.key] = found[0];
-        for (const line of candidateLines(found, job)) print(line);
+      info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
+      const picks = {};
+      const plans = planJobs(corpus, style);
+      for (const plan of plans) {
+        picks[plan.job.key] = plan.pick;
+        for (const line of planLines(plan)) print(line);
       }
       let jmpEsp;
       if (style === "pushad") {
@@ -24647,9 +24857,9 @@ ${INDENT}`)]);
           jmpEsp = jmpEsp != null ? jmpEsp : hits[0];
         }
       }
-      const missing = jobsFor(style).filter((job) => !best[job.key]).map((job) => job.title);
+      const missing = plans.filter((plan) => !plan.pick).map((plan) => plan.job.title);
       if (missing.length > 0) warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
-      return { best, jmpEsp, missing };
+      return { picks, plans, jmpEsp, missing };
     };
     const executeDepCandidates = (...args) => {
       if (args.length === 1 && args[0] === "help") {
@@ -24671,11 +24881,12 @@ ${INDENT}`)]);
       if (!Array.isArray(badchars)) return fail3('badchars must be hex bytes such as "00 0A 0D".');
       if (!moduleName || !moduleInfoByName(moduleName)) return fail3(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
       const corpus = mergeCapabilityIndexes(discoverLiveIndexes([moduleName], { badchars }).indexes);
-      const { best, missing } = printDepCandidates(corpus, moduleName, new Set(badchars), style);
-      const rows = jobsFor(style).map((job) => {
-        const gadget = best[job.key];
-        return { Job: job.title, Best: gadget ? hex325(gadgetAddress(gadget)) : "none" };
-      });
+      const { plans, missing } = printDepCandidates(corpus, moduleName, new Set(badchars), style);
+      const rows = plans.map((plan) => ({
+        Job: plan.job.title,
+        Pick: plan.pick ? hex325(gadgetAddress(plan.pick.gadget)) : "none",
+        Why: plan.pick ? plan.pick.reason : "no candidate keeps the live registers"
+      }));
       setResult({
         command: "dep_candidates",
         args: { module: moduleName, badchars: badText, style },
@@ -24767,9 +24978,9 @@ ${INDENT}`)]);
       const gadgetCount = (_e = corpus == null ? void 0 : corpus.gadgets.length) != null ? _e : 0;
       info(`${gadgetCount} gadgets and ${corpus ? summarizeCapabilities(corpus).length : 0} capabilities, every address free of the bad bytes.`);
       summary.push({ Section: `[3/${n}] corpus`, Result: `${gadgetCount} gadgets` });
-      section(`[4/${n}] Best 3 candidates per job (${style} style)`);
+      section(`[4/${n}] The gadget picked per job (${style} style)`);
       echo("dep_candidates", [moduleName, badText, style]);
-      const { best, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style);
+      const { picks, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style);
       summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
       section(`[5/${n}] Clean recipes for the constants`);
       for (const constant of CONSTANTS[depApi]) {
@@ -24809,7 +25020,7 @@ ${INDENT}`)]);
       invoke("dep_function", frameArgs);
       summary.push({ Section: `[6/${n}] frame`, Result: style === "pushad" ? "register map" : "dep_function frame" });
       section(`[7/${n}] Python draft: verify it field by field, it is not a finished chain`);
-      for (const line of draftLines({ api: depApi, style, module: moduleName, iatSlot, writable, cave, best, jmpEsp })) print(line);
+      for (const line of draftLines({ api: depApi, style, module: moduleName, iatSlot, writable, cave, picks, jmpEsp })) print(line);
       summary.push({ Section: `[7/${n}] draft`, Result: "TODO lines mark what only a debugger run can give" });
       setResult({
         command: "dep_plan",
