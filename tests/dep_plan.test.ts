@@ -253,6 +253,15 @@ describe("dep_plan", () => {
     expect(chain[chain.length - 1]).toBe("    return payload");
     expect(chain.some((line) => /^ {4}payload {1,2}?=/.test(line) || /^ {4}payload \+?=/.test(line))).toBe(true);
 
+    // Every chain line sits under a `#--` header naming what it builds, so finding the lines that built
+    // one field is a scroll to its header and never a count of dwords.
+    let header: string | undefined;
+    for (const line of chain) {
+      if (line.trim().startsWith("#--")) header = line.trim();
+      else if (line.includes("c.rop(")) expect(header, `${name} ${style}: ungrouped ${line.trim()}`).toBeDefined();
+    }
+    expect(chain.filter((line) => line.trim().startsWith("#--")).length).toBeGreaterThan(0);
+
     // Module level is blocks [1/7] to [6/7] at column 0; the chain's own lines are locals of the stage.
     const moduleLines = blocks.slice(0, 5).flat();
     const moduleNames: string[] = [];
