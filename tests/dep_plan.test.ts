@@ -72,7 +72,7 @@ function writeImports(image: Uint8Array, peOffset: number, base: bigint, symbols
 }
 
 /** One mapped module: a PE32 image with a .text section, optionally ASLR and an import table. */
-function peImage(base: bigint, options: { aslr?: boolean; imports?: string[]; gadgets?: boolean }): Uint8Array {
+function peImage(base: bigint, options: { aslr?: boolean; imports?: string[]; gadgets?: boolean; extra?: Array<[number, number[]]> }): Uint8Array {
   const image = new Uint8Array(0x5000);
   const peOffset = 0x80;
   const sectionTable = peOffset + 0x18 + 0xe0;
@@ -88,14 +88,14 @@ function peImage(base: bigint, options: { aslr?: boolean; imports?: string[]; ga
   writeUint32LE(image, sectionTable + 0x8, 0x2000);
   writeUint32LE(image, sectionTable + 0xc, 0x1000);
   writeUint32LE(image, sectionTable + 0x24, 0x60000020);
-  if (options.gadgets !== false) for (const [offset, bytes] of GADGETS) image.set(bytes, offset);
+  if (options.gadgets !== false) for (const [offset, bytes] of [...GADGETS, ...(options.extra ?? [])]) image.set(bytes, offset);
   if (options.imports && options.imports.length > 0) writeImports(image, peOffset, base, options.imports);
   return image;
 }
 
 /** `imports`: what libbkup imports. `movable`: a second module, with ASLR, importing these. */
-function installHost(options: { imports?: string[]; aslr?: boolean; movable?: string[] } = {}): void {
-  const image = peImage(BASE, { aslr: options.aslr, imports: options.imports ?? DEP_APIS });
+function installHost(options: { imports?: string[]; aslr?: boolean; movable?: string[]; extra?: Array<[number, number[]]> } = {}): void {
+  const image = peImage(BASE, { aslr: options.aslr, imports: options.imports ?? DEP_APIS, extra: options.extra });
   const moved = options.movable ? peImage(MOVED, { aslr: true, imports: options.movable, gadgets: false }) : undefined;
   const mapped: Array<{ name: string; base: bigint; image: Uint8Array }> = [{ name: "libbkup.dll", base: BASE, image }];
   if (moved) mapped.push({ name: "movable.dll", base: MOVED, image: moved });
@@ -124,7 +124,7 @@ function installHost(options: { imports?: string[]; aslr?: boolean; movable?: st
   };
 }
 
-function loadApi(options: { imports?: string[]; aslr?: boolean; movable?: string[] } = {}): Api {
+function loadApi(options: { imports?: string[]; aslr?: boolean; movable?: string[]; extra?: Array<[number, number[]]> } = {}): Api {
   installHost(options);
   initializeScript();
   logs.length = 0;
@@ -263,7 +263,7 @@ describe("dep_plan", () => {
     expect(named.get("MOV_MEM_EDI_EAX")).toBe(pick("write a field")?.address);
     expect(named.get("INC_EDI")).toBe(pick("advance the pointer")?.address);
     expect(named.get("XCHG_EAX_ESP")).toBe(pick("pivot ESP")?.address);
-    expect(table).toContain("COST = {NEG_EAX: (1, 0)}     # (extra pops, ret N)");
+    expect(table.find((line) => line.startsWith("COST = {"))).toContain("NEG_EAX: (1, 0)");
     expect(output).toContain("# confirm: bp 0x11111111 ; g ; r esp ; s -d esp-400 L100 45454545");
     expect(output).toContain("=== VirtualAlloc Python Call-Frame Skeleton ===");
     expect(api.last_result().findings[0]).toMatchObject({ api: "VirtualAlloc", module: "libbkup", style: "skeleton" });
@@ -290,15 +290,20 @@ describe("dep_plan", () => {
     expect(blocks.length).toBe(6);
     const chain = blocks[5];
 
-    // [7/7] is the body of a stage function, so it carries no def line of its own and ends in a return.
-    for (const line of chain) if (line.trim()) expect(line.startsWith("    "), line).toBe(true);
+    // [7/7] is what he sends, so it arrives as a complete payloadN() returning bytes. Everything above
+    // it is constants, which stay at module level: a constant is not something he sends.
+    expect(chain[0]).toMatch(/^def payload\d+\(\):$/);
+    for (const line of chain.slice(1)) if (line.trim()) expect(line.startsWith("    "), line).toBe(true);
     expect(chain[chain.length - 1]).toBe("    return payload");
-    expect(chain.some((line) => /^ {4}payload {1,2}?=/.test(line) || /^ {4}payload \+?=/.test(line))).toBe(true);
+    expect(chain.some((line) => /^ {4}payload {1,2}=/.test(line) || /^ {4}payload \+=/.test(line))).toBe(true);
+    for (const block of blocks.slice(0, 5)) {
+      expect(block.some((line) => /^def payload\d+\(\)/.test(line)), block[0]).toBe(false);
+    }
 
     // Every chain line sits under a `#--` header naming what it builds, so finding the lines that built
     // one field is a scroll to its header and never a count of dwords.
     let header: string | undefined;
-    for (const line of chain) {
+    for (const line of chain.slice(1)) {
       if (line.trim().startsWith("#--")) header = line.trim();
       else if (line.includes("c.rop(")) expect(header, `${name} ${style}: ungrouped ${line.trim()}`).toBeDefined();
     }
@@ -314,10 +319,12 @@ describe("dep_plan", () => {
       else moduleNames.push(...own);
       inner.forEach((name) => locals.add(name));
     }
+    moduleNames.push(...bindings(chain[0]).own);
     for (const line of chain) {
       const { own, inner } = bindings(line);
       [...own, ...inner].forEach((name) => locals.add(name));
     }
+    locals.delete(moduleNames[moduleNames.length - 1]);
 
     expect([...new Set(moduleNames)].sort()).toEqual([...moduleNames].sort());
     for (const reserved of ["OFFSET", "BADCHARS"]) expect(moduleNames, reserved).not.toContain(reserved);
@@ -340,6 +347,22 @@ describe("dep_plan", () => {
     expect(output).toContain("[ESP+16] = EBX        <- dwSize = 0x201");
   });
 
+  // A gadget can be clean on paper and still fault, because it takes an address from a register the
+  // chain never pointed anywhere. libbkup's pushad gadgets are the real example; this is the rule.
+  test("a gadget that dereferences a register nothing points anywhere loses to one that does not", () => {
+    // neg eax ; mov eax, dword [ebx] ; ret: fewer side effects than the clean neg, so it ranks above it.
+    const fresh = loadApi({ extra: [[0x1371, [0xf7, 0xd8, 0x8b, 0x03, 0xc3]]] });
+    fresh.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
+    const output = text();
+    const negate = output.slice(output.indexOf("  negate"), output.indexOf("  pivot ESP"));
+    expect(negate).toContain("neg eax ; mov eax, dword [ebx] ; ret");
+    expect(negate).toContain("reads through ebx, which nothing in the chain has pointed anywhere yet");
+    // It ranked first and still lost, because a candidate without that property exists.
+    expect(negate).toMatch(/> 0x11111161 {2}neg eax ; pop ebp ; ret/);
+    expect(negate.indexOf("mov eax, dword [ebx]")).toBeLessThan(negate.indexOf("> 0x11111161"));
+    expect(negate).not.toContain("!! every candidate for this job");
+  });
+
   test("warns only about base bytes that every address in the module shares", () => {
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
     expect(text()).toContain("libbkup.dll spans 0x11110000 to 0x11114FFF: no ASLR, and its fixed high bytes are clean.");
@@ -348,10 +371,11 @@ describe("dep_plan", () => {
     expect(text()).toContain("Every address in libbkup.dll (0x11110000 to 0x11114FFF) holds the bad byte(s) 11, so no gadget from it is usable.");
   });
 
+  // Resolved, not as typed: pasting this line back reproduces the run, numbering included.
   test.each([
-    [["VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20"], '=== dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20") ==='],
-    [["VirtualProtect", "libbkup", "00 0A 0D", "pushad"], '=== dx @$osed().dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad") ==='],
-  ])("the first line is the call %j as typed", (args, header) => {
+    [["VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20"], '=== dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20", "skeleton", 1) ==='],
+    [["VirtualProtect", "libbkup", "00 0A 0D", "pushad", 6], '=== dx @$osed().dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad", 6) ==='],
+  ])("the first line is the call %j with the style and the stage resolved", (args, header) => {
     api.dep_plan(...args);
     const output = text();
     expect(output.split("\n").find((line) => line !== "")).toBe(header);
@@ -410,6 +434,16 @@ describe("dep_plan", () => {
     }
   });
 
+  test("the stage number says where his file continues, and the echoed line carries it", () => {
+    api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", "skeleton", 6);
+    const output = text();
+    expect(output).toContain('=== dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", "skeleton", 6) ===');
+    expect(blocksOf(output)[5][0]).toBe("def payload6():");
+    logs.length = 0;
+    api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
+    expect(blocksOf(text())[5][0]).toBe("def payload1():");
+  });
+
   test.each(["skeleton", "pushad"])("dep_candidates in a fresh session prints the whole [4/7] %s section and loads no corpus", (style) => {
     api.dep_plan("VirtualProtect", "libbkup", "00 0A 0D", style);
     const report = text();
@@ -430,13 +464,21 @@ describe("dep_plan", () => {
   // The three ways a chain dies. They look alike from outside and each has a different fix, so each
   // one names itself, stops the sections that would describe a call that cannot happen, and prints the
   // one command that moves it forward.
-  test("no module imports the API: the sections about the call are skipped, and the fix is another API", () => {
+  test("no module imports the API: keep the API, change where the address comes from", () => {
     const fresh = loadApi({ imports: [] });
     fresh.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
     const output = text();
     expect(output).toContain("=== STOP: no VirtualAlloc chain from libbkup.dll ===");
-    expect(output).toContain("[-] Nothing in this process imports VirtualAlloc");
-    expect(output).toContain('[-] Next: dx @$osed().rop.generate("auto", "", "00 0A 0D", "libbkup")');
+    expect(output).toContain("[-] No module loaded right now imports VirtualAlloc");
+    expect(output).toContain("This is the rare one");
+    // The exam usually mandates the API, so the swap is last and conditional, never the headline.
+    const ladder = output.slice(output.indexOf("=== STOP:"));
+    expect(ladder).toContain("[-] Keep VirtualAlloc and change where its address comes from, in this order:");
+    expect(ladder.indexOf("Keep VirtualAlloc")).toBeLessThan(ladder.indexOf("Only if you are free to choose the API"));
+    expect(ladder.indexOf('sc.iat_find("VirtualAlloc")')).toBeLessThan(ladder.indexOf('sc.iat_find("GetProcAddress")'));
+    expect(ladder.indexOf('sc.iat_find("GetProcAddress")')).toBeLessThan(ladder.indexOf("fixed delta"));
+    expect(ladder).toContain("this is the last resort");
+    expect(ladder).toContain('Only if you are free to choose the API: dx @$osed().rop.generate("auto", "", "00 0A 0D", "libbkup")');
     // The expensive half still prints: the module, the corpus and a gadget per job do not depend on the API.
     for (const header of ["=== [1/7]", "=== [3/7]", "=== [4/7]"]) expect(output).toContain(header);
     expect(output).toContain("push esp ; pop esi ; ret");
@@ -449,7 +491,17 @@ describe("dep_plan", () => {
     // Loud at the point of failure and again at the end, because the first one scrolls away.
     expect(output.split("=== STOP:").length - 1).toBe(2);
     expect(fresh.last_result()).toMatchObject({ success: false });
-    expect(fresh.last_result().errors[0]).toContain("you change API, not module");
+    expect(fresh.last_result().errors[0]).toContain("No module loaded right now imports VirtualAlloc");
+    expect(fresh.last_result().errors[1]).toContain("Keep VirtualAlloc");
+  });
+
+  test("a bad char in the slot address is the usual case here, and [5/7] already answers it", () => {
+    api.dep_plan("VirtualAlloc", "libbkup", "11 0A 0D");
+    const output = text();
+    expect(output).toContain("[+] The slot address holds the bad byte(s)");
+    expect(output).toContain("That is the usual case and nothing breaks");
+    expect(output).not.toContain("=== STOP:");
+    expect(api.last_result()).toMatchObject({ success: true });
   });
 
   test("the only importer has ASLR: the fix is another importer, not another module", () => {
@@ -458,7 +510,9 @@ describe("dep_plan", () => {
     const output = text();
     expect(output).toContain("=== STOP: no WriteProcessMemory chain from libbkup.dll ===");
     expect(output).toContain("every module that does has ASLR, starting with movable.dll");
-    expect(output).toContain('[-] Next: dx @$osed().sc.iat_find("WriteProcessMemory")');
+    expect(output).toContain("[-] Keep WriteProcessMemory and change where its address comes from, in this order:");
+    expect(output).toContain('sc.iat_find("WriteProcessMemory")    the Owner column lists every importer');
+    expect(output).toContain("the IAT you read and the module your gadgets come from are independent");
     expect(output).toContain("=== [4/7]");
     expect(output).toContain("[-] Skipped: there is no chain to write.");
   });
@@ -478,8 +532,9 @@ describe("dep_plan", () => {
     const output = text();
     expect(output).toContain("=== STOP: no VirtualAlloc chain from libbkup.dll ===");
     expect(output).toContain("[-] libbkup.dll has ASLR: every gadget address in it moves on each run");
-    expect(output).toContain("This is the one case where you change module.");
+    expect(output).toContain("This is the one case where you change module, and the API stays as it is.");
     expect(output).toContain("[-] Next: dx @$osed().modules()");
+    expect(output).not.toContain("Keep VirtualAlloc and change where its address comes from");
     expect(output).toContain("[-] Skipped: there is no chain to write.");
   });
 

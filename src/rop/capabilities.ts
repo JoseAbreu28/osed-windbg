@@ -26,6 +26,27 @@ function push(map: Map<string, RopGadget[]>, capability: RopCapability, gadget: 
   map.set(k, existing);
 }
 
+// Mnemonics whose first operand is the register they write.
+const WRITES_FIRST = ["mov", "movzx", "movsx", "lea", "xor", "or", "and", "add", "sub", "adc", "sbb",
+  "inc", "dec", "neg", "not", "imul", "shl", "shr", "sar", "rol", "ror", "bswap", "pop"];
+
+function overwrites(instruction: RopGadget["instructions"][number], register: string): boolean {
+  const operands = instruction.operands.map((operand) => operand.trim().toLowerCase());
+  if (instruction.mnemonic === "xchg") return operands.indexOf(register) >= 0;
+  return WRITES_FIRST.indexOf(instruction.mnemonic) >= 0 && operands[0] === register;
+}
+
+/** Does something run before `evidence` that puts its own value in `register`?
+ *
+ * `sbb eax, eax ; neg eax ; ret` is a REGISTER_NEGATE on eax and it is useless: by the time the neg
+ * runs, eax holds whatever sbb left, not the value the chain put there. Found by excluding the chosen
+ * negate on the real target and watching the re-solved chain die in the lab. */
+export function spoilsOwnInput(gadget: RopGadget, evidence: string, register: string): boolean {
+  const at = gadget.instructions.findIndex((instruction) => instruction.normalizedText === evidence);
+  if (at <= 0) return false;
+  return gadget.instructions.slice(0, at).some((instruction) => overwrites(instruction, register));
+}
+
 export function buildCapabilities(gadgets: RopGadget[]): CapabilityIndex {
   const capabilityMap = new Map<string, RopGadget[]>();
   for (const gadget of gadgets) {

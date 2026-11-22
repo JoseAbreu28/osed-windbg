@@ -65,6 +65,14 @@ describe.skipIf(!DLL || !existsSync(DLL))("dep_plan on the real libbkup.dll", ()
       expect(job.pick?.writes.filter((register) => job.keep.indexOf(register) >= 0), job.title).toEqual([]);
     }
     expect(output).toContain("no: reads through ecx: loading the slot there clobbers the field address");
+    // Found by excluding the chosen negate and watching the re-solved chain fail in the lab:
+    // 0x6A425D27 is sbb eax, eax ; neg eax ; pop ebp ; ret, which negates whatever sbb left in eax and
+    // never the value the chain put there. It used to be offered as usable and as a swap. It is gone now.
+    const negate = output.slice(output.indexOf("  negate"), output.indexOf("  pivot ESP"));
+    expect(negate).not.toContain("0x6A425D27");
+    expect(output).not.toContain("# NEG_EAX        = 0x6A425D27");
+    // Same shape, same job: xor eax, eax ; inc eax is not an increment of your value either.
+    expect(output.slice(output.indexOf("  advance"), output.indexOf("  negate"))).not.toContain("xor eax, eax ; inc eax");
     const picked = jobs.map((job) => job.pick?.address);
     if (process.env.DUMP) require("fs").writeFileSync(`${process.env.DUMP}/plan_skeleton.txt`, output);
     const table = output.slice(output.indexOf("=== [4/7]"), output.indexOf("=== [5/7]"));

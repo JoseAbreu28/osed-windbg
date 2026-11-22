@@ -1,4 +1,4 @@
-import { CapabilityIndex } from "./capabilities";
+import { CapabilityIndex, spoilsOwnInput } from "./capabilities";
 import { ChainStep, GadgetSelection, firstKnownAddress, getStableAddressHint, hex32, isAddressStable, retImmBytes, retImmPadding, setStableAddressHint } from "./chain";
 import { RopGadget } from "./types";
 
@@ -278,12 +278,21 @@ function findZeroGadget(index: CapabilityIndex, reg: string, preserve?: Set<stri
   return selectBest(pureXorRet, preserve);
 }
 
+/** The instruction text the capability was derived from, so spoilsOwnInput knows where the job starts. */
+function operationEvidence(gadget: RopGadget, kind: string, register: string, target?: string): string {
+  const capability = gadget.capabilities.find((candidate) => candidate.kind === kind
+    && candidate.register === register && (target === undefined || candidate.targetRegister === target));
+  return capability?.evidence[0] ?? "";
+}
+
 function findUnaryGadget(index: CapabilityIndex, kind: string, reg: string, preserve?: Set<string>): GadgetSelection | undefined {
   const candidates = index.capabilityMap.get(capKey(kind, reg)) ?? [];
   const expected = OPERATION_MNEMONIC[kind];
   const valid = candidates.filter((g) => {
     const last = g.instructions[g.instructions.length - 1];
     if (last?.mnemonic !== "ret") return false;
+    // ...and nothing before it may put its own value in reg, or the operation works on that instead.
+    if (spoilsOwnInput(g, operationEvidence(g, kind, reg), reg)) return false;
     // The operation must be the final write to reg, so its result survives the ret.
     return expected === undefined || registerFinalWriteMnemonic(g, reg) === expected;
   });
@@ -296,6 +305,7 @@ function findBinaryGadget(index: CapabilityIndex, kind: string, dst: string, src
   const valid = candidates.filter((g) => {
     const last = g.instructions[g.instructions.length - 1];
     if (last?.mnemonic !== "ret") return false;
+    if (spoilsOwnInput(g, operationEvidence(g, kind, dst, src), dst)) return false;
     return expected === undefined || registerFinalWriteMnemonic(g, dst) === expected;
   });
   return selectBest(valid, preserve);

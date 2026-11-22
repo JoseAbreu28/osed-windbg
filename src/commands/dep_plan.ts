@@ -1,4 +1,4 @@
-import { CapabilityIndex } from "../rop/capabilities";
+import { CapabilityIndex, spoilsOwnInput } from "../rop/capabilities";
 import { rankCandidates } from "../rop/emitter";
 import { CapabilityKind, RopGadget } from "../rop/types";
 import { DepApi } from "./rop_template";
@@ -121,9 +121,10 @@ function jobCapability(gadget: RopGadget, job: Job) {
 }
 
 // A gadget that moves ESP only fits the pivot job; anywhere else it throws the chain away.
-function ranked(index: CapabilityIndex, job: Job): RopGadget[] {
+function ranked(index: CapabilityIndex, job: Job, exclude: number[]): RopGadget[] {
   return rankCandidates(index.gadgets.filter((gadget) =>
-    jobCapability(gadget, job) !== undefined && (job.key === "pivot" || !movesEsp(gadget))));
+    jobCapability(gadget, job) !== undefined && (job.key === "pivot" || !movesEsp(gadget))
+    && exclude.indexOf(gadgetAddress(gadget)) < 0));
 }
 
 const REGISTER = /^e(ax|bx|cx|dx|si|di|bp|sp)$/;
@@ -187,11 +188,34 @@ export function holds(gadget: RopGadget, dest: string, source: string): boolean 
     && transform.offset?.kind === "constant" && transform.offset.value === 0;
 }
 
+/** Roles whose register the chain knows holds a readable address. An argument value is not one: a
+ * gadget that dereferences a register holding `dwSize` reads an unmapped address and the process dies
+ * there, which is what makes libbkup's three pushad gadgets unusable. */
+const POINTER_ROLES: Role[] = ["pointer", "field"];
+
+/** Registers the gadget takes a memory address from, other than its own job's operand and ESP. */
+export function dereferencedRegisters(gadget: RopGadget, own: string): string[] {
+  const found: string[] = [];
+  for (const instruction of gadget.instructions) {
+    if (instruction.normalizedText === own || instruction.mnemonic === "push" || instruction.mnemonic === "pop") continue;
+    for (const operand of instruction.operands) {
+      const { base } = memoryBase(operand);
+      if (base && base !== "esp" && found.indexOf(base) < 0) found.push(base);
+    }
+  }
+  return found;
+}
+
 export type Verdict = {
   gadget: RopGadget;
   at: Ports;
   usable: boolean;
   move?: string;
+  /** Registers it dereferences that nothing in the chain has pointed anywhere by this job. */
+  uncontrolled: string[];
+  /** The instruction that does the job is the gadget's first, so nothing runs before it that could
+   * corrupt its input. `sbb eax, eax ; neg eax ; ret` negates, but not the value you gave it. */
+  leads: boolean;
   reason: string;
 };
 
@@ -212,6 +236,12 @@ function rejection(gadget: RopGadget, job: Job, at: Ports, live: Array<{ role: R
   if (job.key === "copy" && at.dest && at.source && !holds(gadget, at.dest, at.source)) return `${at.dest} does not keep the copy`;
   if (job.key === "copy" && bound.pointer !== undefined && at.source !== bound.pointer) return `copies ${at.source}, but the captured ESP is in ${bound.pointer}`;
   if (job.key === "pivot" && !at.source) return "takes ESP from the stack, not from a register";
+  // The instruction that does the job is not the first, and something before it overwrites the register
+  // the job works on. `sbb eax, eax ; neg eax ; ret` negates, but never the value you handed it.
+  const target = at.dest ?? at.source;
+  if (target && spoilsOwnInput(gadget, capability?.evidence[0] ?? "", target)) {
+    return `something before it overwrites ${target}, so it works on that instead of the value you gave it`;
+  }
   const extra = memoryWrites(gadget, capability?.evidence[0] ?? "");
   if (job.key !== "write" && extra.length > 0) return `also writes memory at ${extra[0]}`;
   const written = writtenRegisters(gadget);
@@ -265,7 +295,7 @@ function moves(job: Job, at: Ports, bound: Partial<Record<Role, string>>): strin
 // Walk the jobs in chain order. Each pick binds the role it sets to its register; later jobs must keep
 // that register and read their inputs from it. The pick is the first candidate in the old ranking that
 // does both, else the first that keeps every live register and only needs a move first.
-export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle): JobPlan[] {
+export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle, exclude: number[] = []): JobPlan[] {
   const jobs = jobsFor(style);
   const bound: Partial<Record<Role, string>> = {};
   return jobs.map((job, position) => {
@@ -273,19 +303,35 @@ export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle
     const live = liveAfter(jobs, position)
       .filter((role) => bound[role] !== undefined)
       .map((role) => ({ role, register: bound[role] as string }));
-    const verdicts = (index ? ranked(index, job) : []).map((gadget): Verdict => {
+    // A register counts as pointed somewhere only if the chain put an address in it: the roles above,
+    // or the operand this job itself sets up.
+    const pointed = POINTER_ROLES.map((role) => bound[role]).filter((register): register is string => register !== undefined);
+    const verdicts = (index ? ranked(index, job, exclude) : []).map((gadget): Verdict => {
       const at = ports(gadget, job);
+      const own = jobCapability(gadget, job)?.evidence[0] ?? "";
+      const leads = own !== "" && own === gadget.instructions[0]?.normalizedText;
+      const controlled = [...pointed, at.address].filter((register): register is string => register !== undefined);
+      const uncontrolled = dereferencedRegisters(gadget, own).filter((register) => controlled.indexOf(register) < 0);
+      const note = uncontrolled.length > 0
+        ? `; reads through ${uncontrolled.join(", ")}, which nothing in the chain has pointed anywhere yet`
+        : "";
       const rejected = rejection(gadget, job, at, live, bound);
-      if (rejected) return { gadget, at, usable: false, reason: rejected };
+      if (rejected) return { gadget, at, usable: false, uncontrolled, leads, reason: rejected };
       const needed = moves(job, at, bound);
       if (needed.length > 0) {
         const back = readsOf(job).some((role) => later.indexOf(role) >= 0) ? ", and back after" : "";
         const move = `${needed.join(", ")} first${back}`;
-        return { gadget, at, usable: true, move, reason: `move ${move}` };
+        return { gadget, at, usable: true, move, uncontrolled, leads, reason: `move ${move}${note}` };
       }
-      return { gadget, at, usable: true, reason: exactReason(gadget, job, at, live, bound) };
+      return { gadget, at, usable: true, uncontrolled, leads, reason: `${exactReason(gadget, job, at, live, bound)}${note}` };
     });
-    const pick = verdicts.filter((verdict) => verdict.usable && !verdict.move)[0] ?? verdicts.filter((verdict) => verdict.usable)[0];
+    // A gadget that dereferences a register nothing points anywhere faults at run time however clean it
+    // looks, so it never wins while a candidate without that property exists.
+    const safe = (verdict: Verdict): boolean => verdict.uncontrolled.length === 0;
+    const pick = verdicts.filter((verdict) => verdict.usable && !verdict.move && safe(verdict))[0]
+      ?? verdicts.filter((verdict) => verdict.usable && safe(verdict))[0]
+      ?? verdicts.filter((verdict) => verdict.usable && !verdict.move)[0]
+      ?? verdicts.filter((verdict) => verdict.usable)[0];
     const sets = job.flow.sets;
     if (pick && sets) {
       const register = ports(pick.gadget, job)[sets.port];
@@ -344,6 +390,9 @@ export function planLines(plan: JobPlan): string[] {
   for (const verdict of above.slice(0, 3)) lines.push(...line(verdict, " ", verdict.usable ? "usable" : "no"));
   if (above.length > 3) lines.push(`      ... and ${above.length - 3} more above it`);
   if (pick) lines.push(...line(pick, ">", "PICK"));
+  if (pick && pick.uncontrolled.length > 0) {
+    lines.push(`      !! every candidate for this job reads through ${pick.uncontrolled.join(", ")}. Point ${pick.uncontrolled.join(" and ")} at readable memory before this gadget runs, or the chain dies here.`);
+  }
   else lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
   for (const verdict of after) lines.push(...line(verdict, " ", "usable"));
   return lines;

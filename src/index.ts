@@ -51,7 +51,7 @@ import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./comman
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
 import { createExplainCommand, wrapApi, type ExplainState } from "./explain/explain";
-import { buildBestApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, dwordIsByteSafe, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildBestApiResolution, buildCapabilities, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, dwordIsByteSafe, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { buildExploitFrame } from "./rop/exploit_frame";
 import { verifyChain, parseManualChain, type VerificationReport } from "./rop/chain_verifier";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
@@ -3116,9 +3116,9 @@ function bindApi(): OsedApi {
   };
 
   // The body of dep_plan's [4/7] and all of dep_candidates, so pasting the echoed line repeats the section.
-  const printDepCandidates = (corpus: CapabilityIndex | undefined, moduleName: string, badSet: Set<number>, style: DepPlanStyle) => {
+  const printDepCandidates = (corpus: CapabilityIndex | undefined, moduleName: string, badSet: Set<number>, style: DepPlanStyle, exclude: number[] = []) => {
     out.info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
-    const plans = planJobs(corpus, style);
+    const plans = planJobs(corpus, style, exclude);
     for (const plan of plans) {
       for (const line of planLines(plan)) out.print(line);
     }
@@ -3182,25 +3182,36 @@ function bindApi(): OsedApi {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("dep_plan");
     }
-    out.section(out.dxCall("dep_plan", args));
-    const [apiArg, moduleArg, badArg, styleArg] = args;
+    const [apiArg, moduleArg, badArg, styleArg, stageArg, excludeArg] = args;
     const depApi = DEP_PLAN_APIS.find((name) => name.toLowerCase() === String(apiArg ?? "").trim().toLowerCase());
     const style = String(styleArg ?? "skeleton").trim().toLowerCase() as DepPlanStyle;
+    // The next free payloadN() in his file. dep_plan cannot know how many stages he already has, so the
+    // resolved value is echoed below: pasting that line back reproduces the same numbering.
+    const stage = stageArg === undefined ? 1 : Math.trunc(Number(stageArg));
+    // Addresses the chain must not use. Removing one can change which gadget wins another job and it
+    // changes the junk accounting throughout, which is why this re-solves rather than swapping by hand.
+    const excludeText = typeof excludeArg === "string" ? excludeArg.trim() : "";
+    const exclude = excludeText ? excludeText.split(/[\s,]+/).map((token) => parseInt(token.replace(/^0x/i, ""), 16) >>> 0) : [];
     const moduleName = typeof moduleArg === "string" ? moduleArg.trim() : "";
     const badText = typeof badArg === "string" ? badArg : "";
     const badchars = parseHexByteList(badText);
     const fail = (message: string): DxResult => {
       const rows = [{ Error: message }];
       renderRows("DEP Plan", rows);
-      out.info('Usage: dx @$osed().dep_plan(api, module, badchars, style?)');
+      out.info('Usage: dx @$osed().dep_plan(api, module, badchars, style?, firstStage?)');
       setResult({ command: "dep_plan", args: { api: apiArg, module: moduleArg, badchars: badArg, style: styleArg }, success: false, findings: [], warnings: [], errors: [message] });
       return toDxResult("DEP Plan", rows);
     };
     if (!depApi) return fail(`api must be one of ${DEP_PLAN_APIS.join(", ")}.`);
     if (!DEP_PLAN_STYLES.includes(style)) return fail(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
+    if (!Number.isFinite(stage) || stage < 1) return fail("firstStage must be the number of the next free payloadN() in your file, 1 or more.");
+    if (exclude.some((address) => !Number.isFinite(address) || address === 0)) return fail('exclude must be gadget addresses in hex, such as "6A42F3CD 6A411118".');
     if (!Array.isArray(badchars)) return fail('badchars must be hex bytes such as "00 0A 0D".');
     const moduleInfo = moduleName ? moduleInfoByName(moduleName) : undefined;
     if (!moduleInfo) return fail(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
+    out.section(out.dxCall("dep_plan", excludeText
+      ? [depApi, moduleName, badText, style, stage, excludeText]
+      : [depApi, moduleName, badText, style, stage]));
     const badSet = new Set(badchars as number[]);
     const n = DEP_PLAN_SECTIONS;
     const summary: Array<Record<string, string>> = [];
@@ -3219,18 +3230,27 @@ function bindApi(): OsedApi {
     // What stops a chain for this API in this module. [1/7] to [4/7] stay true without it, because they
     // describe the module and its gadgets. [5/7] to [7/7] would describe a call he cannot make, so they
     // print one line instead of content: an answer-shaped section is worse than no section.
-    let blocker: { what: string; next: string } | undefined;
+    let blocker: { what: string; next: string[] } | undefined;
     const shortName = (name: string): string => name.split("\\").pop() ?? name;
     const moduleLabel = shortName(moduleInfo.name);
-    // The three ways a chain dies look alike from outside and have three different fixes, so each one
-    // names itself and carries the single command that moves it forward.
-    const stop = (what: string, next: string): void => {
+    // The three ways a chain dies look alike from outside and have different fixes, so each one names
+    // itself and carries its own way forward.
+    const stop = (what: string, ...next: string[]): void => {
       if (blocker) return;
       blocker = { what, next };
       out.section(`STOP: no ${depApi} chain from ${moduleLabel}`);
       out.error(what);
-      out.error(`Next: ${next}`);
+      for (const line of next) out.error(line);
     };
+    // The exam usually fixes the API, so the first answer to a slot problem is never "call something else".
+    // It is "read the address from somewhere else", and the API swap comes last and conditionally.
+    const addressElsewhere = (first: string): string[] => [
+      `Keep ${depApi} and change where its address comes from, in this order:`,
+      `  1. ${first}`,
+      `  2. dx @$osed().sc.iat_find("GetProcAddress")    if that is imported, resolve ${depApi} at run time instead of reading a slot of its own.`,
+      `  3. A fixed delta from a neighbouring kernel32 import, worked out once and written into the exploit. Any Windows update moves it, so this is the last resort.`,
+      `Only if you are free to choose the API: dx @$osed().rop.generate("auto", "", "${badText}", "${moduleName}")    scores the six bypass APIs by slot and bad chars.`,
+    ];
     const first = Number(moduleInfo.base);
     const last = Number(moduleInfo.base + moduleInfo.size - BigInt(1));
     const fixedByte = (shift: number): number | undefined =>
@@ -3242,15 +3262,15 @@ function bindApi(): OsedApi {
     const sharedBad = [...new Set([24, 16].map(fixedByte).filter((byte): byte is number => byte !== undefined && badSet.has(byte)))];
     const moduleWarnings = [
       moduleInfo.aslr === "enabled" ? `${moduleLabel} has ASLR: its addresses change on every run, so a chain built from it needs a leak.` : undefined,
-      moduleInfo.preferredBase !== BigInt(0) && moduleInfo.base !== moduleInfo.preferredBase ? `${moduleLabel} was relocated from its preferred base ${dwordHex(Number(moduleInfo.preferredBase))}.` : undefined,
+      moduleInfo.preferredBase !== BigInt(0) && moduleInfo.base !== moduleInfo.preferredBase ? `${moduleLabel} is loaded at ${dwordHex(first)}, not at its preferred base ${dwordHex(Number(moduleInfo.preferredBase))}. Without ASLR it stays there for this boot, but every address below is this process's: never take one from the file on disk.` : undefined,
       sharedBad.length > 0 ? `Every address in ${moduleLabel} (${dwordHex(first)} to ${dwordHex(last)}) holds the bad byte(s) ${sharedBad.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ")}, so no gadget from it is usable.` : undefined,
     ].filter((warning): warning is string => warning !== undefined);
     for (const warning of moduleWarnings) out.warn(warning);
     if (moduleWarnings.length === 0) out.info(`${moduleLabel} spans ${dwordHex(first)} to ${dwordHex(last)}: no ASLR, and its fixed high bytes are clean. The scan in [3/${n}] drops each address whose low bytes are bad.`);
     printBlock(HELPER_BLOCK);
     if (moduleInfo.aslr === "enabled") {
-      stop(`${moduleLabel} has ASLR: every gadget address in it moves on each run, so no chain built from it survives a reboot. This is the one case where you change module.`,
-        `dx @$osed().modules()    pick one with ASLR disabled and run dep_plan again with it`);
+      stop(`${moduleLabel} has ASLR: every gadget address in it moves on each run, so no chain built from it survives a reboot. This is the one case where you change module, and the API stays as it is.`,
+        `Next: dx @$osed().modules()    pick one with ASLR disabled and run dep_plan again with it.`);
     }
     summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
 
@@ -3270,20 +3290,20 @@ function bindApi(): OsedApi {
     const iatSlot = slotMatch ? parseInt(slotMatch[1], 16) >>> 0 : undefined;
     const slotBad = iatSlot === undefined ? [] : addressBadBytes(BigInt(iatSlot), 4, badSet);
     if (iatSlot === undefined) {
-      stop(`Nothing in this process imports ${depApi}, so there is no slot to read its address from. ${moduleLabel} is not the problem here, the API is: you change API, not module.`,
-        `dx @$osed().rop.generate("auto", "", "${badText}", "${moduleName}")    scores every DEP bypass API by whether its slot exists and whether that address is free of your bad chars`);
+      stop(`No module loaded right now imports ${depApi}, so there is no slot to read its address from. This is the rare one: an exam target is normally built so the API it mandates is importable.`,
+        ...addressElsewhere(`dx @$osed().sc.iat_find("${depApi}")    run it again at the crash, when more DLLs are mapped. Any importer serves, it does not have to be ${moduleLabel}: the IAT you read and the module your gadgets come from are independent. It only has to show ASLR disabled in modules().`));
     } else {
       const owner = out.stripDml(String(chosen!.Owner));
       out.info(`Slot ${dwordHex(iatSlot)} in ${owner}. The chain reads the API address from it with mov eax, [eax].`);
       if (!owner.toLowerCase().includes(moduleName.toLowerCase())) {
         if (ownerAslrOf(chosen!)) {
-          stop(`${moduleLabel} does not import ${depApi}, and every module that does has ASLR, starting with ${owner}: the slot address moves on every boot. Reading it needs a leak first, or the API resolved at run time.`,
-            `dx @$osed().sc.iat_find("${depApi}")    the Owner column lists every importer; you need one whose module shows ASLR disabled`);
+          stop(`${moduleLabel} does not import ${depApi}, and every module that does has ASLR, starting with ${owner}: the slot address moves on every boot, so reading it needs a leak first.`,
+            ...addressElsewhere(`dx @$osed().sc.iat_find("${depApi}")    the Owner column lists every importer; you need one whose module shows ASLR disabled in modules(). It does not have to be ${moduleLabel}: the IAT you read and the module your gadgets come from are independent.`));
         } else {
           out.warn(`${moduleLabel} does not import ${depApi}; this slot belongs to ${owner}. Check the other importers with sc.iat_find if you would rather stay inside one module.`);
         }
       }
-      if (slotBad.length > 0) out.warn(`The slot address holds bad byte(s) ${slotBad.map((b) => dwordHex(b).slice(-2)).join(" ")}: build it with the recipe in [5/${n}].`);
+      if (slotBad.length > 0) out.info(`The slot address holds the bad byte(s) ${slotBad.map((b) => dwordHex(b).slice(-2)).join(" ")}. That is the usual case and nothing breaks: [5/${n}] builds the address from clean constants and the chain never sends it raw.`);
       else out.info("The slot address has no bad byte, so it can be popped as it is.");
     }
     printBlock(slotBlock(depApi, moduleName, iatSlot, badchars as number[]).block);
@@ -3310,12 +3330,18 @@ function bindApi(): OsedApi {
 
     out.section(`[4/${n}] The gadget picked per job (${style} style)`);
     out.echo("dep_candidates", [moduleName, badText, style]);
-    const { plans, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style);
+    if (exclude.length > 0) out.info(`Excluding ${exclude.length} gadget(s) by request: ${exclude.map(dwordHex).join(", ")}. The chain is solved again without them, so other jobs may pick differently.`);
+    const { plans, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style, exclude);
+    // rop.construct and the [5/7] recipes search this one, so an excluded gadget cannot come back
+    // through a recipe under another name.
+    const solvable = corpus && exclude.length > 0
+      ? buildCapabilities(corpus.gadgets.filter((gadget) => exclude.indexOf(depPlanAddress(gadget)) < 0))
+      : corpus;
     const build = buildExploit({
       api: depApi, style, module: moduleName, badchars: badchars as number[], index: corpus, plans,
-      iatSlot, writable, cave, jmpEsp,
+      iatSlot, writable, cave, jmpEsp, stage, exclude,
       solve: (register, value, keep) =>
-        corpus ? solveValue(corpus, register, value, badchars as number[], keep, buildStableAddressPredicate()) : undefined,
+        solvable ? solveValue(solvable, register, value, badchars as number[], keep, buildStableAddressPredicate()) : undefined,
     });
     printBlock(build.blocks[4]);
     summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
@@ -3372,7 +3398,7 @@ function bindApi(): OsedApi {
     if (blocker) {
       out.section(`STOP: no ${depApi} chain from ${moduleLabel}`);
       out.error(blocker.what);
-      out.error(`Next: ${blocker.next}`);
+      for (const line of blocker.next) out.error(line);
     }
 
     setResult({
@@ -3381,7 +3407,7 @@ function bindApi(): OsedApi {
       success: blocker === undefined,
       findings: [{ api: depApi, module: moduleName, style, iatSlot, writable, cave, gadgets: gadgetCount, missing, holes: blocker ? [] : build.holes }],
       warnings: [...moduleWarnings, ...(missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : [])],
-      errors: blocker ? [blocker.what, `Next: ${blocker.next}`] : [],
+      errors: blocker ? [blocker.what, ...blocker.next] : [],
     });
     return toDxResult("DEP Plan", summary);
   };
