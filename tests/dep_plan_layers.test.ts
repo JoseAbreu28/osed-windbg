@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { stripDml } from "../src/core/output";
 import { initializeScript } from "../src/index";
+import { ReachIndex } from "../src/rop/reach";
 
 // dep_plan from evidence alone: which modules can give gadgets, where the API's address comes from, which
 // style the corpus supports, and whether a chain is needed at all. Each process here is built from real PE
@@ -197,11 +198,93 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
     expect(slot).toContain("That distance holds for this build of kernel32 only. Any Windows update moves it");
     expect(slot).toContain("API_DELTA = 0xFFFFFD01");
     expect(output).toContain("=== [4/7] The gadget picked per job (pushad style: the skeleton style lacks capture ESP) ===");
-    // The register loaders live in [5/7]: ESI gets the slot's pointer plus the distance.
+    // The register loaders live in [5/7]: ESI gets the slot's pointer plus the distance. Which register
+    // the distance is added in is the search's call, so what is asserted is the load, not one route: the
+    // slot is read, API_DELTA goes on, and the value ends up in ESI.
     const loaders = section(output, "=== [5/7]");
-    expect(loaders).toMatch(/c\.rop\(MOV_EAX_MEM_EAX\)\n\s+c\.rop\(POP_ECX, API_DELTA\)\n\s+c\.rop\(ADD_EAX_ECX\)\n\s+c\.rop\(MOV_ESI_EAX\)/);
+    const esi = loaders.slice(loaders.indexOf("def load_virtualalloc"), loaders.indexOf("def load_return"));
+    expect(esi).toContain("c.rop(MOV_EAX_MEM_EAX)");
+    expect(esi).toContain("c.rop(POP_ECX, API_DELTA)");
+    expect(esi).toMatch(/c\.rop\((MOV_ESI_EAX|ADD_ESI_ECX)\)/);
+    expect(esi).not.toContain("hole(");
+    expect(esi.slice(esi.lastIndexOf("c.rop"))).toMatch(/now \[IAT_SLOT\] \+ API_DELTA/);
+    // Above the code, one line saying which gadgets were chosen for ESI and why that route.
+    expect(loaders).toContain("What the chain does is below: one line per register, searched through libspp.dll rather than following one recipe.");
+    expect(loaders).toMatch(/esi = VirtualAlloc \(\[IAT_SLOT\] \+ API_DELTA\): [A-Z_0-9 ->]*MOV_EAX_MEM_EAX[A-Z_0-9 ->]*\. \d gadgets: the value is the dword at IAT_SLOT, known only at run time/);
     expect(output).toContain("A VirtualAlloc chain from libspp.dll in the pushad style, the API reached from kernel32!GetDriveTypeA by a distance measured on this machine");
     expect(api.last_result().success).toBe(true);
+  });
+
+  // His run on Sync Breeze emitted `def load_virtualalloc(c):` with nothing in it but a hole, because the
+  // only recipe was "build in EAX, then mov EAX into the target" and libspp has no mov into ESI. A
+  // `push eax ; pop esi ; ret` was sitting in the same module: a move by another name.
+  const NO_MOV_ESI = without(0x1111, 0x1181);
+  const PUSH_POP_ESI: [number, number[]] = [0x1191, [0x50, 0x5e, 0xc3]];
+
+  test("no mov into ESI, so the value goes through the stack instead of leaving the register a hole", () => {
+    const api = load(shape({ code: [...NO_MOV_ESI, PUSH_POP_ESI] }), { policy: 2, registry: FORCED });
+    api.dep_plan("VirtualAlloc", "libspp", BAD, "pushad");
+    const output = text();
+    const loaders = section(output, "=== [5/7]");
+    const esi = loaders.slice(loaders.indexOf("def load_virtualalloc"), loaders.indexOf("def load_return"));
+    expect(esi).not.toContain("hole(");
+    expect(esi).not.toContain("no gadget moves eax into esi");
+    expect(esi).toContain("c.rop(MOV_EAX_MEM_EAX)");
+    expect(esi).toContain("c.rop(PUSH_EAX_POP_ESI)");
+    expect(esi).toContain("c.rop(POP_ECX, API_DELTA)");
+    // Every gadget the loader names is a real address from the scan, with its disassembly, in [4/7].
+    const table = section(output, "=== [4/7]");
+    expect(table).toContain("PUSH_EAX_POP_ESI = 0x10111191   # push eax ; pop esi ; ret");
+    for (const name of esi.match(/c\.rop\(([A-Z_0-9]+)/g) ?? []) {
+      expect(table, name).toContain(`${name.slice(6)} `);
+    }
+    expect(api.last_result().success).toBe(true);
+  });
+
+  test("nothing reaches ESI at all: the message names what was searched and the one gadget that would open it", () => {
+    const api = load(shape({ code: NO_MOV_ESI }), { policy: 2, registry: FORCED });
+    api.dep_plan("VirtualAlloc", "libspp", BAD, "pushad");
+    const output = text();
+    const loaders = section(output, "=== [5/7]");
+    const esi = loaders.slice(loaders.indexOf("def load_virtualalloc"), loaders.indexOf("def load_return"));
+    // Still a hole, because the module really cannot do it. What changes is that the hole says why.
+    expect(esi).toContain("virtualalloc_value = hole(\"virtualalloc_value\")");
+    expect(esi).toContain("esi = VirtualAlloc ([IAT_SLOT] + API_DELTA) cannot be reached.");
+    expect(esi).toMatch(/searched: libspp\.dll gives \d+ distinct ways to write esi, with nothing to keep\. No combination of up to 8 of them reaches it\./);
+    expect(esi).toContain("one gadget would unlock it: mov esi, dword [esi] ; ret");
+    expect(esi).toContain("dx @$osed().palette(\"libspp.dll\", \"00 0A 0D 25 26 2B 3D\")");
+    // And the same sentence, short, in the per-register route list and in the [7/7] payload.
+    // Pinned whole, not by prefix: a prefix assertion would let the long form creep back in behind it.
+    expect(loaders.split(/\r?\n/).map((line) => line.trim())).toContain(
+      "[+]   esi = VirtualAlloc ([IAT_SLOT] + API_DELTA): no route among the 3 ways libspp.dll writes esi. "
+      + "mov esi, dword [esi] ; ret would unlock it; load_virtualalloc below says what was searched.");
+    expect(section(output, "=== [7/7]")).toContain("# esi = VirtualAlloc: no route, so load_virtualalloc below is a hole");
+  });
+
+  test("the pushad order is settled without searching the same register twice", () => {
+    // The order is tried before any loader is written, and every loader then asks again. A search over a
+    // real module costs tens of milliseconds on the debugger's engine, so asking twice is what turns a
+    // pause into a wait. Measured at 1771 gadgets: 98 probes took 4816 ms unmemoised and 302 ms memoised.
+    const reach = ReachIndex.prototype.reach;
+    // One corpus per index: the message that names the unlocking gadget searches a corpus with that gadget
+    // added, so those are different questions, not repeats. A repeat is the same question of one corpus.
+    const corpora = new Map<ReachIndex, string[]>();
+    ReachIndex.prototype.reach = function spy(this: ReachIndex, register, goal, options) {
+      const asked = corpora.get(this) ?? [];
+      asked.push(`${register}|${goal.mem?.at ?? ""}|${goal.k}|${goal.text}|${options.keep.slice().sort().join(",")}`);
+      corpora.set(this, asked);
+      return reach.call(this, register, goal, options);
+    };
+    try {
+      const api = load(shape(), { policy: 2, registry: FORCED });
+      api.dep_plan("VirtualAlloc", "libspp", BAD, "pushad");
+      expect(api.last_result().success).toBe(true);
+    } finally {
+      ReachIndex.prototype.reach = reach;
+    }
+    const scanned = [...corpora.values()].sort((a, b) => b.length - a.length)[0];
+    expect(scanned.length).toBeGreaterThan(6);
+    expect(scanned.length, scanned.join(" | ")).toBe(new Set(scanned).size);
   });
 
   test("the distance is anchored only in a module without ASLR, and [2/7] ends on one pick", () => {

