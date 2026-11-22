@@ -209,14 +209,14 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   },
   {
     name: "dep_candidates",
-    summary: "Best 3 gadgets per DEP chain job, ranked by side effects",
-    description: "Prints what step [4/7] of dep_plan prints: for each job of the skeleton or pushad chain, the 3 gadgets from the module with the fewest side effects, with what else each one does. The pushad style also lists jmp esp and call esp addresses. It scans the module itself and leaves the loaded corpus as it was.",
+    summary: "The gadget picked for each DEP chain job, and why",
+    description: "Prints what step [4/7] of dep_plan prints: for each job of the skeleton or pushad chain, the gadget it picks, the higher-ranked ones it rejected and why, and up to two usable alternatives. The pick keeps every register the chain still needs at that job and takes its input from the register that holds it. The pushad style also lists jmp esp and call esp addresses. It scans the module itself and leaves the loaded corpus as it was.",
     usage: 'dx @$osed().dep_candidates(module, badchars, style?)',
     examples: [
       'dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")',
       'dx @$osed().dep_candidates("libbkup", "00 0A 0D", "pushad")',
     ],
-    details: "Ranked by fewest side effects, then the smallest stack move. A gadget that moves ESP only counts for the pivot job. rop.query lists every gadget of one capability instead, in corpus order.",
+    details: "Ranked by fewest side effects, then the smallest stack move. The jobs run in chain order: each pick binds the value it produces (the captured ESP, the field address, the value to write, or a pushad register) to its register, and a later job rejects any gadget that writes a register still holding one of those values. A pick that reads the right value from another register says which move it needs first. A gadget that moves ESP only counts for the pivot job. rop.query lists every gadget of one capability instead, in corpus order.",
     seeAlso: ["dep_plan", "rop.query", "rop.scan_live"],
   },
   {

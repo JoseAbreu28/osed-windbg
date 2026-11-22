@@ -43,7 +43,7 @@ import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
 import type { RopGadget } from "./rop/types";
-import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, candidateLines, candidates as depPlanCandidates, draftLines, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, type DepPlanStyle } from "./commands/dep_plan";
+import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, draftLines, gadgetAddress as depPlanAddress, hex32 as dwordHex, planJobs, planLines, type DepPlanStyle, type Verdict } from "./commands/dep_plan";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./commands/code_caves";
@@ -3116,12 +3116,12 @@ function bindApi(): OsedApi {
 
   // The body of dep_plan's [4/7] and all of dep_candidates, so pasting the echoed line repeats the section.
   const printDepCandidates = (corpus: CapabilityIndex | undefined, moduleName: string, badSet: Set<number>, style: DepPlanStyle) => {
-    out.info("Ranked by fewest side effects, then the smallest stack move. Side effects are listed after each gadget.");
-    const best: Record<string, RopGadget | undefined> = {};
-    for (const job of jobsFor(style)) {
-      const found = corpus ? depPlanCandidates(corpus, job) : [];
-      best[job.key] = found[0];
-      for (const line of candidateLines(found, job)) out.print(line);
+    out.info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
+    const picks: Record<string, Verdict | undefined> = {};
+    const plans = planJobs(corpus, style);
+    for (const plan of plans) {
+      picks[plan.job.key] = plan.pick;
+      for (const line of planLines(plan)) out.print(line);
     }
     let jmpEsp: number | undefined;
     if (style === "pushad") {
@@ -3136,9 +3136,9 @@ function bindApi(): OsedApi {
         jmpEsp = jmpEsp ?? hits[0];
       }
     }
-    const missing = jobsFor(style).filter((job) => !best[job.key]).map((job) => job.title);
+    const missing = plans.filter((plan) => !plan.pick).map((plan) => plan.job.title);
     if (missing.length > 0) out.warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
-    return { best, jmpEsp, missing };
+    return { picks, plans, jmpEsp, missing };
   };
 
   const executeDepCandidates = (...args: unknown[]): DxResult => {
@@ -3162,11 +3162,12 @@ function bindApi(): OsedApi {
     if (!moduleName || !moduleInfoByName(moduleName)) return fail(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
     // Its own scan, so the loaded corpus stays as the user left it.
     const corpus = mergeCapabilityIndexes(discoverLiveIndexes([moduleName], { badchars }).indexes);
-    const { best, missing } = printDepCandidates(corpus, moduleName, new Set(badchars), style);
-    const rows = jobsFor(style).map((job) => {
-      const gadget = best[job.key];
-      return { Job: job.title, Best: gadget ? dwordHex(depPlanAddress(gadget)) : "none" };
-    });
+    const { plans, missing } = printDepCandidates(corpus, moduleName, new Set(badchars), style);
+    const rows = plans.map((plan) => ({
+      Job: plan.job.title,
+      Pick: plan.pick ? dwordHex(depPlanAddress(plan.pick.gadget)) : "none",
+      Why: plan.pick ? plan.pick.reason : "no candidate keeps the live registers",
+    }));
     setResult({
       command: "dep_candidates",
       args: { module: moduleName, badchars: badText, style },
@@ -3255,9 +3256,9 @@ function bindApi(): OsedApi {
     out.info(`${gadgetCount} gadgets and ${corpus ? summarizeCapabilities(corpus).length : 0} capabilities, every address free of the bad bytes.`);
     summary.push({ Section: `[3/${n}] corpus`, Result: `${gadgetCount} gadgets` });
 
-    out.section(`[4/${n}] Best 3 candidates per job (${style} style)`);
+    out.section(`[4/${n}] The gadget picked per job (${style} style)`);
     out.echo("dep_candidates", [moduleName, badText, style]);
-    const { best, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style);
+    const { picks, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style);
     summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
 
     out.section(`[5/${n}] Clean recipes for the constants`);
@@ -3300,7 +3301,7 @@ function bindApi(): OsedApi {
     summary.push({ Section: `[6/${n}] frame`, Result: style === "pushad" ? "register map" : "dep_function frame" });
 
     out.section(`[7/${n}] Python draft: verify it field by field, it is not a finished chain`);
-    for (const line of draftLines({ api: depApi, style, module: moduleName, iatSlot, writable, cave, best, jmpEsp })) out.print(line);
+    for (const line of draftLines({ api: depApi, style, module: moduleName, iatSlot, writable, cave, picks, jmpEsp })) out.print(line);
     summary.push({ Section: `[7/${n}] draft`, Result: "TODO lines mark what only a debugger run can give" });
 
     setResult({

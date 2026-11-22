@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import { stripDml } from "../src/core/output";
 import { initializeScript } from "../src/index";
+import { picksOf } from "./helpers/dep_plan_picks";
 
 type Result = { success: boolean; errors: string[]; findings: Array<Record<string, unknown>> };
 type Api = {
@@ -29,7 +30,7 @@ const GADGETS: Array<[number, number[]]> = [
   [0x1131, [0x89, 0x06, 0xc3]], // mov [esi], eax ; ret
   [0x1141, [0x46, 0xc3]], // inc esi ; ret
   [0x1151, [0x01, 0xce, 0xc3]], // add esi, ecx ; ret
-  [0x1161, [0xf7, 0xd8, 0xc3]], // neg eax ; ret
+  [0x1161, [0xf7, 0xd8, 0x5d, 0xc3]], // neg eax ; pop ebp ; ret
   [0x1171, [0x94, 0xc3]], // xchg eax, esp ; ret
   [0x1181, [0x89, 0xc6, 0xc3]], // mov esi, eax ; ret
   [0x1211, [0x5f, 0xc3]], // pop edi ; ret
@@ -43,6 +44,11 @@ const GADGETS: Array<[number, number[]]> = [
   [0x1291, [0xff, 0xe4]], // jmp esp
   [0x1311, [0x83, 0xc4, 0x10, 0xc3]], // add esp, 0x10 ; ret
   [0x1321, [0x83, 0xf0, 0xff, 0x8b, 0xe5, 0x5d, 0xc3]], // xor eax, 0xffffffff ; mov esp, ebp ; pop ebp ; ret
+  // The chain the live set allows: the captured ESP goes from esi to edi, which then holds the field address.
+  [0x1331, [0x89, 0xf7, 0xc3]], // mov edi, esi ; ret
+  [0x1341, [0x89, 0x07, 0xc3]], // mov [edi], eax ; ret
+  [0x1351, [0x47, 0xc3]], // inc edi ; ret
+  [0x1361, [0xf7, 0xdf, 0xc3]], // neg edi ; ret  (ranks above neg eax ; pop ebp, but edi holds the field address)
 ];
 
 function installHost(): void {
@@ -84,6 +90,7 @@ function loadApi(): Api {
 }
 
 const text = (): string => stripDml(logs.join(""));
+
 const SECTIONS = [1, 2, 3, 4, 5, 6, 7].map((n) => `=== [${n}/7]`);
 
 describe("dep_plan", () => {
@@ -106,15 +113,40 @@ describe("dep_plan", () => {
     }
   });
 
-  test("skeleton style ranks the gadgets per job and fills the draft with them", () => {
+  test("skeleton style picks per job a gadget that keeps every register the chain still needs", () => {
+    api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
+    const jobs = picksOf(text());
+    for (const job of jobs) {
+      expect(job.pick, job.title).toBeDefined();
+      expect(job.pick?.writes.filter((register) => job.keep.indexOf(register) >= 0), job.title).toEqual([]);
+    }
+    const pick = (title: string) => jobs.find((job) => job.title.indexOf(title) === 0)?.pick?.text;
+    expect(pick("capture ESP")).toBe("push esp ; pop esi ; ret");
+    expect(pick("add the distance")).toBe("add esi, ecx ; ret");
+    expect(pick("copy a register")).toBe("mov edi, esi ; ret");
+    expect(pick("write a field")).toBe("mov [edi], eax ; ret");
+    expect(pick("advance the pointer")).toBe("inc edi ; ret");
+    expect(jobs.find((job) => job.title.indexOf("negate") === 0)?.keep).toEqual(["edi"]);
+  });
+
+  test("a gadget that clobbers a live register is not the pick, even when it ranks first", () => {
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
     const output = text();
-    expect(output).toContain("=== [4/7] Best 3 candidates per job (skeleton style) ===");
-    expect(output).toMatch(/capture ESP:\n\s+0x11111111  push esp ; pop esi ; ret\s+writes esi, esp \+0x4\n  copy/);
-    expect(output).toMatch(/copy a register:\n\s+0x11111181  mov esi, eax ; ret\s+writes esi, esp \+0x4\n  add/);
-    expect(output).toMatch(/write a field:\n\s+0x11111131  mov \[esi\], eax ; ret/);
-    expect(output).toContain("rop += p32(0x11111111)    # capture ESP: push esp ; pop esi ; ret");
-    expect(output).toContain("rop += p32(0x11111171)    # pivot ESP onto field 1: xchg eax, esp ; ret");
+    const negate = output.slice(output.indexOf("  negate"), output.indexOf("  pivot ESP"));
+    expect(negate).toMatch(/^  negate \(keep edi = the field address\):\n    0x11111361  neg edi ; ret.*\n      no: clobbers edi, which still holds the field address\n  > 0x11111161  neg eax ; pop ebp ; ret/);
+    const copy = output.slice(output.indexOf("  copy a register"), output.indexOf("  read a pointer"));
+    expect(copy).toContain("no: copies eax, but the captured ESP is in esi");
+    expect(copy).toContain("> 0x11111331  mov edi, esi ; ret");
+  });
+
+  test("the draft uses exactly the gadgets [4/7] picked", () => {
+    api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
+    const output = text();
+    const picked = picksOf(output).map((job) => job.pick?.address);
+    const used = (output.slice(output.indexOf("=== [7/7]")).match(/rop \+= p32\(0x[0-9A-F]{8}\)/g) ?? []).map((line) => line.slice(11, 21));
+    expect(used.length).toBeGreaterThan(5);
+    for (const address of used) expect(picked).toContain(address);
+    expect(output).toContain("# TODO move the field address from edi into eax first\nrop += p32(0x11111171)    # pivot ESP onto field 1: xchg eax, esp ; ret");
     expect(output).toContain("DIST_FIELD1 = ???");
     expect(output).toContain("#   bp 0x11111111 ; g ; r esp");
     expect(output).toContain("=== VirtualAlloc Python Call-Frame Skeleton ===");
@@ -124,9 +156,9 @@ describe("dep_plan", () => {
   test("no job but the pivot takes a gadget whose destination is esp", () => {
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
     const output = text();
-    const job = (title: string): string => output.slice(output.indexOf(`  ${title}:`)).split(/\n  (?=\S)/)[0];
-    expect(job("add or subtract")).toContain("add esi, ecx ; ret");
-    expect(job("add or subtract")).not.toContain("add esp");
+    const job = (title: string): string => output.slice(output.indexOf(`  ${title}`)).split(/\n  (?=[a-z])/)[0];
+    expect(job("add the distance")).toContain("add esi, ecx ; ret");
+    expect(job("add the distance")).not.toContain("add esp");
     expect(job("copy a register")).not.toContain("mov esp, ebp");
     expect(job("pivot ESP onto the frame")).toContain("xchg eax, esp ; ret");
     expect(output).toContain("rop += p32(0x11111151)    # add the distance: add esi, ecx ; ret");
@@ -136,8 +168,8 @@ describe("dep_plan", () => {
   test("pushad style lists a pop for each register, pushad and jmp esp, then the register map", () => {
     api.dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad");
     const output = text();
-    for (const register of ["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"]) expect(output).toMatch(new RegExp(`pop ${register}:\\n\\s+0x1111`));
-    expect(output).toMatch(/pushad ; ret:\n\s+0x11111281/);
+    for (const register of ["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"]) expect(output).toMatch(new RegExp(`pop ${register}[^\\n]*:\\n  > 0x1111`));
+    expect(output).toMatch(/pushad ; ret[^\n]*:\n  > 0x11111281/);
     expect(output).toContain("jmp esp: 0x11111291");
     expect(output).toContain("=== [6/7] PUSHAD register map for VirtualProtect ===");
     expect(output).toContain("[ESP+16] = EBX        <- dwSize = 0x201");

@@ -474,7 +474,7 @@ export const EXPLANATIONS: ExplainEntry[] = [
     name: "dep_plan",
     summary: "Whole DEP bypass discovery in seven sections",
     what: "Runs the discovery for a <api> DEP bypass from <module> in one go, in the <style> style, and prints each step under its own [n/7] header.",
-    how: "Calls the existing commands in order: modules for <module>, sc.iat_find for <api>, rop.scan_live with <badchars>, dep_candidates to rank 3 gadgets per job by side effects, rop.construct for each constant, code_caves for writable and executable addresses, then dep_function in the <style> style, and last a Python draft. The draft fills in the top gadget per job and marks with TODO the distances only a debugger run can give, with the bp and dd commands that measure them. It does not check that the registers of one gadget feed the next.",
+    how: "Calls the existing commands in order: modules for <module>, sc.iat_find for <api>, rop.scan_live with <badchars>, dep_candidates to pick one gadget per job that keeps the registers the chain still needs, rop.construct for each constant, code_caves for writable and executable addresses, then dep_function in the <style> style, and last a Python draft. The draft fills in the [4/7] pick per job, marks with TODO the moves a pick needs and the distances only a debugger run can give, with the bp and dd commands that measure them.",
     when: "Later labs and the exam, once you know the method by hand and want every piece on one screen. Verify the draft field by field before you trust it.",
     args: [
       { name: "api", meaning: "DEP bypass API.", values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into a code cave." } },
@@ -483,14 +483,14 @@ export const EXPLANATIONS: ExplainEntry[] = [
       { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "registers loaded, then one PUSHAD writes the frame." } },
     ],
     example: "dx @$osed().dep_plan(\"VirtualAlloc\", \"libbkup\", \"00 09 0A 0B 0C 0D 20\")",
-    output: "Seven sections: [1/7] module protections, [2/7] IAT slot, [3/7] gadget corpus, [4/7] the best 3 gadgets per job with side effects, [5/7] clean recipes for the constants and the writable or cave addresses, [6/7] the frame or PUSHAD map, [7/7] a Python draft with TODO lines to measure.",
+    output: "Seven sections: [1/7] module protections, [2/7] IAT slot, [3/7] gadget corpus, [4/7] the gadget picked per job, the ones rejected above it and why, and the alternatives, [5/7] clean recipes for the constants and the writable or cave addresses, [6/7] the frame or PUSHAD map, [7/7] a Python draft with TODO lines to measure.",
     report: "Ran dep_plan for <api> from <module> with bad characters <badchars> in the <style> style, then verified each field of the draft in WinDbg before using it.",
   },
   {
     name: "dep_candidates",
-    summary: "Best 3 gadgets per DEP chain job, ranked",
-    what: "Ranks, for each job of a <style> DEP chain, the 3 gadgets from <module> with the fewest side effects, the same list as step [4/7] of dep_plan.",
-    how: "Scans <module> for gadgets whose address holds no byte from <badchars>, keeps for each job the gadgets that do it, and sorts them by fewest side effects, then the smallest stack move. After each gadget it lists the registers it changes, how far it moves ESP, extra pops, a ret N and memory writes. A gadget that moves ESP only counts for the pivot job. The pushad style also runs find_bytes for jmp esp and call esp. It scans on its own and leaves the loaded corpus as it was.",
+    summary: "The gadget picked for each DEP chain job, and why",
+    what: "Picks, for each job of a <style> DEP chain, the gadget from <module> with the fewest side effects that keeps every register the chain still needs, the same list as step [4/7] of dep_plan.",
+    how: "Scans <module> for gadgets whose address holds no byte from <badchars>, keeps for each job the gadgets that do it, and sorts them by fewest side effects, then the smallest stack move. Walking the jobs in chain order, it rejects a gadget that writes a register still holding the captured ESP, the field address, the value to write or an already loaded pushad register, and picks the first one left. After each gadget it lists the registers it changes, how far it moves ESP, extra pops, a ret N and memory writes. A gadget that moves ESP only counts for the pivot job. The pushad style also runs find_bytes for jmp esp and call esp. It scans on its own and leaves the loaded corpus as it was.",
     when: "DEP bypass, to pick the gadget for each step of the chain, or to repeat step [4/7] of dep_plan on its own.",
     args: [
       { name: "module", meaning: "Module without ASLR that supplies the gadgets." },
@@ -498,8 +498,8 @@ export const EXPLANATIONS: ExplainEntry[] = [
       { name: "style", meaning: "Which chain the jobs are for.", optional: true, default: "skeleton", values: { skeleton: "capture ESP, copy, add, negate, read, write, advance, pivot.", pushad: "a pop for each register, read the IAT slot, pushad ; ret, and jmp esp." } },
     ],
     example: "dx @$osed().dep_candidates(\"libbkup\", \"00 09 0A 0B 0C 0D 20\", \"skeleton\")",
-    output: "One block per job with up to 3 gadgets, each with its address, its instructions and its side effects, and a warning naming any job with no gadget.",
-    report: "Ranked the gadgets of <module> for each job of the <style> chain with dep_candidates, with bad characters <badchars>, and took the gadget with the fewest side effects for each step.",
+    output: "One block per job: the registers to keep in its title, up to 3 higher-ranked gadgets with why each was rejected, the pick marked >, and up to 2 usable alternatives, each with its address, instructions and side effects. A warning names any job with no pick.",
+    report: "Picked the gadgets of <module> for each job of the <style> chain with dep_candidates, with bad characters <badchars>, keeping at each step the registers the chain still needed.",
   },
 
   // Gadget corpus
