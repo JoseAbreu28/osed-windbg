@@ -7,6 +7,12 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-22 - The dep_plan blocks run in a file that holds only OFFSET and BADCHARS
+
+- The `[1/7]` block now defines `p32` next to `neg`, `clean` and `hole`. `clean`, the `[6/7]` frame and the `[7/7]` payload all call it, and before this a file holding only the pasted blocks stopped with `NameError: p32`. It packs with `int.to_bytes`, so the block imports nothing.
+- The block opens with one comment naming the two values it expects already in the file: `OFFSET` from the crash and `BADCHARS` from the bad char hunt.
+- When `[4/7]` has no exact pick for the skeleton chain, the `[7/7]` hole is now `payload = hole("payload")` instead of `c = hole("c")`, so the `return payload` below it names a bound variable.
+
 ### 2026-11-21 - dep_candidates, and dep_function prints the PUSHAD map
 
 - `dep_candidates(module, badchars, style?)` prints what step `[4/7]` of `dep_plan` prints: the 3 gadgets per job with the fewest side effects, and in the PUSHAD style the `jmp esp` and `call esp` addresses. It scans the module on its own and leaves the loaded corpus as it was. `dep_plan` prints its line at the top of step 4, such as `dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")`, and both print through the same code.

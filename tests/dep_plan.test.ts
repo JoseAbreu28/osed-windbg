@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { beforeEach, describe, expect, test } from "vitest";
 import { stripDml } from "../src/core/output";
 import { initializeScript } from "../src/index";
@@ -157,8 +158,35 @@ const PY_KEYWORDS = new Set(["def", "class", "return", "for", "in", "while", "no
   "raise", "lambda", "None", "True", "False", "is", "pass", "import", "from", "as"]);
 const PY_BUILTINS = new Set(["len", "range", "any", "all", "bytes", "int", "list", "print", "SystemExit", "self",
   "enumerate", "str", "hex", "bool", "tuple", "dict", "set", "min", "max", "sum", "abs"]);
-// What the lab's own exploit_skeleton.py already holds when the student reaches dep_plan.
-const FROM_HIS_FILE = new Set(["OFFSET", "BADCHARS", "p32"]);
+// The two values no tool can measure for him: the crash gives OFFSET, the bad char hunt gives BADCHARS.
+// Everything else the blocks use, they define, so the blocks alone make a file that runs.
+const FROM_HIS_FILE = new Set(["OFFSET", "BADCHARS"]);
+const HIS_FILE = 'OFFSET = 516\nBADCHARS = b"\\x00\\x0a\\x0d"\n';
+
+const PYTHON = process.env.PYTHON ?? "python";
+const HAS_PYTHON = spawnSync(PYTHON, ["--version"]).status === 0;
+// A real interpreter on the pasted file: it must compile, every global any scope reads must be bound at
+// module level or be a builtin, and the module level itself must run to the end.
+const CHECK_PASTE = `
+import builtins, symtable, sys
+src = sys.stdin.read()
+compile(src, "pasted", "exec")
+top = symtable.symtable(src, "pasted", "exec")
+bound = {s.get_name() for s in top.get_symbols() if s.is_assigned() or s.is_imported() or s.is_namespace()}
+missing = set()
+def walk(table):
+    for s in table.get_symbols():
+        name = s.get_name()
+        reads_global = s.is_global() or (table is top and s.is_referenced())
+        if reads_global and name not in bound and not hasattr(builtins, name): missing.add(name)
+    for child in table.get_children(): walk(child)
+walk(top)
+if missing: sys.exit("undefined: " + ", ".join(sorted(missing)))
+try:
+    exec(src, {"__name__": "pasted"})
+except SystemExit as stop:
+    sys.exit("module level stopped: " + str(stop))
+`;
 
 const DEF = /\b(?:def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/;
 const FOR = /\bfor\s+([A-Za-z_][\w,\s]*?)\s+in\b/g;
@@ -335,6 +363,19 @@ describe("dep_plan", () => {
     for (const line of [...moduleLines, ...chain]) {
       for (const used of uses(line)) expect(known, `${name} ${style}: ${line}`).toContain(used);
     }
+  });
+
+  // Excluding the ESP capture leaves the skeleton without a chain, so [7/7] is a hole for him to write.
+  test.skipIf(!HAS_PYTHON).each([
+    ["VirtualAlloc", "skeleton", ""], ["VirtualProtect", "skeleton", ""], ["WriteProcessMemory", "skeleton", ""],
+    ["VirtualAlloc", "pushad", ""], ["VirtualProtect", "pushad", ""], ["WriteProcessMemory", "pushad", ""],
+    ["VirtualAlloc", "skeleton", "0x11111111"], ["WriteProcessMemory", "pushad", "0x11111281"],
+  ])("the %s %s blocks, excluding [%s], pasted into a file holding only OFFSET and BADCHARS run in Python", (name, style, exclude) => {
+    api.dep_plan(name, "libbkup", "00 0A 0D", style, 6, exclude);
+    const pasted = HIS_FILE + blocksOf(text()).map((block) => block.join("\n")).join("\n\n") + "\n";
+    const run = spawnSync(PYTHON, ["-I", "-c", CHECK_PASTE], { input: pasted, encoding: "utf-8" });
+    expect(run.stderr.trim(), `${name} ${style}`).toBe("");
+    expect(run.status, `${name} ${style}`).toBe(0);
   });
 
   test("pushad style lists a pop for each register, pushad and jmp esp, then the register map", () => {

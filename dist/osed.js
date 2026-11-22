@@ -11703,10 +11703,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T18:27:38.159Z" : globalThis[key2];
+        value = true ? "2026-11-22T19:12:43.035Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "adcb3c1fcc50" : globalThis[key2];
+        value = true ? "895d18cb66a8" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14540,6 +14540,8 @@ var osed_bundle = (() => {
   }
   var COPY_SEPARATOR = "# ------------------ copy into your exploit ------------------";
   var HELPER_BLOCK = { lines: [
+    "# needs OFFSET (from the crash) and BADCHARS (from the bad char hunt) already in this file",
+    'def p32(v): return (v & 0xFFFFFFFF).to_bytes(4, "little")',
     "def neg(v): return (-v) & 0xFFFFFFFF",
     "def clean(v): return not any(b in BADCHARS for b in p32(v))",
     'def hole(name): raise SystemExit("still to fill: " + name)'
@@ -14804,7 +14806,7 @@ var osed_bundle = (() => {
         "FRAME_AT = OFFSET - len(frame)     # field 1 sits here, so the chain starts on EIP"
       ];
       if (!capture || !add || !copy || !write2 || !pivot || add.move || copy.move) {
-        chain.push(...hole("c", "[4/7] has no exact pick for capture, add, copy, write or pivot: write this chain by hand"));
+        chain.push(...hole("payload", "[4/7] has no exact pick for capture, add, copy, write or pivot: write this chain and its payload by hand"));
       } else {
         const fns = frame.map((slot2) => literal2(slot2) ? void 0 : defineLoader(slot2, valueRegister, [field]));
         chain.push(group("the captured ESP, and the address of field 1"));
