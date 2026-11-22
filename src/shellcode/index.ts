@@ -1282,8 +1282,8 @@ class ShellcodeHelper {
     }
   }
 
-  /** Capture a read-only, stopped-debugger snapshot for rop.api_plan. */
-  public apiPlan(targetSpec: string, badchars: number[] = []): ApiPlanSnapshot {
+  /** Capture a read-only, stopped-debugger snapshot for rop.api_plan. `owners` limits the IATs read to those modules. */
+  public apiPlan(targetSpec: string, badchars: number[] = [], owners?: string[]): ApiPlanSnapshot {
     const parsed = parseApiSpec(targetSpec);
     if (!parsed) return { candidates: [], error: 'Target must be "Symbol" or "MODULE!Symbol".' };
     try {
@@ -1303,7 +1303,7 @@ class ShellcodeHelper {
         return { candidates: [], error: `${targetModule.name}!${parsed.symbol} is forwarded to ${forward.target}; forwarded target resolution is not yet implemented.` };
       }
       const headers = this.parser.parseHeaders(targetModule);
-      const imports = modules.flatMap((owner) => {
+      const imports = modules.filter((owner) => !owners || owners.some((name) => moduleNameMatches(owner.name, name))).flatMap((owner) => {
         try {
           const ownerHeaders = this.parser.parseHeaders(owner);
           return this.iatResolver.enumerateIat(owner).map((entry) => ({
@@ -1753,7 +1753,7 @@ export function createShellcodeNamespace(): {
   iat_find: (symbol: string) => DxResult;
   iat_ptr: (module: string, symbol: string) => DxResult;
   /** Internal structured snapshot consumed by rop.api_plan. */
-  api_plan: (target: string, badchars?: number[]) => ApiPlanSnapshot;
+  api_plan: (target: string, badchars?: number[], owners?: string[]) => ApiPlanSnapshot;
 } {
   const helper = new ShellcodeHelper();
   const helperHelp = (name: string): DxResult => {
@@ -1803,6 +1803,6 @@ export function createShellcodeNamespace(): {
     iat: (module?: string, filter?: string) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
     iat_find: (symbol: string) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
     iat_ptr: (module: string, symbol: string) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
-    api_plan: (target: string, badchars: number[] = []) => helper.apiPlan(target, badchars),
+    api_plan: (target: string, badchars: number[] = [], owners?: string[]) => helper.apiPlan(target, badchars, owners),
   };
 }

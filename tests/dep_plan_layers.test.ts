@@ -163,7 +163,15 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   const BAD = "00 0A 0D 25 26 2B 3D";
   const K32 = 0x75310000;
   const kernel32: Module = { name: "KERNEL32.DLL", base: K32, aslr: true, nx: true, code: [[0x1501, [0xc3]]],
-    exports: [{ name: "VirtualAlloc", rva: 0x1501 }, { name: "VirtualProtect", rva: 0x1600 }, { name: "WriteProcessMemory", rva: 0x1700 }, { name: "GetDriveTypeA", rva: 0x1800 }] };
+    exports: [{ name: "VirtualAlloc", rva: 0x1501 }, { name: "VirtualProtect", rva: 0x1600 }, { name: "WriteProcessMemory", rva: 0x1700 }, { name: "GetDriveTypeA", rva: 0x1800 },
+      { name: "TerminateProcess", rva: 0x1900 }, { name: "SetUnhandledExceptionFilter", rva: 0x1a00 }] };
+  // His run printed thousands of rows from slots like these: ODBC32.dll has ASLR, so each slot address moves
+  // on every boot and no distance measured from it is usable without a leak.
+  const odbc32: Module = { name: "ODBC32.dll", base: 0x72890000, aslr: true, nx: true, imports: [
+    { dll: "KERNEL32.dll", symbol: "VirtualAlloc", target: K32 + 0x1501 },
+    { dll: "KERNEL32.dll", symbol: "TerminateProcess", target: K32 + 0x1900 },
+    { dll: "KERNEL32.dll", symbol: "SetUnhandledExceptionFilter", target: K32 + 0x1a00 },
+  ] };
   const shape = (libspp: Partial<Module> = {}): Module[] => [
     { name: "syncbrs.exe", base: 0x00400000, code: GADGETS },
     { name: "libpal.dll", base: 0x00670000, code: GADGETS },
@@ -193,6 +201,31 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
     expect(loaders).toMatch(/c\.rop\(MOV_EAX_MEM_EAX\)\n\s+c\.rop\(POP_ECX, API_DELTA\)\n\s+c\.rop\(ADD_EAX_ECX\)\n\s+c\.rop\(MOV_ESI_EAX\)/);
     expect(output).toContain("A VirtualAlloc chain from libspp.dll in the pushad style, the API reached from kernel32!GetDriveTypeA by a distance measured on this machine");
     expect(api.last_result().success).toBe(true);
+  });
+
+  test("the distance is anchored only in a module without ASLR, and [2/7] ends on one pick", () => {
+    // libsync.dll gives no gadget (its base holds 00) but has no ASLR, so its slot is a valid second anchor.
+    const modules = shape();
+    modules[2] = { ...modules[2], imports: [{ dll: "KERNEL32.dll", symbol: "TerminateProcess", target: K32 + 0x1900 }] };
+    const api = load([...modules, odbc32], { policy: 2, registry: FORCED });
+    api.dep_plan("VirtualAlloc", "libspp", BAD, "auto", 6);
+    const slot = section(text(), "=== [2/7]");
+    expect(slot).toContain("[+] No module with ASLR disabled imports VirtualAlloc itself, but libspp.dll imports kernel32!GetDriveTypeA, at slot 0x10113200.");
+    expect(slot).toContain("[+] Chosen from 2 slots in modules without ASLR that reach VirtualAlloc by a distance: none is free of bad bytes, and this one is in libspp.dll, where the gadgets come from. The other one is in libsync.dll.");
+    expect(slot).toContain("[+] ODBC32.dll imports VirtualAlloc itself, but has ASLR: its slot moves on every boot. No slot in a module with ASLR anchors the distance either.");
+    expect(slot).toContain("[!] That distance holds for this build of kernel32 only.");
+    // No slot of ODBC32.dll is offered, and no candidate table is printed.
+    for (const offered of ["0x72893", "TerminateProcess", "derived-address", "Candidate for gadget feasibility", "rop.api_plan", "sc.iat_find"]) expect(slot).not.toContain(offered);
+    expect(api.last_result().success).toBe(true);
+  });
+
+  test("a kernel32 export imported only by a module with ASLR is never offered as the anchor", () => {
+    const api = load([...shape({ imports: [{ dll: "MSVCRT.dll", symbol: "memcpy", target: 0x10111121 }] }), odbc32], { policy: 2, registry: FORCED });
+    api.dep_plan("VirtualAlloc", "libspp", BAD);
+    const output = text();
+    expect(output).toContain("[-] The API layer fails: no module with ASLR disabled imports VirtualAlloc (ODBC32.dll does, and it has ASLR), nor any other export of kernel32 or kernelbase to reach it from by a fixed distance. Its address needs a leak first.");
+    expect(output).not.toContain("0x72893");
+    expect(output).not.toContain("API_DELTA");
   });
 
   test("asked for the skeleton, it says the method is what fails and names the style that works", () => {

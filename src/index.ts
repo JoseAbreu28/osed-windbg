@@ -3176,7 +3176,7 @@ function bindApi(): OsedApi {
       .map((row) => {
         const owner = out.stripDml(String(row.Owner ?? ""));
         const match = /0x([0-9a-fA-F]+)/.exec(out.stripDml(String(row.Slot ?? "")));
-        return { owner, slot: match ? parseInt(match[1], 16) >>> 0 : 0, fixed: moduleInfoByName(owner)?.aslr !== "enabled" };
+        return { owner, slot: match ? parseInt(match[1], 16) >>> 0 : 0, fixed: moduleInfoByName(owner)?.aslr === "disabled" };
       })
       .filter((row) => row.slot !== 0);
   };
@@ -3195,20 +3195,33 @@ function bindApi(): OsedApi {
 
   // How the chain gets the API's address: its own slot in a module that does not move, else the slot of
   // another export of the same DLL plus the distance between the two, which sc.api_plan measures live.
-  type Route = { api: DepApi; owner: string; slot: number; delta?: Delta & { anchorAt: number; apiAt: number } };
-  const routeFor = (depApi: DepApi, modules: string[], badchars: number[]): Route | undefined => {
+  // Only a slot in a module without ASLR can anchor that distance: a slot that moves needs a leak itself.
+  type Anchor = { why: string; others: string[] };
+  type Route = { api: DepApi; owner: string; slot: number; delta?: Delta & Anchor & { anchorAt: number; apiAt: number } };
+  const directRoute = (depApi: DepApi, modules: string[]): Route | undefined => {
     const rows = slotsOf(depApi).filter((row) => row.fixed);
     const own = rows.find((row) => modules.some((module) => sameModule(row.owner, module))) ?? rows[0];
-    if (own) return { api: depApi, owner: own.owner, slot: own.slot };
+    return own ? { api: depApi, owner: own.owner, slot: own.slot } : undefined;
+  };
+  const routeFor = (depApi: DepApi, modules: string[], badchars: number[], fixed: string[]): Route | undefined => {
+    const own = directRoute(depApi, modules);
+    if (own || fixed.length === 0) return own;
     for (const dll of ["kernel32", "kernelbase"]) {
-      const snapshot = sc.api_plan(`${dll}!${depApi}`, badchars);
-      const anchors = snapshot.candidates.filter((candidate) => candidate.strategy === "derived-address" && candidate.anchor
-        && moduleInfoByName(candidate.ownerModule)?.aslr !== "enabled");
-      const anchor = anchors.find((candidate) => modules.some((module) => sameModule(candidate.ownerModule, module))) ?? anchors[0];
+      const anchors = sc.api_plan(`${dll}!${depApi}`, badchars, fixed).candidates.filter((candidate) => candidate.strategy === "derived-address" && candidate.anchor);
+      const inGadgets = (candidate: typeof anchors[number]): boolean => modules.some((module) => sameModule(candidate.ownerModule, module));
+      const anchor = anchors.find((candidate) => candidate.slotPayloadSafe && inGadgets(candidate)) ?? anchors.find((candidate) => candidate.slotPayloadSafe)
+        ?? anchors.find(inGadgets) ?? anchors[0];
       if (anchor && anchor.anchor) {
+        const why = anchors.length === 1 ? "only"
+          : anchor.slotPayloadSafe ? "its slot address has no bad byte, so the chain can pop it as it is"
+          : inGadgets(anchor) ? `none is free of bad bytes, and this one is in ${shortName(anchor.ownerModule)}, where the gadgets come from`
+          : "none is free of bad bytes, and none is in a module the gadgets come from, so this is the lowest slot";
         return {
           api: depApi, owner: anchor.ownerModule, slot: Number(anchor.slot) >>> 0,
-          delta: { dll, anchor: anchor.anchor.symbol, value: Number(anchor.anchor.delta) >>> 0, anchorAt: Number(anchor.pointer) >>> 0, apiAt: Number(anchor.target.address) >>> 0 },
+          delta: {
+            dll, anchor: anchor.anchor.symbol, value: Number(anchor.anchor.delta) >>> 0, anchorAt: Number(anchor.pointer) >>> 0, apiAt: Number(anchor.target.address) >>> 0,
+            why, others: anchors.filter((candidate) => candidate !== anchor).map((candidate) => shortName(candidate.ownerModule)),
+          },
         };
       }
     }
@@ -3404,6 +3417,8 @@ function bindApi(): OsedApi {
     // Module layer. Named modules are his; otherwise every module that can give a gadget at all.
     const candidates = gadgetModules(badSet);
     const usable = candidates.filter((entry) => entry.why === undefined);
+    // A slot's own address must not move, but its bytes may be bad: [5/7] builds it from clean constants.
+    const fixedOwners = candidates.filter((entry) => entry.info.aslr === "disabled").map((entry) => entry.label);
     const chosen = named.length > 0
       ? named.map((name) => candidates.find((entry) => sameModule(entry.info.name, moduleInfoByName(name)!.name))).filter((entry): entry is typeof candidates[number] => entry !== undefined)
       : usable;
@@ -3412,7 +3427,7 @@ function bindApi(): OsedApi {
     const modulesLabel = chosen.map((entry) => entry.label).join(", ") || "no module";
 
     // API layer, resolved before the header so the echoed call names what this run used.
-    const routes = (autoApi ? DEP_PLAN_APIS : [requestedApi as DepApi]).map((name) => routeFor(name, modules, badchars as number[]));
+    const routes = (autoApi ? DEP_PLAN_APIS : [requestedApi as DepApi]).map((name) => routeFor(name, modules, badchars as number[], fixedOwners));
     const route = routes.find((candidate) => candidate !== undefined && !candidate.delta) ?? routes.find((candidate) => candidate !== undefined);
     const depApi: DepApi = route?.api ?? requestedApi ?? "VirtualAlloc";
     const callArgs = (styleValue: string, force: boolean): unknown[] => [
@@ -3516,27 +3531,31 @@ function bindApi(): OsedApi {
     summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
 
     out.section(`[2/${n}] IAT slot of ${depApi}`);
-    out.echo("sc.iat_find", [depApi]);
-    (api.sc as { iat_find: (symbol: string) => unknown }).iat_find(depApi);
     const iatSlot = route?.slot;
     const slotBad = iatSlot === undefined ? [] : addressBadBytes(BigInt(iatSlot), 4, badSet);
     const owner = route ? shortName(route.owner) : "";
     if (!route) {
       const moving = slotsOf(depApi).filter((row) => !row.fixed).map((row) => shortName(row.owner));
       // He named the API, so another one is an alternative, not a fix: one line, and only if it exists.
-      const other = autoApi ? undefined : DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => routeFor(name, modules, badchars as number[])).find((found) => found !== undefined);
+      const other = autoApi ? undefined : DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => routeFor(name, modules, badchars as number[], fixedOwners)).find((found) => found !== undefined);
       stop("API", `no module with ASLR disabled imports ${autoApi ? DEP_PLAN_APIS.join(", ") : depApi}${moving.length > 0 ? ` (${moving.join(", ")} ${moving.length === 1 ? "does, and it has" : "do, and they have"} ASLR)` : ""}, nor any other export of kernel32 or kernelbase to reach it from by a fixed distance. Its address needs a leak first.`,
         ...(other ? [`If you are free to choose the API, ${other.api} has a route: dx @$osed().dep_plan("${other.api}", "${modulesArg}", "${badText}")`] : []));
     } else if (route.delta) {
       const delta = route.delta;
-      out.echo("rop.api_plan", [`${delta.dll}!${depApi}`, badText]);
-      executeRopApiPlan(`${delta.dll}!${depApi}`, badText);
       const signed = delta.value > 0x7fffffff ? `- ${dwordHex(-delta.value >>> 0)}` : `+ ${dwordHex(delta.value)}`;
       out.info(`No module with ASLR disabled imports ${depApi} itself, but ${owner} imports ${delta.dll}!${delta.anchor}, at slot ${dwordHex(route.slot)}. ${depApi} is a fixed distance from it inside ${delta.dll}: ${depApi} = [${dwordHex(route.slot)}] ${signed}, measured now with ${delta.anchor} at ${dwordHex(delta.anchorAt)} and ${depApi} at ${dwordHex(delta.apiAt)}. The chain reads the slot and adds API_DELTA.`);
+      const others = delta.others.filter((name, i) => delta.others.indexOf(name) === i);
+      out.info(delta.why === "only"
+        ? `This is the only slot in a module without ASLR that reaches ${depApi} by a distance.`
+        : `Chosen from ${delta.others.length + 1} slots in modules without ASLR that reach ${depApi} by a distance: ${delta.why}. The other ${delta.others.length === 1 ? "one is" : `${delta.others.length} are`} in ${others.join(", ")}.`);
+      const moving = slotsOf(depApi).filter((row) => !row.fixed).map((row) => shortName(row.owner)).filter((name, i, all) => all.indexOf(name) === i);
+      if (moving.length > 0) out.info(`${moving.join(", ")} ${moving.length === 1 ? "imports" : "import"} ${depApi} itself, but ${moving.length === 1 ? "has ASLR: its slot moves" : "they have ASLR: their slots move"} on every boot. No slot in a module with ASLR anchors the distance either.`);
       out.warn(`That distance holds for this build of ${delta.dll} only. Any Windows update moves it, so the exploit is right for the machine it was measured on: run this again on the target.`);
-      const direct = DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => routeFor(name, modules, badchars as number[])).find((other) => other !== undefined && !other.delta);
+      const direct = DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => directRoute(name, modules)).find((other) => other !== undefined);
       if (direct) out.info(`If you are free to choose the API, ${direct.api} needs no distance: ${shortName(direct.owner)} imports it at ${dwordHex(direct.slot)}. dx @$osed().dep_plan("${direct.api}", "${modulesArg}", "${badText}")`);
     } else {
+      out.echo("sc.iat_find", [depApi]);
+      (api.sc as { iat_find: (symbol: string) => unknown }).iat_find(depApi);
       out.info(`Slot ${dwordHex(route.slot)} in ${owner}. The chain reads the API address from it with mov eax, [eax].`);
       if (!modules.some((module) => sameModule(route.owner, module))) out.warn(`${modulesLabel} does not import ${depApi}; this slot belongs to ${owner}, which does not move either. The IAT you read and the modules your gadgets come from are independent.`);
     }
