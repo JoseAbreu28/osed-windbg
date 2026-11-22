@@ -11692,10 +11692,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T17:29:07.923Z" : globalThis[key2];
+        value = true ? "2026-11-22T18:08:48.694Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "cb8fbea145f5" : globalThis[key2];
+        value = true ? "3b9c7f981bea" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -16126,8 +16126,8 @@ var osed_bundle = (() => {
         return this.errorRows(formatError(error2));
       }
     }
-    /** Capture a read-only, stopped-debugger snapshot for rop.api_plan. */
-    apiPlan(targetSpec, badchars = []) {
+    /** Capture a read-only, stopped-debugger snapshot for rop.api_plan. `owners` limits the IATs read to those modules. */
+    apiPlan(targetSpec, badchars = [], owners) {
       const parsed = parseApiSpec(targetSpec);
       if (!parsed) return { candidates: [], error: 'Target must be "Symbol" or "MODULE!Symbol".' };
       try {
@@ -16145,7 +16145,7 @@ var osed_bundle = (() => {
           return { candidates: [], error: `${targetModule.name}!${parsed.symbol} is forwarded to ${forward.target}; forwarded target resolution is not yet implemented.` };
         }
         const headers = this.parser.parseHeaders(targetModule);
-        const imports = modules.flatMap((owner) => {
+        const imports = modules.filter((owner) => !owners || owners.some((name) => moduleNameMatches(owner.name, name))).flatMap((owner) => {
           try {
             const ownerHeaders = this.parser.parseHeaders(owner);
             return this.iatResolver.enumerateIat(owner).map((entry) => {
@@ -16543,7 +16543,7 @@ var osed_bundle = (() => {
       iat: (module, filter) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
       iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
       iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
-      api_plan: (target, badchars = []) => helper.apiPlan(target, badchars)
+      api_plan: (target, badchars = [], owners) => helper.apiPlan(target, badchars, owners)
     };
   }
 
@@ -25480,7 +25480,7 @@ ${INDENT}`)]);
         var _a3, _b, _c;
         const owner = stripDml(String((_a3 = row.Owner) != null ? _a3 : ""));
         const match = /0x([0-9a-fA-F]+)/.exec(stripDml(String((_b = row.Slot) != null ? _b : "")));
-        return { owner, slot: match ? parseInt(match[1], 16) >>> 0 : 0, fixed: ((_c = moduleInfoByName(owner)) == null ? void 0 : _c.aslr) !== "enabled" };
+        return { owner, slot: match ? parseInt(match[1], 16) >>> 0 : 0, fixed: ((_c = moduleInfoByName(owner)) == null ? void 0 : _c.aslr) === "disabled" };
       }).filter((row) => row.slot !== 0);
     };
     const depVerdict = () => {
@@ -25494,24 +25494,35 @@ ${INDENT}`)]);
       const optIn = needsMore && forced === false ? slotsOf("SetProcessDEPPolicy").map((row) => shortName(row.owner)) : [];
       return __spreadValues({ name }, depState(policy, exe ? { name, nx, forced } : void 0, optIn));
     };
-    const routeFor = (depApi, modules, badchars) => {
-      var _a2, _b;
+    const directRoute = (depApi, modules) => {
+      var _a2;
       const rows = slotsOf(depApi).filter((row) => row.fixed);
       const own = (_a2 = rows.find((row) => modules.some((module) => sameModule2(row.owner, module)))) != null ? _a2 : rows[0];
-      if (own) return { api: depApi, owner: own.owner, slot: own.slot };
+      return own ? { api: depApi, owner: own.owner, slot: own.slot } : void 0;
+    };
+    const routeFor = (depApi, modules, badchars, fixed) => {
+      var _a2, _b, _c;
+      const own = directRoute(depApi, modules);
+      if (own || fixed.length === 0) return own;
       for (const dll of ["kernel32", "kernelbase"]) {
-        const snapshot = sc.api_plan(`${dll}!${depApi}`, badchars);
-        const anchors = snapshot.candidates.filter((candidate) => {
-          var _a3;
-          return candidate.strategy === "derived-address" && candidate.anchor && ((_a3 = moduleInfoByName(candidate.ownerModule)) == null ? void 0 : _a3.aslr) !== "enabled";
-        });
-        const anchor = (_b = anchors.find((candidate) => modules.some((module) => sameModule2(candidate.ownerModule, module)))) != null ? _b : anchors[0];
+        const anchors = sc.api_plan(`${dll}!${depApi}`, badchars, fixed).candidates.filter((candidate) => candidate.strategy === "derived-address" && candidate.anchor);
+        const inGadgets = (candidate) => modules.some((module) => sameModule2(candidate.ownerModule, module));
+        const anchor = (_c = (_b = (_a2 = anchors.find((candidate) => candidate.slotPayloadSafe && inGadgets(candidate))) != null ? _a2 : anchors.find((candidate) => candidate.slotPayloadSafe)) != null ? _b : anchors.find(inGadgets)) != null ? _c : anchors[0];
         if (anchor && anchor.anchor) {
+          const why = anchors.length === 1 ? "only" : anchor.slotPayloadSafe ? "its slot address has no bad byte, so the chain can pop it as it is" : inGadgets(anchor) ? `none is free of bad bytes, and this one is in ${shortName(anchor.ownerModule)}, where the gadgets come from` : "none is free of bad bytes, and none is in a module the gadgets come from, so this is the lowest slot";
           return {
             api: depApi,
             owner: anchor.ownerModule,
             slot: Number(anchor.slot) >>> 0,
-            delta: { dll, anchor: anchor.anchor.symbol, value: Number(anchor.anchor.delta) >>> 0, anchorAt: Number(anchor.pointer) >>> 0, apiAt: Number(anchor.target.address) >>> 0 }
+            delta: {
+              dll,
+              anchor: anchor.anchor.symbol,
+              value: Number(anchor.anchor.delta) >>> 0,
+              anchorAt: Number(anchor.pointer) >>> 0,
+              apiAt: Number(anchor.target.address) >>> 0,
+              why,
+              others: anchors.filter((candidate) => candidate !== anchor).map((candidate) => shortName(candidate.ownerModule))
+            }
           };
         }
       }
@@ -25681,11 +25692,12 @@ ${INDENT}`)]);
       const badSet = new Set(badchars);
       const candidates2 = gadgetModules(badSet);
       const usable = candidates2.filter((entry) => entry.why === void 0);
+      const fixedOwners = candidates2.filter((entry) => entry.info.aslr === "disabled").map((entry) => entry.label);
       const chosen = named2.length > 0 ? named2.map((name) => candidates2.find((entry) => sameModule2(entry.info.name, moduleInfoByName(name).name))).filter((entry) => entry !== void 0) : usable;
       const modules = named2.length > 0 ? named2 : usable.map((entry) => entry.label);
       const modulesArg = modules.join(",");
       const modulesLabel = chosen.map((entry) => entry.label).join(", ") || "no module";
-      const routes = (autoApi ? DEP_PLAN_APIS : [requestedApi]).map((name) => routeFor(name, modules, badchars));
+      const routes = (autoApi ? DEP_PLAN_APIS : [requestedApi]).map((name) => routeFor(name, modules, badchars, fixedOwners));
       const route = (_a2 = routes.find((candidate) => candidate !== void 0 && !candidate.delta)) != null ? _a2 : routes.find((candidate) => candidate !== void 0);
       const depApi = (_c = (_b = route == null ? void 0 : route.api) != null ? _b : requestedApi) != null ? _c : "VirtualAlloc";
       const callArgs = (styleValue, force) => [
@@ -25778,14 +25790,12 @@ ${INDENT}`)]);
       }
       summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
       section(`[2/${n}] IAT slot of ${depApi}`);
-      echo("sc.iat_find", [depApi]);
-      api.sc.iat_find(depApi);
       const iatSlot = route == null ? void 0 : route.slot;
       const slotBad = iatSlot === void 0 ? [] : addressBadBytes(BigInt(iatSlot), 4, badSet);
       const owner = route ? shortName(route.owner) : "";
       if (!route) {
         const moving = slotsOf(depApi).filter((row) => !row.fixed).map((row) => shortName(row.owner));
-        const other = autoApi ? void 0 : DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => routeFor(name, modules, badchars)).find((found) => found !== void 0);
+        const other = autoApi ? void 0 : DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => routeFor(name, modules, badchars, fixedOwners)).find((found) => found !== void 0);
         stop(
           "API",
           `no module with ASLR disabled imports ${autoApi ? DEP_PLAN_APIS.join(", ") : depApi}${moving.length > 0 ? ` (${moving.join(", ")} ${moving.length === 1 ? "does, and it has" : "do, and they have"} ASLR)` : ""}, nor any other export of kernel32 or kernelbase to reach it from by a fixed distance. Its address needs a leak first.`,
@@ -25793,14 +25803,18 @@ ${INDENT}`)]);
         );
       } else if (route.delta) {
         const delta = route.delta;
-        echo("rop.api_plan", [`${delta.dll}!${depApi}`, badText]);
-        executeRopApiPlan(`${delta.dll}!${depApi}`, badText);
         const signed = delta.value > 2147483647 ? `- ${hex325(-delta.value >>> 0)}` : `+ ${hex325(delta.value)}`;
         info(`No module with ASLR disabled imports ${depApi} itself, but ${owner} imports ${delta.dll}!${delta.anchor}, at slot ${hex325(route.slot)}. ${depApi} is a fixed distance from it inside ${delta.dll}: ${depApi} = [${hex325(route.slot)}] ${signed}, measured now with ${delta.anchor} at ${hex325(delta.anchorAt)} and ${depApi} at ${hex325(delta.apiAt)}. The chain reads the slot and adds API_DELTA.`);
+        const others = delta.others.filter((name, i) => delta.others.indexOf(name) === i);
+        info(delta.why === "only" ? `This is the only slot in a module without ASLR that reaches ${depApi} by a distance.` : `Chosen from ${delta.others.length + 1} slots in modules without ASLR that reach ${depApi} by a distance: ${delta.why}. The other ${delta.others.length === 1 ? "one is" : `${delta.others.length} are`} in ${others.join(", ")}.`);
+        const moving = slotsOf(depApi).filter((row) => !row.fixed).map((row) => shortName(row.owner)).filter((name, i, all) => all.indexOf(name) === i);
+        if (moving.length > 0) info(`${moving.join(", ")} ${moving.length === 1 ? "imports" : "import"} ${depApi} itself, but ${moving.length === 1 ? "has ASLR: its slot moves" : "they have ASLR: their slots move"} on every boot. No slot in a module with ASLR anchors the distance either.`);
         warn(`That distance holds for this build of ${delta.dll} only. Any Windows update moves it, so the exploit is right for the machine it was measured on: run this again on the target.`);
-        const direct = DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => routeFor(name, modules, badchars)).find((other) => other !== void 0 && !other.delta);
+        const direct = DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => directRoute(name, modules)).find((other) => other !== void 0);
         if (direct) info(`If you are free to choose the API, ${direct.api} needs no distance: ${shortName(direct.owner)} imports it at ${hex325(direct.slot)}. dx @$osed().dep_plan("${direct.api}", "${modulesArg}", "${badText}")`);
       } else {
+        echo("sc.iat_find", [depApi]);
+        api.sc.iat_find(depApi);
         info(`Slot ${hex325(route.slot)} in ${owner}. The chain reads the API address from it with mov eax, [eax].`);
         if (!modules.some((module) => sameModule2(route.owner, module))) warn(`${modulesLabel} does not import ${depApi}; this slot belongs to ${owner}, which does not move either. The IAT you read and the modules your gadgets come from are independent.`);
       }
