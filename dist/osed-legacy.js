@@ -12153,10 +12153,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T13:09:58.125Z" : globalThis[key2];
+        value = true ? "2026-11-22T16:06:55.127Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "3fc3f30358e4" : globalThis[key2];
+        value = true ? "dd7271b6036e" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -19416,7 +19416,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         { name: "size", meaning: "Length of the block; 0 means the rest of the array.", optional: true, kind: "number" }
       ],
       results: [{ name: "found", meaning: "Bad bytes found in this run.", field: "badChars" }],
-      example: 'dx @$osed().badchar_find(0x0012F800, "00 0A 0D")',
+      example: 'dx @$osed().badchar_find(@esp, "00 0A 0D")',
       output: 'Survivors counts the bytes that arrived intact. "Bad characters found" names the new bad bytes. Exploit line is the updated BADCHARS line, and Next command is the exact command for the next round.',
       report: "Compared the test array in memory at <address> against the expected bytes with badchar_find, which identified <found> as corrupted in addition to <badchars>."
     },
@@ -19430,7 +19430,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         { name: "address", meaning: "Start of the test array in memory.", kind: "address" },
         BADCHARS("Bad bytes already left out of the array.")
       ],
-      example: 'dx @$osed().badchars(0x00B8F900, "00 0A 0D")',
+      example: 'dx @$osed().badchars(@esp, "00 0A 0D")',
       output: "The differing bytes with their positions, then the Exploit line and the Next command for the next round.",
       report: "Compared the test array at <address> with the expected byte sequence using badchars, excluding <badchars>, to confirm the full list of bad characters."
     },
@@ -19456,7 +19456,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       when: "Whenever you need to know if a buffer can be written or run, for example a code cave or the stack before a DEP bypass.",
       args: [{ name: "address", meaning: "Address to look up.", kind: "address" }],
       results: [{ name: "executable", meaning: "true when code may run there.", field: "executable" }],
-      example: "dx @$osed().memory(0x0012F800)",
+      example: "dx @$osed().memory(@esp)",
       output: "The region base and size, then readable, writable, executable, guarded, noAccess and committed. raw holds the original protection values.",
       report: "Checked the memory region of <address> with memory, which reported it as executable: <executable>.",
       quick: true
@@ -19469,7 +19469,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       when: "Quick check before jumping to a buffer, or after a DEP bypass to see if the protection changed.",
       args: [{ name: "address", meaning: "Address to test.", kind: "address" }],
       results: [{ name: "executable", meaning: "true, false or null.", field: "value" }],
-      example: "dx @$osed().can_execute(0x0012F800)",
+      example: "dx @$osed().can_execute(@esp)",
       output: "true, false, or null for unknown.",
       report: "Verified with can_execute that the memory at <address> was executable: <executable>.",
       quick: true,
@@ -20697,7 +20697,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       how: "Reads the range (at most 0x10000 bytes) in 4-byte steps and compares each value with the module ranges and the memory map.",
       when: "Looking for a pointer that a later read primitive could leak.",
       args: [{ name: "address", meaning: "Start of the range.", kind: "address" }, { name: "length", meaning: "Bytes to scan.", optional: true, kind: "address" }],
-      example: "dx @$osed().leak.scan(0x0014DD28, 0x400)",
+      example: "dx @$osed().leak.scan(@esp, 0x400)",
       output: "One row per pointer candidate with its location and target.",
       report: "Scanned <length> bytes from <address> with leak.scan for pointers into loaded modules."
     },
