@@ -43,7 +43,8 @@ import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
 import type { RopGadget } from "./rop/types";
-import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, draftLines, gadgetAddress as depPlanAddress, hex32 as dwordHex, planJobs, planLines, type DepPlanStyle, type Verdict } from "./commands/dep_plan";
+import { CORPUS_BLOCK, HELPER_BLOCK, buildExploit, slotBlock, type Block } from "./commands/dep_build";
+import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, gadgetAddress as depPlanAddress, hex32 as dwordHex, planJobs, planLines, type DepPlanStyle } from "./commands/dep_plan";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./commands/code_caves";
@@ -3117,10 +3118,8 @@ function bindApi(): OsedApi {
   // The body of dep_plan's [4/7] and all of dep_candidates, so pasting the echoed line repeats the section.
   const printDepCandidates = (corpus: CapabilityIndex | undefined, moduleName: string, badSet: Set<number>, style: DepPlanStyle) => {
     out.info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
-    const picks: Record<string, Verdict | undefined> = {};
     const plans = planJobs(corpus, style);
     for (const plan of plans) {
-      picks[plan.job.key] = plan.pick;
       for (const line of planLines(plan)) out.print(line);
     }
     let jmpEsp: number | undefined;
@@ -3138,7 +3137,7 @@ function bindApi(): OsedApi {
     }
     const missing = plans.filter((plan) => !plan.pick).map((plan) => plan.job.title);
     if (missing.length > 0) out.warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
-    return { picks, plans, jmpEsp, missing };
+    return { plans, jmpEsp, missing };
   };
 
   const executeDepCandidates = (...args: unknown[]): DxResult => {
@@ -3205,6 +3204,18 @@ function bindApi(): OsedApi {
     const badSet = new Set(badchars as number[]);
     const n = DEP_PLAN_SECTIONS;
     const summary: Array<Record<string, string>> = [];
+    // Below each section's output, so a screenshot of the output stops here and the block below it is one
+    // drag to select. It is a Python comment, so dragging the line itself in costs nothing.
+    const SEPARATOR = "# ------------------ copy into your exploit ------------------";
+    const printBlock = (block: Block) => {
+      out.print("");
+      if ("none" in block) {
+        out.info(`Nothing to copy here: ${block.none}`);
+        return;
+      }
+      out.print(SEPARATOR);
+      for (const line of block.lines) out.print(line);
+    };
     const shortName = (name: string): string => name.split("\\").pop() ?? name;
     const moduleLabel = shortName(moduleInfo.name);
     const first = Number(moduleInfo.base);
@@ -3223,6 +3234,7 @@ function bindApi(): OsedApi {
     ].filter((warning): warning is string => warning !== undefined);
     for (const warning of moduleWarnings) out.warn(warning);
     if (moduleWarnings.length === 0) out.info(`${moduleLabel} spans ${dwordHex(first)} to ${dwordHex(last)}: no ASLR, and its fixed high bytes are clean. The scan in [3/${n}] drops each address whose low bytes are bad.`);
+    printBlock(HELPER_BLOCK);
     summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
 
     out.section(`[2/${n}] IAT slot of ${depApi}`);
@@ -3246,6 +3258,7 @@ function bindApi(): OsedApi {
       if (slotBad.length > 0) out.warn(`The slot address holds bad byte(s) ${slotBad.map((b) => dwordHex(b).slice(-2)).join(" ")}: build it with the recipe in [5/${n}].`);
       else out.info("The slot address has no bad byte, so it can be popped as it is.");
     }
+    printBlock(slotBlock(depApi, moduleName, iatSlot, badchars as number[]).block);
     summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === undefined ? "not found" : `${dwordHex(iatSlot)}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
 
     out.section(`[3/${n}] Gadget corpus from ${moduleName}`);
@@ -3254,11 +3267,29 @@ function bindApi(): OsedApi {
     const corpus = currentRopCorpus;
     const gadgetCount = corpus?.gadgets.length ?? 0;
     out.info(`${gadgetCount} gadgets and ${corpus ? summarizeCapabilities(corpus).length : 0} capabilities, every address free of the bad bytes.`);
+    printBlock(CORPUS_BLOCK);
     summary.push({ Section: `[3/${n}] corpus`, Result: `${gadgetCount} gadgets` });
+
+    // The caves are found here so the [4/7] block can name them; [5/7] prints what this found.
+    const pickCave = (minSize: number, capability: string): number | undefined => {
+      const { caves } = findCodeCaves(moduleName, minSize, 25, badText, capability);
+      const found = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
+      if (!found) return undefined;
+      return Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address);
+    };
+    const writable = depApi === "VirtualAlloc" ? undefined : out.quietly(() => pickCave(4, "STAGING"));
+    const cave = depApi === "WriteProcessMemory" ? out.quietly(() => pickCave(0x210, "EXEC")) : undefined;
 
     out.section(`[4/${n}] The gadget picked per job (${style} style)`);
     out.echo("dep_candidates", [moduleName, badText, style]);
-    const { picks, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style);
+    const { plans, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style);
+    const build = buildExploit({
+      api: depApi, style, module: moduleName, badchars: badchars as number[], index: corpus, plans,
+      iatSlot, writable, cave, jmpEsp,
+      solve: (register, value, keep) =>
+        corpus ? solveValue(corpus, register, value, badchars as number[], keep, buildStableAddressPredicate()) : undefined,
+    });
+    printBlock(build.blocks[4]);
     summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
 
     out.section(`[5/${n}] Clean recipes for the constants`);
@@ -3272,43 +3303,39 @@ function bindApi(): OsedApi {
       out.echo("rop.construct", ["eax", out.hex(iatSlot), badText]);
       executeRopConstruct("eax", iatSlot, badText);
     }
-    const pickCave = (minSize: number, capability: string): number | undefined => {
-      out.echo("code_caves", [moduleName, out.hex(minSize), 25, badText, capability]);
-      const { caves } = findCodeCaves(moduleName, minSize, 25, badText, capability);
-      const cave = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
-      if (!cave) return undefined;
-      return Number(cave.addrSafe === false && cave.safeVa !== null ? cave.safeVa : cave.address);
-    };
-    let writable: number | undefined;
-    let cave: number | undefined;
     if (depApi !== "VirtualAlloc") {
-      writable = pickCave(4, "STAGING");
       const field = depApi === "VirtualProtect" ? "lpflOldProtect" : "lpNumberOfBytesWritten";
+      out.echo("code_caves", [moduleName, out.hex(4), 25, badText, "STAGING"]);
       if (writable === undefined) out.warn(`${field}: no clean writable cave in ${moduleName}. Try dx @$osed().code_caves("", 4, 25, "${badText}", "STAGING").`);
       else out.info(`${field} = ${dwordHex(writable)}, a writable cave with no bad byte (code_caves STAGING).`);
     }
     if (depApi === "WriteProcessMemory") {
-      cave = pickCave(0x210, "EXEC");
+      out.echo("code_caves", [moduleName, out.hex(0x210), 25, badText, "EXEC"]);
       if (cave === undefined) out.warn(`Code cave: none of 0x210 bytes with a clean address in ${moduleName}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
       else out.info(`Code cave (return address and lpBaseAddress) = ${dwordHex(cave)}, executable (code_caves EXEC).`);
     }
+    printBlock(build.blocks[5]);
     summary.push({ Section: `[5/${n}] constants`, Result: `${CONSTANTS[depApi].length} recipes` });
 
     out.section(`[6/${n}] ${style === "pushad" ? "PUSHAD register map" : "Call frame"} for ${depApi}`);
     const frameArgs = style === "pushad" ? [depApi, style] : [depApi];
     out.echo("dep_function", frameArgs);
     invoke("dep_function", frameArgs);
+    printBlock(build.blocks[6]);
     summary.push({ Section: `[6/${n}] frame`, Result: style === "pushad" ? "register map" : "dep_function frame" });
 
-    out.section(`[7/${n}] Python draft: verify it field by field, it is not a finished chain`);
-    for (const line of draftLines({ api: depApi, style, module: moduleName, iatSlot, writable, cave, picks, jmpEsp })) out.print(line);
-    summary.push({ Section: `[7/${n}] draft`, Result: "TODO lines mark what only a debugger run can give" });
+    out.section(`[7/${n}] The exploit, with a placeholder for every value only a run can give`);
+    out.info(build.holes.length === 0
+      ? "Nothing left to measure: paste the seven blocks and the file runs."
+      : `${build.holes.length} hole(s) to fill, each a hole(...) line with its command in the comment above it: ${build.holes.join("; ")}`);
+    printBlock(build.blocks[7]);
+    summary.push({ Section: `[7/${n}] exploit`, Result: build.holes.length === 0 ? "no holes" : `${build.holes.length} hole(s)` });
 
     setResult({
       command: "dep_plan",
       args: { api: depApi, module: moduleName, badchars: badText, style },
       success: true,
-      findings: [{ api: depApi, module: moduleName, style, iatSlot, writable, cave, gadgets: gadgetCount, missing }],
+      findings: [{ api: depApi, module: moduleName, style, iatSlot, writable, cave, gadgets: gadgetCount, missing, holes: build.holes }],
       warnings: [...moduleWarnings, ...(missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : [])],
       errors: [],
     });

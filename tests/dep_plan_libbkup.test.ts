@@ -66,18 +66,20 @@ describe.skipIf(!DLL || !existsSync(DLL))("dep_plan on the real libbkup.dll", ()
     }
     expect(output).toContain("no: reads through ecx: loading the slot there clobbers the field address");
     const picked = jobs.map((job) => job.pick?.address);
-    const used = (output.slice(output.indexOf("=== [7/7]")).match(/rop \+= p32\(0x[0-9A-F]{8}\)/g) ?? []).map((line) => line.slice(11, 21));
-    for (const address of used) expect(picked).toContain(address);
     if (process.env.DUMP) require("fs").writeFileSync(`${process.env.DUMP}/plan_skeleton.txt`, output);
+    const table = output.slice(output.indexOf("=== [4/7]"), output.indexOf("=== [5/7]"));
+    const named = [...table.matchAll(/^\w+ *= (0x[0-9A-F]{8}) {3}#/gm)].map((match) => match[1]);
+    for (const address of picked) expect(named, String(address)).toContain(address);
   });
 
   test("for each pushad job the pick writes no register loaded before it", () => {
     const api = loadApi();
     api.dep_plan("VirtualAlloc", "libbkup", BAD, "pushad");
     const output = text();
+    if (process.env.DUMP) require("fs").writeFileSync(`${process.env.DUMP}/plan_pushad.txt`, output);
     const jobs = picksOf(output).filter((job) => job.pick !== undefined);
     expect(jobs.length).toBe(9);
     for (const job of jobs) expect(job.pick?.writes.filter((register) => job.keep.indexOf(register) >= 0), job.title).toEqual([]);
-    if (process.env.DUMP) require("fs").writeFileSync(`${process.env.DUMP}/plan_pushad.txt`, output);
+    
   });
 });

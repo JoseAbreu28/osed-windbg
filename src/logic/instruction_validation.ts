@@ -206,7 +206,8 @@ function buildTransferPatterns(): GadgetPattern[] {
   return patterns;
 }
 
-// xchg reg, reg ; ret — opcode 87 /r, mod=11 (register swap)
+// xchg reg, reg ; ret. Opcode 87 /r mod=11 for any pair, plus the one-byte 90+r form a compiler
+// emits for a swap with EAX: `xchg eax, ebp` is 95, never 87 C5, so without it that gadget is invisible.
 function buildSwapPatterns(): GadgetPattern[] {
   const regs = [
     { code: 0, name: "eax" }, { code: 1, name: "ecx" }, { code: 2, name: "edx" },
@@ -223,6 +224,13 @@ function buildSwapPatterns(): GadgetPattern[] {
         mnemonic: `xchg ${regs[i].name}, ${regs[j].name} ; ret`,
       });
     }
+  }
+  for (const reg of regs.filter((candidate) => candidate.code !== 0)) {
+    patterns.push({
+      name: `xchg_eax_${reg.name}_short_ret`,
+      bytes: [0x90 | reg.code, 0xc3],
+      mnemonic: `xchg eax, ${reg.name} ; ret`,
+    });
   }
   return patterns;
 }

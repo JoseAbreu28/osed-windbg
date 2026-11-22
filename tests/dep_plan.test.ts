@@ -92,6 +92,66 @@ function loadApi(): Api {
 const text = (): string => stripDml(logs.join(""));
 
 const SECTIONS = [1, 2, 3, 4, 5, 6, 7].map((n) => `=== [${n}/7]`);
+const SEPARATOR = "# ------------------ copy into your exploit ------------------";
+
+/** The lines under each separator, in print order: exactly what the student drags out of the pane. */
+function blocksOf(output: string): string[][] {
+  const blocks: string[][] = [];
+  let current: string[] | undefined;
+  for (const line of output.split("\n")) {
+    if (line === SEPARATOR) {
+      current = [];
+      blocks.push(current);
+      continue;
+    }
+    if (line.startsWith("=== ")) current = undefined;
+    else if (current) current.push(line);
+  }
+  for (const block of blocks) while (block.length > 0 && block[block.length - 1].trim() === "") block.pop();
+  return blocks;
+}
+
+const PY_KEYWORDS = new Set(["def", "class", "return", "for", "in", "while", "not", "and", "or", "if", "else",
+  "raise", "lambda", "None", "True", "False", "is", "pass", "import", "from", "as"]);
+const PY_BUILTINS = new Set(["len", "range", "any", "all", "bytes", "int", "list", "print", "SystemExit", "self",
+  "enumerate", "str", "hex", "bool", "tuple", "dict", "set", "min", "max", "sum", "abs"]);
+// What the lab's own exploit_skeleton.py already holds when the student reaches dep_plan.
+const FROM_HIS_FILE = new Set(["OFFSET", "BADCHARS", "p32"]);
+
+const DEF = /\b(?:def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/;
+const FOR = /\bfor\s+([A-Za-z_][\w,\s]*?)\s+in\b/g;
+
+/** The line with its comment, its string literals and their b/r/f prefixes gone. */
+const bare = (line: string): string => line
+  .replace(/\b[bruf]{1,2}(?=['"])/gi, "")
+  .replace(/(['"])(?:\\.|(?!\1).)*\1/g, '""')
+  .replace(/#.*$/, "");
+
+/** `own`: what the line binds in its own scope. `inner`: parameters and loop targets, bound one level in. */
+function bindings(line: string): { own: string[]; inner: string[] } {
+  const code = bare(line);
+  const own: string[] = [];
+  const inner: string[] = [];
+  const def = DEF.exec(code);
+  if (def) {
+    own.push(def[1]);
+    inner.push(...def[2].split(",").map((part) => part.trim().split("=")[0].replace(/^\*+/, "").trim()).filter(Boolean));
+  }
+  for (const match of code.matchAll(FOR)) inner.push(...match[1].split(",").map((part) => part.trim()).filter(Boolean));
+  const assign = def ? null : /^\s*([A-Za-z_][\w,.\s[\]]*?)\s*=(?!=)/.exec(code);
+  for (const target of assign ? assign[1].split(",") : []) {
+    const name = target.trim();
+    if (/^[A-Za-z_]\w*$/.test(name)) own.push(name);
+  }
+  return { own, inner };
+}
+
+function uses(line: string): string[] {
+  const code = bare(line).replace(DEF, "").replace(FOR, "");
+  return [...code.matchAll(/(\.)?\b([A-Za-z_]\w*)\b/g)]
+    .filter((match) => !match[1] && !PY_KEYWORDS.has(match[2]))
+    .map((match) => match[2]);
+}
 
 describe("dep_plan", () => {
   let api: Api;
@@ -109,7 +169,10 @@ describe("dep_plan", () => {
       expect(positions.every((position) => position >= 0), `${name} ${style}: ${positions}`).toBe(true);
       expect([...positions].sort((a, b) => a - b)).toEqual(positions);
       expect(output).toContain(`=== [2/7] IAT slot of ${name} ===`);
-      expect(output).toContain("not a finished chain");
+      expect(output).toContain("=== [7/7] The exploit, with a placeholder for every value only a run can give ===");
+      // Six blocks and one honest "nothing to copy": [3/7] finds the corpus, which is search, not exploit.
+      expect(blocksOf(output).length, `${name} ${style}`).toBe(6);
+      expect(output).toContain("[+] Nothing to copy here: the corpus is the search");
     }
   });
 
@@ -139,16 +202,27 @@ describe("dep_plan", () => {
     expect(copy).toContain("> 0x11111331  mov edi, esi ; ret");
   });
 
-  test("the draft uses exactly the gadgets [4/7] picked", () => {
+  test("every gadget the blocks name is one the [4/7] table found, and each pick the chain needs is there", () => {
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
     const output = text();
-    const picked = picksOf(output).map((job) => job.pick?.address);
-    const used = (output.slice(output.indexOf("=== [7/7]")).match(/rop \+= p32\(0x[0-9A-F]{8}\)/g) ?? []).map((line) => line.slice(11, 21));
-    expect(used.length).toBeGreaterThan(5);
-    for (const address of used) expect(picked).toContain(address);
-    expect(output).toContain("# TODO move the field address from edi into eax first\nrop += p32(0x11111171)    # pivot ESP onto field 1: xchg eax, esp ; ret");
-    expect(output).toContain("DIST_FIELD1 = ???");
-    expect(output).toContain("#   bp 0x11111111 ; g ; r esp");
+    const table = blocksOf(output)[2];
+    const named = new Map(table
+      .map((line) => /^(\w+)\s+= (0x[0-9A-F]{8})/.exec(line))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map((match) => [match[1], match[2]]));
+    expect(named.size).toBeGreaterThan(5);
+    const addresses = (output.match(/0x1111[0-9A-F]{4}/g) ?? []);
+    for (const address of named.values()) expect(addresses).toContain(address);
+    // The jobs that carry the chain: each pick is in the table under the name of its first instruction.
+    const pick = (title: string) => picksOf(output).find((job) => job.title.indexOf(title) === 0)?.pick;
+    expect(named.get("PUSH_ESP_POP_ESI")).toBe(pick("capture ESP")?.address);
+    expect(named.get("ADD_ESI_ECX")).toBe(pick("add the distance")?.address);
+    expect(named.get("MOV_EDI_ESI")).toBe(pick("copy a register")?.address);
+    expect(named.get("MOV_MEM_EDI_EAX")).toBe(pick("write a field")?.address);
+    expect(named.get("INC_EDI")).toBe(pick("advance the pointer")?.address);
+    expect(named.get("XCHG_EAX_ESP")).toBe(pick("pivot ESP")?.address);
+    expect(table).toContain("COST = {NEG_EAX: (1, 0)}     # (extra pops, ret N)");
+    expect(output).toContain("# confirm: bp 0x11111111 ; g ; r esp ; s -d esp-400 L100 45454545");
     expect(output).toContain("=== VirtualAlloc Python Call-Frame Skeleton ===");
     expect(api.last_result().findings[0]).toMatchObject({ api: "VirtualAlloc", module: "libbkup", style: "skeleton" });
   });
@@ -161,8 +235,48 @@ describe("dep_plan", () => {
     expect(job("add the distance")).not.toContain("add esp");
     expect(job("copy a register")).not.toContain("mov esp, ebp");
     expect(job("pivot ESP onto the frame")).toContain("xchg eax, esp ; ret");
-    expect(output).toContain("rop += p32(0x11111151)    # add the distance: add esi, ecx ; ret");
-    expect(output).not.toContain("# add the distance: add esp");
+    expect(blocksOf(output)[2]).toContain("ADD_ESI_ECX      = 0x11111151   # add esi, ecx ; ret");
+    expect(output).not.toContain("add esp, 0x10 ; ret\nCOST");
+  });
+
+  test.each([
+    ["VirtualAlloc", "skeleton"], ["VirtualProtect", "skeleton"], ["WriteProcessMemory", "skeleton"],
+    ["VirtualAlloc", "pushad"], ["VirtualProtect", "pushad"], ["WriteProcessMemory", "pushad"],
+  ])("the %s %s blocks compose: pasted in print order they define every name they use, and none twice", (name, style) => {
+    api.dep_plan(name, "libbkup", "00 0A 0D", style);
+    const blocks = blocksOf(text());
+    expect(blocks.length).toBe(6);
+    const chain = blocks[5];
+
+    // [7/7] is the body of a stage function, so it carries no def line of its own and ends in a return.
+    for (const line of chain) if (line.trim()) expect(line.startsWith("    "), line).toBe(true);
+    expect(chain[chain.length - 1]).toBe("    return payload");
+    expect(chain.some((line) => /^ {4}payload {1,2}?=/.test(line) || /^ {4}payload \+?=/.test(line))).toBe(true);
+
+    // Module level is blocks [1/7] to [6/7] at column 0; the chain's own lines are locals of the stage.
+    const moduleLines = blocks.slice(0, 5).flat();
+    const moduleNames: string[] = [];
+    const locals = new Set<string>();
+    for (const line of moduleLines) {
+      const { own, inner } = bindings(line);
+      if (line.startsWith(" ")) own.forEach((name) => locals.add(name));
+      else moduleNames.push(...own);
+      inner.forEach((name) => locals.add(name));
+    }
+    for (const line of chain) {
+      const { own, inner } = bindings(line);
+      [...own, ...inner].forEach((name) => locals.add(name));
+    }
+
+    expect([...new Set(moduleNames)].sort()).toEqual([...moduleNames].sort());
+    for (const reserved of ["OFFSET", "BADCHARS"]) expect(moduleNames, reserved).not.toContain(reserved);
+    // A slot called "return" must not become `return = hole(...)`.
+    for (const bound of [...moduleNames, ...locals]) expect(PY_KEYWORDS, bound).not.toContain(bound);
+
+    const known = new Set([...moduleNames, ...locals, ...FROM_HIS_FILE, ...PY_BUILTINS]);
+    for (const line of [...moduleLines, ...chain]) {
+      for (const used of uses(line)) expect(known, `${name} ${style}: ${line}`).toContain(used);
+    }
   });
 
   test("pushad style lists a pop for each register, pushad and jmp esp, then the register map", () => {
@@ -248,14 +362,16 @@ describe("dep_plan", () => {
   test.each(["skeleton", "pushad"])("dep_candidates in a fresh session prints the whole [4/7] %s section and loads no corpus", (style) => {
     api.dep_plan("VirtualProtect", "libbkup", "00 0A 0D", style);
     const report = text();
-    const section = report.slice(report.indexOf("=== [4/7]"), report.indexOf("\n=== [5/7]"));
+    const whole = report.slice(report.indexOf("=== [4/7]"), report.indexOf("\n=== [5/7]"));
+    // The block under the separator is dep_plan's own addition, so the comparison stops there.
+    const section = whole.slice(0, whole.indexOf(`\n\n${SEPARATOR}`));
     const call = `dx @$osed().dep_candidates("libbkup", "00 0A 0D", "${style}")`;
     expect(section.split("\n")[1]).toBe(call);
 
     const fresh = loadApi();
     fresh.dep_candidates("libbkup", "00 0A 0D", style);
     expect(fresh.last_result()).toMatchObject({ command: "dep_candidates", success: true });
-    expect(section.slice(section.indexOf(call) + call.length + 1)).toBe(text());
+    expect(section.slice(section.indexOf(call) + call.length + 1)).toBe(text().replace(/\n$/, ""));
     fresh.rop.query("capability", "MEMORY_READ");
     expect(fresh.last_result().success).toBe(false);
   });
