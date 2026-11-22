@@ -11650,10 +11650,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T12:23:41.975Z" : globalThis[key2];
+        value = true ? "2026-11-22T12:37:39.751Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "1048da574845" : globalThis[key2];
+        value = true ? "f2b0315592a7" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -25264,11 +25264,19 @@ ${INDENT}`)]);
         print(SEPARATOR);
         for (const line of block.lines) print(line);
       };
+      let blocker;
       const shortName = (name) => {
         var _a3;
         return (_a3 = name.split("\\").pop()) != null ? _a3 : name;
       };
       const moduleLabel2 = shortName(moduleInfo.name);
+      const stop = (what, next) => {
+        if (blocker) return;
+        blocker = { what, next };
+        section(`STOP: no ${depApi} chain from ${moduleLabel2}`);
+        error(what);
+        error(`Next: ${next}`);
+      };
       const first = Number(moduleInfo.base);
       const last = Number(moduleInfo.base + moduleInfo.size - BigInt(1));
       const fixedByte = (shift) => (first >>> shift & 255) === (last >>> shift & 255) ? first >>> shift & 255 : void 0;
@@ -25284,6 +25292,12 @@ ${INDENT}`)]);
       for (const warning of moduleWarnings) warn(warning);
       if (moduleWarnings.length === 0) info(`${moduleLabel2} spans ${hex325(first)} to ${hex325(last)}: no ASLR, and its fixed high bytes are clean. The scan in [3/${n}] drops each address whose low bytes are bad.`);
       printBlock(HELPER_BLOCK);
+      if (moduleInfo.aslr === "enabled") {
+        stop(
+          `${moduleLabel2} has ASLR: every gadget address in it moves on each run, so no chain built from it survives a reboot. This is the one case where you change module.`,
+          `dx @$osed().modules()    pick one with ASLR disabled and run dep_plan again with it`
+        );
+      }
       summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
       section(`[2/${n}] IAT slot of ${depApi}`);
       echo("sc.iat_find", [depApi]);
@@ -25292,21 +25306,34 @@ ${INDENT}`)]);
         var _a3;
         return new RegExp(`(^|!)${depApi}$`, "i").test(stripDml(String((_a3 = row.Symbol) != null ? _a3 : "")).trim());
       });
-      const chosen = (_b = slotRows.find((row) => {
+      const ownerAslrOf = (row) => {
+        var _a3, _b2;
+        return ((_b2 = moduleInfoByName(stripDml(String((_a3 = row.Owner) != null ? _a3 : "")))) == null ? void 0 : _b2.aslr) === "enabled";
+      };
+      const chosen = (_c = (_b = slotRows.find((row) => {
         var _a3;
         return stripDml(String((_a3 = row.Owner) != null ? _a3 : "")).toLowerCase().includes(moduleName.toLowerCase());
-      })) != null ? _b : slotRows[0];
-      const slotMatch = chosen ? /0x([0-9a-fA-F]+)/.exec(stripDml(String((_c = chosen.Slot) != null ? _c : ""))) : null;
+      })) != null ? _b : slotRows.find((row) => !ownerAslrOf(row))) != null ? _c : slotRows[0];
+      const slotMatch = chosen ? /0x([0-9a-fA-F]+)/.exec(stripDml(String((_d = chosen.Slot) != null ? _d : ""))) : null;
       const iatSlot = slotMatch ? parseInt(slotMatch[1], 16) >>> 0 : void 0;
       const slotBad = iatSlot === void 0 ? [] : addressBadBytes(BigInt(iatSlot), 4, badSet);
       if (iatSlot === void 0) {
-        warn(`No module imports ${depApi}. Pick another API, or resolve it at run time (sc.iat_find("GetProcAddress")).`);
+        stop(
+          `Nothing in this process imports ${depApi}, so there is no slot to read its address from. ${moduleLabel2} is not the problem here, the API is: you change API, not module.`,
+          `dx @$osed().rop.generate("auto", "", "${badText}", "${moduleName}")    scores every DEP bypass API by whether its slot exists and whether that address is free of your bad chars`
+        );
       } else {
         const owner = stripDml(String(chosen.Owner));
         info(`Slot ${hex325(iatSlot)} in ${owner}. The chain reads the API address from it with mov eax, [eax].`);
         if (!owner.toLowerCase().includes(moduleName.toLowerCase())) {
-          const ownerAslr = ((_d = moduleInfoByName(owner)) == null ? void 0 : _d.aslr) === "enabled";
-          warn(`${moduleLabel2} does not import ${depApi}; this slot belongs to ${owner}${ownerAslr ? ", which has ASLR, so the slot moves on every boot and needs a leak" : ""}. Check other modules with sc.iat_find, or resolve the API at run time.`);
+          if (ownerAslrOf(chosen)) {
+            stop(
+              `${moduleLabel2} does not import ${depApi}, and every module that does has ASLR, starting with ${owner}: the slot address moves on every boot. Reading it needs a leak first, or the API resolved at run time.`,
+              `dx @$osed().sc.iat_find("${depApi}")    the Owner column lists every importer; you need one whose module shows ASLR disabled`
+            );
+          } else {
+            warn(`${moduleLabel2} does not import ${depApi}; this slot belongs to ${owner}. Check the other importers with sc.iat_find if you would rather stay inside one module.`);
+          }
         }
         if (slotBad.length > 0) warn(`The slot address holds bad byte(s) ${slotBad.map((b) => hex325(b).slice(-2)).join(" ")}: build it with the recipe in [5/${n}].`);
         else info("The slot address has no bad byte, so it can be popped as it is.");
@@ -25348,7 +25375,8 @@ ${INDENT}`)]);
       printBlock(build.blocks[4]);
       summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
       section(`[5/${n}] Clean recipes for the constants`);
-      for (const constant of CONSTANTS[depApi]) {
+      if (blocker) error(`Skipped: these are the arguments of a ${depApi} call this chain cannot make. See the STOP above.`);
+      for (const constant of blocker ? [] : CONSTANTS[depApi]) {
         info(`${constant.field} = ${hex325(constant.value)}`);
         echo("rop.construct", ["eax", hex(constant.value), badText]);
         executeRopConstruct("eax", constant.value, badText);
@@ -25358,36 +25386,49 @@ ${INDENT}`)]);
         echo("rop.construct", ["eax", hex(iatSlot), badText]);
         executeRopConstruct("eax", iatSlot, badText);
       }
-      if (depApi !== "VirtualAlloc") {
+      if (depApi !== "VirtualAlloc" && !blocker) {
         const field = depApi === "VirtualProtect" ? "lpflOldProtect" : "lpNumberOfBytesWritten";
         echo("code_caves", [moduleName, hex(4), 25, badText, "STAGING"]);
         if (writable === void 0) warn(`${field}: no clean writable cave in ${moduleName}. Try dx @$osed().code_caves("", 4, 25, "${badText}", "STAGING").`);
         else info(`${field} = ${hex325(writable)}, a writable cave with no bad byte (code_caves STAGING).`);
       }
-      if (depApi === "WriteProcessMemory") {
+      if (depApi === "WriteProcessMemory" && !blocker) {
         echo("code_caves", [moduleName, hex(528), 25, badText, "EXEC"]);
         if (cave === void 0) warn(`Code cave: none of 0x210 bytes with a clean address in ${moduleName}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
         else info(`Code cave (return address and lpBaseAddress) = ${hex325(cave)}, executable (code_caves EXEC).`);
       }
-      printBlock(build.blocks[5]);
-      summary.push({ Section: `[5/${n}] constants`, Result: `${CONSTANTS[depApi].length} recipes` });
+      if (!blocker) printBlock(build.blocks[5]);
+      summary.push({ Section: `[5/${n}] constants`, Result: blocker ? "skipped" : `${CONSTANTS[depApi].length} recipes` });
       section(`[6/${n}] ${style === "pushad" ? "PUSHAD register map" : "Call frame"} for ${depApi}`);
-      const frameArgs = style === "pushad" ? [depApi, style] : [depApi];
-      echo("dep_function", frameArgs);
-      invoke("dep_function", frameArgs);
-      printBlock(build.blocks[6]);
-      summary.push({ Section: `[6/${n}] frame`, Result: style === "pushad" ? "register map" : "dep_function frame" });
+      if (blocker) {
+        error(`Skipped: this is the frame of a ${depApi} call this chain cannot make. See the STOP above.`);
+      } else {
+        const frameArgs = style === "pushad" ? [depApi, style] : [depApi];
+        echo("dep_function", frameArgs);
+        invoke("dep_function", frameArgs);
+        printBlock(build.blocks[6]);
+      }
+      summary.push({ Section: `[6/${n}] frame`, Result: blocker ? "skipped" : style === "pushad" ? "register map" : "dep_function frame" });
       section(`[7/${n}] The exploit, with a placeholder for every value only a run can give`);
-      info(build.holes.length === 0 ? "Nothing left to measure: paste the seven blocks and the file runs." : `${build.holes.length} hole(s) to fill, each a hole(...) line with its command in the comment above it: ${build.holes.join("; ")}`);
-      printBlock(build.blocks[7]);
-      summary.push({ Section: `[7/${n}] exploit`, Result: build.holes.length === 0 ? "no holes" : `${build.holes.length} hole(s)` });
+      if (blocker) {
+        error(`Skipped: there is no chain to write. See the STOP above.`);
+      } else {
+        info(build.holes.length === 0 ? "Nothing left to measure: paste the seven blocks and the file runs." : `${build.holes.length} hole(s) to fill, each a hole(...) line with its command in the comment above it: ${build.holes.join("; ")}`);
+        printBlock(build.blocks[7]);
+      }
+      summary.push({ Section: `[7/${n}] exploit`, Result: blocker ? "skipped" : build.holes.length === 0 ? "no holes" : `${build.holes.length} hole(s)` });
+      if (blocker) {
+        section(`STOP: no ${depApi} chain from ${moduleLabel2}`);
+        error(blocker.what);
+        error(`Next: ${blocker.next}`);
+      }
       setResult({
         command: "dep_plan",
         args: { api: depApi, module: moduleName, badchars: badText, style },
-        success: true,
-        findings: [{ api: depApi, module: moduleName, style, iatSlot, writable, cave, gadgets: gadgetCount, missing, holes: build.holes }],
+        success: blocker === void 0,
+        findings: [{ api: depApi, module: moduleName, style, iatSlot, writable, cave, gadgets: gadgetCount, missing, holes: blocker ? [] : build.holes }],
         warnings: [...moduleWarnings, ...missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : []],
-        errors: []
+        errors: blocker ? [blocker.what, `Next: ${blocker.next}`] : []
       });
       return toDxResult("DEP Plan", summary);
     };
