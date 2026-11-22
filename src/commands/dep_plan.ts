@@ -129,7 +129,7 @@ function ranked(index: CapabilityIndex, job: Job, exclude: number[]): RopGadget[
 
 const REGISTER = /^e(ax|bx|cx|dx|si|di|bp|sp)$/;
 
-function memoryBase(text: string): { base?: string; offset: number } {
+export function memoryBase(text: string): { base?: string; offset: number } {
   const match = /\[\s*(e[a-z]{2})\s*(?:([+-])\s*(0x[0-9a-f]+|\d+))?\s*\]/i.exec(text);
   if (!match) return { offset: 0 };
   const offset = match[3] ? parseInt(match[3], match[3].indexOf("0x") === 0 ? 16 : 10) : 0;

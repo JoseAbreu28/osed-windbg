@@ -9,6 +9,7 @@ import { initializeScript } from "../src/index";
 type Result = { success: boolean; errors: string[]; findings: Array<Record<string, unknown>> };
 type Api = {
   dep_plan: (...args: unknown[]) => unknown;
+  palette: (...args: unknown[]) => unknown;
   dep_candidates: (...args: unknown[]) => unknown;
   rop: { scan_live: (...args: unknown[]) => unknown };
   last_result: () => Result;
@@ -336,5 +337,56 @@ describe("dep_plan never reports an absence the scan did not settle", () => {
     logs.length = 0;
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D 20");
     expect(text()).toContain('dx @$osed().rop.scan_live("libbkup", "00 0A 0D 20")');
+  });
+});
+
+describe("palette", () => {
+  // dec eax ; ret sits only at 0x1111100A, which holds the bad byte 0A. The three after it were offered by
+  // the first run on the clone and are wrong: one returns into its own push, one pivots, one reads [ecx+0x1c].
+  const module: Module[] = [{ name: "libbkup.dll", base: 0x11110000, code: [...GADGETS, [0x100a, [0x48, 0xc3]],
+    [0x1401, [0x43, 0x6a, 0x5d, 0xc3]], // inc ebx ; push 0x5d ; ret
+    [0x1411, [0x4a, 0x89, 0xdc, 0xc3]], // dec edx ; mov esp, ebx ; ret
+    [0x1421, [0x8b, 0x41, 0x1c, 0xc3]], // mov eax, [ecx+0x1c] ; ret
+  ] }];
+  const SEPARATOR = "# ------------------ copy into your exploit ------------------";
+  const blockOf = (output: string): string[] => output.slice(output.indexOf(SEPARATOR) + SEPARATOR.length).trim().split("\n");
+  // The line for one name, with the padding before its = collapsed.
+  const entry = (block: string[], name: string): string | undefined => block.find((line) => line.startsWith(`${name} `))?.replace(/ += /, " = ");
+
+  test("one line per shape, valid Python, each name once, None only where the module has none", () => {
+    const api = load(module);
+    api.palette("libbkup", "00 0A 0D");
+    const output = text();
+    const block = blockOf(output);
+    const names: string[] = [];
+    for (const line of block) {
+      if (line === "" || line.startsWith("# ")) continue;
+      const match = /^(GADGET_[A-Z0-9_]+) += (0x[0-9A-F]{8}|None)( +# .*)?$/.exec(line);
+      expect(match, line).not.toBeNull();
+      names.push(match![1]);
+    }
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.length).toBeGreaterThan(250);
+    expect(entry(block, "GADGET_POP_EAX")).toBe("GADGET_POP_EAX = 0x11111271   # pop eax ; ret");
+    expect(entry(block, "GADGET_NEG_EAX")).toBe("GADGET_NEG_EAX = 0x11111161   # neg eax ; pop ebp ; ret   costs (1, 0): 1 extra pop, writes ebp");
+    expect(entry(block, "GADGET_MOV_ESP2ESI")).toBe("GADGET_MOV_ESP2ESI = 0x11111111   # push esp ; pop esi ; ret");
+    expect(entry(block, "GADGET_XCHG_EAX2ESP")).toBe("GADGET_XCHG_EAX2ESP = 0x11111171   # xchg eax, esp ; ret");
+    expect(entry(block, "GADGET_WRITE_EAX2EDI")).toMatch(/^GADGET_WRITE_EAX2EDI = 0x11111341   # mov .*\[edi\], eax ; ret$/);
+    expect(entry(block, "GADGET_DEC_EAX")).toMatch(/^GADGET_DEC_EAX = None +# 1 only at an address holding a bad byte$/);
+    expect(entry(block, "GADGET_DEC_ECX")).toBe("GADGET_DEC_ECX = None");
+    expect(entry(block, "GADGET_INC_EBX")).toBe("GADGET_INC_EBX = None");
+    expect(entry(block, "GADGET_DEC_EDX")).toBe("GADGET_DEC_EDX = None");
+    expect(entry(block, "GADGET_READ_ECX2EAX")).toMatch(/^GADGET_READ_ECX2EAX = 0x11111421   # mov eax, .*\[ecx\+0x1c\] ; ret   costs \(0, 0\): reads \[ecx\+0x1c\], not \[ecx\]$/);
+    expect(output).toMatch(/\n {2}NEG +1 of 7 +NEG_EAX\r?\n/);
+  });
+
+  test("a shape only the byte search finds is not None", () => {
+    // pop edx ; ret at 0x22222051, beyond 2048 copies at addresses holding a bad byte: the scan stops first.
+    const fill: number[] = [];
+    for (let i = 0; i < 0x1000; i += 2) fill.push(0x5a, 0xc3);
+    const bad = "00 0A 0D 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F";
+    const api = load([{ name: "libbkup.dll", base: 0x22220000, code: [[0x1000, fill], [0x2051, [0x5a, 0xc3]]] }]);
+    api.palette("libbkup", bad);
+    expect(entry(blockOf(text()), "GADGET_POP_EDX")).toBe("GADGET_POP_EDX = 0x22222051   # pop edx ; ret");
   });
 });

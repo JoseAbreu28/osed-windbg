@@ -46,7 +46,8 @@ import type { RopGadget } from "./rop/types";
 import type { DepApi } from "./commands/rop_template";
 import { findEncodings } from "./core/backward_scanner";
 import { badcharAddressFilter } from "./logic/pointer_filter_logic";
-import { CORPUS_BLOCK, HELPER_BLOCK, buildExploit, slotBlock, type Block, type Delta } from "./commands/dep_build";
+import { COPY_SEPARATOR, CORPUS_BLOCK, HELPER_BLOCK, buildExploit, slotBlock, type Block, type Delta } from "./commands/dep_build";
+import { GROUPS as PALETTE_GROUPS, SHAPES as PALETTE_SHAPES, extrasOf as paletteExtras, paletteLines, pickShape, shapeEncodings } from "./commands/palette";
 import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, planJobs, planLines, settledLines, type DepPlanStyle, type Job, type JobPlan, type Settled } from "./commands/dep_plan";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
@@ -3228,17 +3229,14 @@ function bindApi(): OsedApi {
     return undefined;
   };
 
-  // Searching a module for a job's encodings reads every byte once, so a job no scan filled is settled
-  // here before anything says it is absent.
-  type Solved = { corpus: CapabilityIndex | undefined; plans: Record<DepPlanStyle, JobPlan[]>; settled: Record<string, Settled> };
-  const solveStyles = (scanned: CapabilityIndex | undefined, modules: string[], badchars: number[], exclude: number[]): Solved => {
-    const planBoth = (index: CapabilityIndex | undefined) => ({ skeleton: planJobs(index, "skeleton", exclude), pushad: planJobs(index, "pushad", exclude) });
-    let plans = planBoth(scanned);
-    const open: Job[] = [];
-    for (const plan of [...plans.skeleton, ...plans.pushad]) if (!plan.pick && open.every((job) => job.key !== plan.job.key)) open.push(plan.job);
-    if (open.length === 0 || modules.length === 0) return { corpus: scanned, plans, settled: {} };
+  // Searching a module for a set of encodings reads every byte once, so a job or a shape no scan filled
+  // is settled here before anything says it is absent. Each group is the encodings of one job or shape;
+  // its result is the clean addresses that hold one and how many hits sat at an address holding a bad
+  // byte. The corpus comes back with every clean hit the scan had missed.
+  type Search = { corpus: CapabilityIndex | undefined; groups: Array<{ clean: number[]; dirty: number }> };
+  const searchEncodings = (scanned: CapabilityIndex | undefined, modules: string[], groups: number[][][], badchars: number[]): Search => {
     const encodings: number[][] = [];
-    const owners = open.map((job) => encodingsFor(job).map((encoding) => encodings.push(encoding) - 1));
+    const owners = groups.map((group) => group.map((encoding) => encodings.push(encoding) - 1));
     const clean = badcharAddressFilter(badchars, 4);
     const known = new Set((scanned?.gadgets ?? []).map((gadget) => depPlanAddress(gadget)));
     const hits: Array<{ mnemonic: string; address: bigint; module: string }> = [];
@@ -3255,18 +3253,30 @@ function bindApi(): OsedApi {
     const corpus = hits.length > 0
       ? mergeCapabilityIndexes([...(scanned ? [scanned] : []), buildCapabilityIndexFromSequences(sequencesFromLiveHits(hits))])
       : scanned;
-    if (hits.length > 0) plans = planBoth(corpus);
-    const settled: Record<string, Settled> = {};
-    open.forEach((job, i) => {
-      const mine = owners[i];
-      settled[job.key] = {
-        modules: modules.map(moduleLabel).join(", "),
-        encodings: mine.length,
+    return {
+      corpus,
+      groups: owners.map((mine) => ({
         clean: found.filter((hit) => mine.indexOf(hit.encoding) >= 0).map((hit) => hit.address),
         dirty: mine.reduce((sum, index) => sum + dirty[index], 0),
-      };
+      })),
+    };
+  };
+
+  type Solved = { corpus: CapabilityIndex | undefined; plans: Record<DepPlanStyle, JobPlan[]>; settled: Record<string, Settled> };
+  const solveStyles = (scanned: CapabilityIndex | undefined, modules: string[], badchars: number[], exclude: number[]): Solved => {
+    const planBoth = (index: CapabilityIndex | undefined) => ({ skeleton: planJobs(index, "skeleton", exclude), pushad: planJobs(index, "pushad", exclude) });
+    let plans = planBoth(scanned);
+    const open: Job[] = [];
+    for (const plan of [...plans.skeleton, ...plans.pushad]) if (!plan.pick && open.every((job) => job.key !== plan.job.key)) open.push(plan.job);
+    if (open.length === 0 || modules.length === 0) return { corpus: scanned, plans, settled: {} };
+    const groups = open.map((job) => encodingsFor(job));
+    const search = searchEncodings(scanned, modules, groups, badchars);
+    if (search.corpus !== scanned) plans = planBoth(search.corpus);
+    const settled: Record<string, Settled> = {};
+    open.forEach((job, i) => {
+      settled[job.key] = { modules: modules.map(moduleLabel).join(", "), encodings: groups[i].length, ...search.groups[i] };
     });
-    return { corpus, plans, settled };
+    return { corpus: search.corpus, plans, settled };
   };
 
   const otherStyle = (style: DepPlanStyle): DepPlanStyle => (style === "pushad" ? "skeleton" : "pushad");
@@ -3377,6 +3387,57 @@ function bindApi(): OsedApi {
     return toDxResult("DEP Candidates", rows);
   };
 
+  // A palette of gadgets named by the instruction, for a chain written by hand: SEH, egghunter or DEP.
+  const executePalette = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") return helperHelp("palette");
+    const [moduleArg, badArg] = args;
+    const modules = (typeof moduleArg === "string" ? moduleArg : "").split(",").map((name) => name.trim()).filter(Boolean);
+    const badText = typeof badArg === "string" ? badArg : "";
+    const badchars = parseHexByteList(badText);
+    const fail = (message: string): DxResult => {
+      const rows = [{ Error: message }];
+      renderRows("Gadget Palette", rows);
+      out.info("Usage: dx @$osed().palette(module, badchars)");
+      setResult({ command: "palette", args: { module: moduleArg, badchars: badArg }, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult("Gadget Palette", rows);
+    };
+    if (!Array.isArray(badchars)) return fail('badchars must be hex bytes such as "00 0A 0D".');
+    const unknown = modules.length === 0 ? [""] : modules.filter((module) => !moduleInfoByName(module));
+    if (unknown.length > 0) return fail(`Module "${unknown[0]}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
+    out.section(out.dxCall("palette", [modules.join(","), badText]));
+    const scanned = loadedCorpusCovers(modules, badchars as number[])
+      ? currentRopCorpus
+      : mergeCapabilityIndexes(discoverLiveIndexes(modules, { badchars }).indexes);
+    const first = PALETTE_SHAPES.map((shape) => pickShape(scanned?.gadgets ?? [], shape));
+    const open = PALETTE_SHAPES.filter((_, i) => first[i] === undefined);
+    const search = searchEncodings(scanned, modules, open.map(shapeEncodings), badchars as number[]);
+    const gadgets = search.corpus?.gadgets ?? [];
+    const entries = PALETTE_SHAPES.map((shape, i) => {
+      const at = open.indexOf(shape);
+      return { shape, pick: first[i] ?? (at >= 0 ? pickShape(gadgets, shape) : undefined), dirty: at >= 0 ? search.groups[at].dirty : 0 };
+    });
+    const label = modules.map(moduleLabel).join(", ");
+    out.info(`Every shape below that no scanned gadget fills was searched for in every byte of ${label}, by its plain encodings, before it is None. Addresses hold none of the bad bytes.`);
+    for (const group of PALETTE_GROUPS) {
+      const found = entries.filter((entry) => entry.shape.op === group.op && entry.pick).map((entry) => entry.shape.name.slice("GADGET_".length));
+      const total = entries.filter((entry) => entry.shape.op === group.op).length;
+      out.print(`  ${group.op.padEnd(6)} ${String(found.length).padStart(2)} of ${String(total).padEnd(2)}  ${found.join(" ")}`);
+    }
+    out.print("");
+    out.print(COPY_SEPARATOR);
+    for (const line of paletteLines(entries, paletteExtras(gadgets), label)) out.print(line);
+    const rows = entries.filter((entry) => entry.pick).map((entry) => ({ Name: entry.shape.name, Address: dwordHex(depPlanAddress(entry.pick!.gadget)), Gadget: gadgetSequence(entry.pick!.gadget) }));
+    setResult({
+      command: "palette",
+      args: { module: modules.join(","), badchars: badText },
+      success: true,
+      findings: entries.map((entry) => ({ name: entry.shape.name, address: entry.pick ? depPlanAddress(entry.pick.gadget) : null })),
+      warnings: [],
+      errors: [],
+    });
+    return toDxResult("Gadget Palette", rows);
+  };
+
   const executeDepPlan = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("dep_plan");
@@ -3440,7 +3501,7 @@ function bindApi(): OsedApi {
     const summary: Array<Record<string, string>> = [];
     // Below each section's output, so a screenshot of the output stops here and the block below it is one
     // drag to select. It is a Python comment, so dragging the line itself in costs nothing.
-    const SEPARATOR = "# ------------------ copy into your exploit ------------------";
+    const SEPARATOR = COPY_SEPARATOR;
     const printBlock = (block: Block) => {
       out.print("");
       if ("none" in block) {
@@ -3772,6 +3833,7 @@ function bindApi(): OsedApi {
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
   api.dep_plan = executeDepPlan;
   api.dep_candidates = executeDepCandidates;
+  api.palette = executePalette;
 
   // exploit.state and exploit.clear make exploit an object, which shadows the
   // registry command of the same name. The workflow command sits beside them so

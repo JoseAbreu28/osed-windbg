@@ -30,7 +30,7 @@ function push(map: Map<string, RopGadget[]>, capability: RopCapability, gadget: 
 const WRITES_FIRST = ["mov", "movzx", "movsx", "lea", "xor", "or", "and", "add", "sub", "adc", "sbb",
   "inc", "dec", "neg", "not", "imul", "shl", "shr", "sar", "rol", "ror", "bswap", "pop"];
 
-function overwrites(instruction: RopGadget["instructions"][number], register: string): boolean {
+export function overwrites(instruction: RopGadget["instructions"][number], register: string): boolean {
   const operands = instruction.operands.map((operand) => operand.trim().toLowerCase());
   if (instruction.mnemonic === "xchg") return operands.indexOf(register) >= 0;
   return WRITES_FIRST.indexOf(instruction.mnemonic) >= 0 && operands[0] === register;

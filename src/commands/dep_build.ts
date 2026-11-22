@@ -123,14 +123,14 @@ const far = (gadget: RopGadget): boolean => !movesEsp(gadget) && (stackMove(gadg
 const ownsEsp = (operands: string[], mnemonic: string): boolean =>
   operands[0] === "esp" || mnemonic === "leave" || (mnemonic === "xchg" && operands.indexOf("esp") >= 0);
 
-function lastRetN(gadget: RopGadget): number {
+export function lastRetN(gadget: RopGadget): number {
   const last = gadget.instructions[gadget.instructions.length - 1];
   if (!last || last.mnemonic !== "ret" || last.operands.length !== 1) return 0;
   return parseInt(last.operands[0], last.operands[0].indexOf("0x") === 0 ? 16 : 10) || 0;
 }
 
 // Stack dwords the gadget takes beyond the values it is given, counted until it moves ESP.
-function extraPops(gadget: RopGadget, loads: number): number {
+export function extraPops(gadget: RopGadget, loads: number): number {
   let pops = 0;
   for (const instruction of gadget.instructions) {
     const operands = instruction.operands.map((operand) => operand.trim().toLowerCase());
@@ -181,6 +181,9 @@ function assignNames(table: Entry[]): void {
 }
 
 // [1/7] finds nothing that belongs in the exploit, so its block is the three helpers every block below uses.
+// Above it the evidence a screenshot keeps, below it the lines to paste.
+export const COPY_SEPARATOR = "# ------------------ copy into your exploit ------------------";
+
 export const HELPER_BLOCK: Block = { lines: [
   "def neg(v): return (-v) & 0xFFFFFFFF",
   "def clean(v): return not any(b in BADCHARS for b in p32(v))",

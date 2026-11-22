@@ -220,6 +220,17 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     seeAlso: ["dep_plan", "rop.query", "rop.scan_live"],
   },
   {
+    name: "palette",
+    summary: "Every gadget shape for a hand-written chain, None if absent",
+    description: "Prints one GADGET_ line per shape, named by the instruction: GADGET_POP_EAX, GADGET_MOV_EAX2ECX for ecx = eax, GADGET_XCHG_EAX2EDX, GADGET_ADD_ECX2EAX for eax += ecx, GADGET_NEG_EAX, GADGET_READ_EAX2ECX for ecx = [eax], GADGET_WRITE_EAX2ECX for [ecx] = eax, and the rest of the fixed set. A shape the module lacks is None. The names are the same on every target, so a chain written against them reads the same everywhere. It is not tied to DEP: use it for SEH or egghunter chains too.",
+    usage: 'dx @$osed().palette(module, badchars)',
+    examples: [
+      'dx @$osed().palette("libbkup", "00 09 0A 0B 0C 0D 20")',
+    ],
+    details: "Each line carries the gadget's instructions as a comment, to compare with u in the debugger. Where only gadgets with side effects do a shape, it picks the one with the fewest and its comment says what it costs: extra pops, ret N, other registers written, memory read through a register. A shape no scanned gadget fills is searched for in every byte of the module by its plain encodings before it is None, and a None says how many hits sat at an address holding a bad byte. xor r, r and not r follow when the corpus has them. It uses the loaded corpus when that is a complete scan of the same module for the same bad chars, and otherwise scans on its own.",
+    seeAlso: ["dep_candidates", "rop.query", "rop.scan_live"],
+  },
+  {
     name: "rop.query",
     description: "Filters the loaded semantic ROP corpus.",
     usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",

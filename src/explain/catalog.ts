@@ -507,6 +507,21 @@ export const EXPLANATIONS: ExplainEntry[] = [
     report: "Picked the gadgets of <module> for each job of the <style> chain with dep_candidates, with bad characters <badchars>, keeping at each step the registers the chain still needed.",
   },
 
+  {
+    name: "palette",
+    summary: "Every gadget shape for a hand-written chain, None if absent",
+    what: "Lists, for <module>, the gadget that does each shape of a fixed set (pop, mov, xchg, add, sub, neg, inc, dec, a memory read, a memory write, pushad) for each register, named such as GADGET_MOV_EAX2ECX (ecx = eax) or GADGET_NEG_EAX, and None for each shape the module does not have.",
+    how: "Scans <module> for gadgets whose address holds no byte from <badchars> and keeps, per shape, the gadgets whose effect still holds at their ret, with the fewest side effects first. Each shape no scanned gadget fills is searched for in every byte of the module by its plain encodings before it is called None.",
+    when: "Writing a ROP chain by hand, for DEP, SEH or an egghunter, to see what the module can and cannot do.",
+    args: [
+      { name: "module", meaning: "Module without ASLR that supplies the gadgets." },
+      BADCHARS("Bytes the target corrupts or cuts, as one hex string such as \"00 0A 0D\". Every gadget address that holds one is dropped.", "none"),
+    ],
+    example: "dx @$osed().palette(\"libbkup\", \"00 09 0A 0B 0C 0D 20\")",
+    output: "A count per group of shapes and the names found, then below the copy separator one GADGET_ line per shape with its address and instructions, or None.",
+    report: "Listed the gadgets of <module> by shape with palette, with bad characters <badchars>; a shape reported absent was searched for in every byte of the module.",
+  },
+
   // Gadget corpus
   {
     name: "rop.scan_live",
