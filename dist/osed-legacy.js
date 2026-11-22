@@ -1678,7 +1678,7 @@ var osed_bundle = (() => {
     }
     return runs;
   }
-  function analyzeLandingBytes(address, bytes, memory, requestedBytes = bytes.length, disassemblySucceeded = null) {
+  function analyzeLandingBytes(address, bytes, memory2, requestedBytes = bytes.length, disassemblySucceeded = null) {
     const observations = [];
     const runs = repeatedRuns(bytes);
     for (const run of runs) {
@@ -1716,18 +1716,18 @@ var osed_bundle = (() => {
         observations.push(observation("known_payload_prefix", 0.65, address, 0, prefix.bytes.length, { prefix: prefix.name }));
       }
     }
-    if (memory.readable !== null)
-      observations.push(observation(memory.readable ? "readable_region" : "unreadable_region", 1, address, 0, bytes.length));
-    if (memory.executable !== null)
-      observations.push(observation(memory.executable ? "executable_region" : "non_executable_region", 1, address, 0, bytes.length));
+    if (memory2.readable !== null)
+      observations.push(observation(memory2.readable ? "readable_region" : "unreadable_region", 1, address, 0, bytes.length));
+    if (memory2.executable !== null)
+      observations.push(observation(memory2.executable ? "executable_region" : "non_executable_region", 1, address, 0, bytes.length));
     if (disassemblySucceeded !== null)
       observations.push(observation(disassemblySucceeded ? "disassembly_succeeded" : "disassembly_failed", 0.8, address, 0, Math.min(bytes.length, 16)));
     if (bytes.length < requestedBytes)
       observations.push(observation(bytes.length === 0 ? "bytes_inaccessible" : "bytes_truncated", 1, address, bytes.length, requestedBytes - bytes.length, { requestedBytes, actualBytes: bytes.length }));
     const positive = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind));
     const confidence = calculateLandingConfidence(observations);
-    const recommendation = memory.executable === false ? "Execution from this page will fault; redirect to executable memory or change the staging strategy." : bytes.length === 0 ? "The landing bytes are inaccessible; verify the address and debugger context." : positive.length > 0 ? "The address has payload-like evidence; validate control flow and the complete byte sequence." : "No strong landing signal was found in the sampled bytes.";
-    return { address, memory, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation, patternEvidence };
+    const recommendation = memory2.executable === false ? "Execution from this page will fault; redirect to executable memory or change the staging strategy." : bytes.length === 0 ? "The landing bytes are inaccessible; verify the address and debugger context." : positive.length > 0 ? "The address has payload-like evidence; validate control flow and the complete byte sequence." : "No strong landing signal was found in the sampled bytes.";
+    return { address, memory: memory2, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation, patternEvidence };
   }
   function stackPointer() {
     var _a2, _b, _c;
@@ -1794,9 +1794,9 @@ var osed_bundle = (() => {
     if (target === void 0) {
       return { bytes: [], requestedBytes, observations: [], confidence: 0, recommendation: "Stack pointer is unavailable; provide an explicit address." };
     }
-    const memory = memoryRegion(target);
+    const memory2 = memoryRegion(target);
     const bytes = readAvailablePrefix(target, requestedBytes);
-    return analyzeLandingBytes(target, bytes, memory, requestedBytes, canDisassemble(target));
+    return analyzeLandingBytes(target, bytes, memory2, requestedBytes, canDisassemble(target));
   }
 
   // src/analysis/seh.ts
@@ -3895,9 +3895,9 @@ var osed_bundle = (() => {
       return `0x${trimmed.slice(2).replace(/^0+/, "") || "0"}`;
     }
     if (/^-?\d+$/.test(trimmed)) {
-      const num = Number.parseInt(trimmed, 10);
-      if (Number.isFinite(num)) {
-        const normalized = (num >>> 0).toString(16);
+      const num2 = Number.parseInt(trimmed, 10);
+      if (Number.isFinite(num2)) {
+        const normalized = (num2 >>> 0).toString(16);
         return `0x${normalized}`;
       }
     }
@@ -4567,7 +4567,7 @@ var osed_bundle = (() => {
       if (step.instruction.mnemonic === "xchg" && step.instruction.operands.length === 2) {
         const [left, right] = operands;
         if (left.includes("[") || right.includes("[")) {
-          const memory = left.includes("[") ? left : right;
+          const memory2 = left.includes("[") ? left : right;
           const register2 = left.includes("[") ? right : left;
           add({ kind: "MEMORY_READ", register: register2, evidence: [text] });
           add({ kind: "LOAD_MEMORY", register: register2, evidence: [text] });
@@ -8654,16 +8654,16 @@ var osed_bundle = (() => {
       evaluate: (instruction) => {
         const left = parseOperand(instruction.operands[0]);
         const right = parseOperand(instruction.operands[1]);
-        const memory = left.kind === "memory" ? left : right.kind === "memory" ? right : void 0;
+        const memory2 = left.kind === "memory" ? left : right.kind === "memory" ? right : void 0;
         const register2 = isRegisterOperand(left) ? left : isRegisterOperand(right) ? right : void 0;
-        if (!memory || !register2)
+        if (!memory2 || !register2)
           return {};
-        const addressRegisters = memoryRegisters(memory.text);
+        const addressRegisters = memoryRegisters(memory2.text);
         return {
           reads: [...addressRegisters, register2.register],
           writes: [register2.register],
-          memoryReads: [memory.text],
-          memoryWrites: [memory.text],
+          memoryReads: [memory2.text],
+          memoryWrites: [memory2.text],
           registerEffects: { [register2.register]: unknownExpr() },
           evidence: [`XCHG ${left.text}, ${right.text}`]
         };
@@ -11684,6 +11684,17 @@ var osed_bundle = (() => {
       seeAlso: ["dep_plan", "rop.query", "rop.scan_live"]
     },
     {
+      name: "palette",
+      summary: "Every gadget shape for a hand-written chain, None if absent",
+      description: "Prints one GADGET_ line per shape, named by the instruction: GADGET_POP_EAX, GADGET_MOV_EAX2ECX for ecx = eax, GADGET_XCHG_EAX2EDX, GADGET_ADD_ECX2EAX for eax += ecx, GADGET_NEG_EAX, GADGET_READ_EAX2ECX for ecx = [eax], GADGET_WRITE_EAX2ECX for [ecx] = eax, and the rest of the fixed set. A shape the module lacks is None. The names are the same on every target, so a chain written against them reads the same everywhere. It is not tied to DEP: use it for SEH or egghunter chains too.",
+      usage: "dx @$osed().palette(module, badchars)",
+      examples: [
+        'dx @$osed().palette("libbkup", "00 09 0A 0B 0C 0D 20")'
+      ],
+      details: "Each line carries the gadget's instructions as a comment, to compare with u in the debugger. Where only gadgets with side effects do a shape, it picks the one with the fewest and its comment says what it costs: extra pops, ret N, other registers written, memory read through a register. A shape no scanned gadget fills is searched for in every byte of the module by its plain encodings before it is None, and a None says how many hits sat at an address holding a bad byte. xor r, r and not r follow when the corpus has them. It uses the loaded corpus when that is a complete scan of the same module for the same bad chars, and otherwise scans on its own.",
+      seeAlso: ["dep_candidates", "rop.query", "rop.scan_live"]
+    },
+    {
       name: "rop.query",
       description: "Filters the loaded semantic ROP corpus.",
       usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",
@@ -12153,10 +12164,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T18:08:48.698Z" : globalThis[key2];
+        value = true ? "2026-11-22T18:27:38.164Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "3b9c7f981bea" : globalThis[key2];
+        value = true ? "adcb3c1fcc50" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12355,7 +12366,7 @@ var osed_bundle = (() => {
   var categoryForName = (name) => {
     if (SHELLCODE_WRITERS.includes(name))
       return "shellcode";
-    if (name.startsWith("rop") || name === "dep_function" || name === "dep_plan" || name === "dep_candidates" || name === "retn" || name === "add_esp" || name === "pivots")
+    if (name.startsWith("rop") || name === "dep_function" || name === "dep_plan" || name === "dep_candidates" || name === "palette" || name === "retn" || name === "add_esp" || name === "pivots")
       return "rop";
     if (name === "seh" || name === "seh_ppr" || name.startsWith("seh."))
       return "seh";
@@ -12429,6 +12440,7 @@ var osed_bundle = (() => {
     dep_function: "Print a VirtualAlloc, VirtualProtect or WriteProcessMemory call frame or PUSHAD map",
     dep_plan: "Run the whole DEP bypass discovery in seven sections",
     dep_candidates: "Rank the best 3 gadgets per DEP chain job, as dep_plan step 4",
+    palette: "Every gadget shape a hand-written chain uses, as GADGET_ names, None where absent",
     pivots: "Scan for stack pivot candidates",
     retn: "Scan for retn N gadgets",
     add_esp: "Scan for add esp, N gadgets",
@@ -14172,16 +14184,16 @@ var osed_bundle = (() => {
     const modrm = bytes[offset];
     const mod = modrm >> 6;
     const reg = modrm >> 3 & 7;
-    const rm2 = modrm & 7;
+    const rm3 = modrm & 7;
     if (mod === 3)
-      return { reg, rm: rm2, length: 1 };
+      return { reg, rm: rm3, length: 1 };
     let cursor = offset + 1;
     let base;
     let index;
     let scale = 1;
     let displacement = 0;
     let hasDisplacement = false;
-    if (rm2 === 4) {
+    if (rm3 === 4) {
       if (cursor >= bytes.length)
         return void 0;
       const sib = bytes[cursor++];
@@ -14200,7 +14212,7 @@ var osed_bundle = (() => {
         hasDisplacement = true;
         cursor += 4;
       }
-    } else if (mod === 0 && rm2 === 5) {
+    } else if (mod === 0 && rm3 === 5) {
       const value = signedDword(bytes, cursor);
       if (value === void 0)
         return void 0;
@@ -14208,7 +14220,7 @@ var osed_bundle = (() => {
       hasDisplacement = true;
       cursor += 4;
     } else {
-      base = REG_NAMES[rm2];
+      base = REG_NAMES[rm3];
     }
     if (mod === 1) {
       if (cursor >= bytes.length)
@@ -14636,12 +14648,12 @@ var osed_bundle = (() => {
     var _a2;
     const loop = jobs.filter((job) => ["write", "advance", "negate"].indexOf(job.key) >= 0);
     const later = jobs.slice(index + 1).concat(loop.indexOf(jobs[index]) >= 0 ? loop : []);
-    const own = withOwn ? void 0 : (_a2 = jobs[index].flow.sets) == null ? void 0 : _a2.role;
+    const own2 = withOwn ? void 0 : (_a2 = jobs[index].flow.sets) == null ? void 0 : _a2.role;
     const live = [];
     const killed = [];
     for (const job of later) {
       for (const role of readsOf(job))
-        if (role !== own && killed.indexOf(role) < 0 && live.indexOf(role) < 0)
+        if (role !== own2 && killed.indexOf(role) < 0 && live.indexOf(role) < 0)
           live.push(role);
       if (job.flow.sets)
         killed.push(job.flow.sets.role);
@@ -14685,12 +14697,12 @@ var osed_bundle = (() => {
       return {};
     const evidence = (_a2 = capability2.evidence[0]) != null ? _a2 : "";
     if (job.key === "read") {
-      const memory = memoryBase(evidence);
-      return { dest: capability2.register, address: memory.base, offset: memory.offset };
+      const memory2 = memoryBase(evidence);
+      return { dest: capability2.register, address: memory2.base, offset: memory2.offset };
     }
     if (job.key === "write") {
-      const memory = memoryBase(evidence);
-      return { source: capability2.register, address: memory.base, offset: memory.offset };
+      const memory2 = memoryBase(evidence);
+      return { source: capability2.register, address: memory2.base, offset: memory2.offset };
     }
     if (job.key === "pivot")
       return { source: pivotSource(gadget) };
@@ -14705,10 +14717,10 @@ var osed_bundle = (() => {
     }
     return written;
   }
-  function memoryWrites(gadget, own) {
+  function memoryWrites(gadget, own2) {
     return gadget.instructions.filter((instruction) => {
       var _a2;
-      return instruction.mnemonic !== "push" && ((_a2 = instruction.operands[0]) != null ? _a2 : "").indexOf("[") >= 0 && instruction.normalizedText !== own;
+      return instruction.mnemonic !== "push" && ((_a2 = instruction.operands[0]) != null ? _a2 : "").indexOf("[") >= 0 && instruction.normalizedText !== own2;
     }).map((instruction) => instruction.operands[0].trim());
   }
   function holds(gadget, dest, source) {
@@ -14718,10 +14730,10 @@ var osed_bundle = (() => {
     return transform !== void 0 && transform.kind === "affine" && transform.base === source && ((_a2 = transform.offset) == null ? void 0 : _a2.kind) === "constant" && transform.offset.value === 0;
   }
   var POINTER_ROLES = ["pointer", "field"];
-  function dereferencedRegisters(gadget, own) {
+  function dereferencedRegisters(gadget, own2) {
     const found = [];
     for (const instruction of gadget.instructions) {
-      if (instruction.normalizedText === own || instruction.mnemonic === "push" || instruction.mnemonic === "pop")
+      if (instruction.normalizedText === own2 || instruction.mnemonic === "push" || instruction.mnemonic === "pop")
         continue;
       for (const operand of instruction.operands) {
         const { base } = memoryBase(operand);
@@ -14819,10 +14831,10 @@ var osed_bundle = (() => {
       const verdicts = (index ? ranked(index, job, exclude) : []).map((gadget) => {
         var _a2, _b, _c, _d;
         const at = ports(gadget, job);
-        const own = (_b = (_a2 = jobCapability(gadget, job)) == null ? void 0 : _a2.evidence[0]) != null ? _b : "";
-        const leads = own !== "" && own === ((_c = gadget.instructions[0]) == null ? void 0 : _c.normalizedText);
+        const own2 = (_b = (_a2 = jobCapability(gadget, job)) == null ? void 0 : _a2.evidence[0]) != null ? _b : "";
+        const leads = own2 !== "" && own2 === ((_c = gadget.instructions[0]) == null ? void 0 : _c.normalizedText);
         const controlled = [...pointed, at.address].filter((register2) => register2 !== void 0);
-        const uncontrolled = dereferencedRegisters(gadget, own).filter((register2) => controlled.indexOf(register2) < 0);
+        const uncontrolled = dereferencedRegisters(gadget, own2).filter((register2) => controlled.indexOf(register2) < 0);
         const far2 = movesStackFar(gadget, job);
         const note = (uncontrolled.length > 0 ? `; reads through ${uncontrolled.join(", ")}, which nothing in the chain has pointed anywhere yet` : "") + (far2 ? `; takes 0x${((_d = stackMove(gadget)) != null ? _d : 0).toString(16)} bytes of stack, all of it junk in the payload` : "");
         const rejected = rejection(gadget, job, at, live, bound);
@@ -15106,6 +15118,7 @@ var osed_bundle = (() => {
       });
     }
   }
+  var COPY_SEPARATOR = "# ------------------ copy into your exploit ------------------";
   var HELPER_BLOCK = { lines: [
     "def neg(v): return (-v) & 0xFFFFFFFF",
     "def clean(v): return not any(b in BADCHARS for b in p32(v))",
@@ -15184,7 +15197,7 @@ var osed_bundle = (() => {
       return [{ line: `# ${target}: ${how}` }, { line: `${target} = hole(${JSON.stringify(target)})` }];
     };
     const group = (title) => ({ line: `#-- ${title}` });
-    const usable = (gadget, keep, own) => !movesEsp(gadget) && memoryWrites(gadget, "").length === 0 && writtenRegisters(gadget).every((register2) => own.indexOf(register2) >= 0 || keep.indexOf(register2) < 0);
+    const usable = (gadget, keep, own2) => !movesEsp(gadget) && memoryWrites(gadget, "").length === 0 && writtenRegisters(gadget).every((register2) => own2.indexOf(register2) >= 0 || keep.indexOf(register2) < 0);
     const near = (ranked2) => [...ranked2.filter((gadget) => !far(gadget)), ...ranked2.filter(far)];
     const popGadget = (register2, keep) => near(rankCandidates(gadgets.filter((gadget) => {
       var _a3;
@@ -15552,6 +15565,158 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/commands/palette.ts
+  var REGS3 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var GENERAL = REGS3.filter((reg) => reg !== "esp");
+  var num = (reg) => REGS3.indexOf(reg);
+  var rm2 = (mod, reg, base) => mod << 6 | num(reg) << 3 | num(base);
+  var up = (reg) => reg.toUpperCase();
+  var two = (op5, src, dst, bodies) => ({ name: `GADGET_${op5}_${up(src)}2${up(dst)}`, op: op5, src, dst, bodies });
+  var one = (op5, dst, bodies) => ({ name: `GADGET_${op5}_${up(dst)}`, op: op5, dst, bodies });
+  var pairs2 = (regs) => regs.flatMap((src) => regs.filter((dst) => dst !== src).map((dst) => [src, dst]));
+  var memory = (op5, reg, base) => [...base === "ebp" ? [] : [[op5, rm2(0, reg, base)]], [op5, rm2(1, reg, base), -1]];
+  var SHAPES = [
+    ...[...GENERAL, "esp"].map((dst) => one("POP", dst, [[88 + num(dst)]])),
+    ...GENERAL.map((dst) => two("MOV", "esp", dst, [[84, 88 + num(dst)], [137, rm2(3, "esp", dst)], [139, rm2(3, dst, "esp")]])),
+    ...pairs2(GENERAL).map(([src, dst]) => two("MOV", src, dst, [[137, rm2(3, src, dst)], [139, rm2(3, dst, src)]])),
+    ...GENERAL.map((src) => two("MOV", src, "esp", [[137, rm2(3, src, "esp")], [139, rm2(3, "esp", src)]])),
+    ...pairs2(REGS3).filter(([a, b]) => num(a) < num(b)).map(([a, b]) => two("XCHG", a, b, [...a === "eax" ? [[144 + num(b)]] : [], [135, rm2(3, a, b)], [135, rm2(3, b, a)]])),
+    ...pairs2(GENERAL).map(([src, dst]) => two("ADD", src, dst, [[1, rm2(3, src, dst)], [3, rm2(3, dst, src)]])),
+    ...pairs2(GENERAL).map(([src, dst]) => two("SUB", src, dst, [[41, rm2(3, src, dst)], [43, rm2(3, dst, src)]])),
+    ...GENERAL.map((dst) => one("NEG", dst, [[247, 216 + num(dst)]])),
+    ...GENERAL.map((dst) => one("INC", dst, [[64 + num(dst)]])),
+    ...GENERAL.map((dst) => one("DEC", dst, [[72 + num(dst)]])),
+    ...GENERAL.flatMap((src) => GENERAL.map((dst) => two("READ", src, dst, memory(139, dst, src)))),
+    ...GENERAL.flatMap((src) => GENERAL.map((dst) => two("WRITE", src, dst, memory(137, src, dst)))),
+    { name: "GADGET_PUSHAD", op: "PUSHAD", bodies: [[96]] }
+  ];
+  var GROUPS = [
+    { op: "POP", title: "POP <DST>: dst = the next dword. POP_ESP pivots" },
+    { op: "MOV", title: "MOV <SRC>2<DST>: dst = src. MOV_ESP2<DST> captures ESP; MOV_<SRC>2ESP pivots" },
+    { op: "XCHG", title: "XCHG <A>2<B>: swaps a and b. With ESP it pivots" },
+    { op: "ADD", title: "ADD <SRC>2<DST>: dst += src" },
+    { op: "SUB", title: "SUB <SRC>2<DST>: dst -= src" },
+    { op: "NEG", title: "NEG <DST>: dst = -dst" },
+    { op: "INC", title: "INC <DST>: dst += 1" },
+    { op: "DEC", title: "DEC <DST>: dst -= 1" },
+    { op: "READ", title: "READ <SRC>2<DST>: dst = [src]" },
+    { op: "WRITE", title: "WRITE <SRC>2<DST>: [dst] = src" },
+    { op: "PUSHAD", title: "PUSHAD" }
+  ];
+  function shapeEncodings(shape) {
+    return shape.bodies.flatMap((body) => [[...body, 195], [...body, 194, -1, -1]]);
+  }
+  var operandsOf = (instruction) => instruction.operands.map((operand) => operand.trim().toLowerCase());
+  var pivots = (shape) => shape.dst === "esp" || shape.op === "XCHG" && shape.src === "esp";
+  function setsEsp(gadget) {
+    return gadget.instructions.some((instruction) => {
+      var _a2;
+      const operands = operandsOf(instruction);
+      if (instruction.mnemonic === "leave")
+        return true;
+      return overwrites(instruction, "esp") && !(instruction.mnemonic === "add" && /^(0x[0-9a-f]+|\d+)$/.test((_a2 = operands[1]) != null ? _a2 : ""));
+    });
+  }
+  function returnsIntoPush(gadget) {
+    let pushed = 0;
+    for (const instruction of gadget.instructions) {
+      if (instruction.mnemonic === "push")
+        pushed += 1;
+      else if (instruction.mnemonic === "pop" && pushed > 0)
+        pushed -= 1;
+    }
+    return pushed > 0;
+  }
+  function own(gadget, shape) {
+    var _a2, _b, _c, _d, _e, _f;
+    const { op: op5, src, dst } = shape;
+    const instructions = gadget.instructions;
+    const untouchedBefore = (at, regs) => regs.every((reg) => reg === void 0 || !spoilsOwnInput(gadget, instructions[at].normalizedText, reg));
+    const keptAfter = (at, regs) => regs.every((reg) => reg === void 0 || instructions.slice(at + 1).every((instruction) => !overwrites(instruction, reg)));
+    if (op5 === "MOV" && dst !== "esp") {
+      if (!holds(gadget, dst, src))
+        return void 0;
+      return (_b = (_a2 = instructions.find((instruction) => operandsOf(instruction).indexOf(dst) >= 0)) == null ? void 0 : _a2.normalizedText) != null ? _b : "";
+    }
+    if (op5 === "XCHG" && src !== "esp" && dst !== "esp") {
+      if (!holds(gadget, dst, src) || !holds(gadget, src, dst))
+        return void 0;
+      return (_d = (_c = instructions.find((instruction) => instruction.mnemonic === "xchg")) == null ? void 0 : _c.normalizedText) != null ? _d : "";
+    }
+    for (let at = 0; at < instructions.length; at += 1) {
+      const instruction = instructions[at];
+      const operands = operandsOf(instruction);
+      const mnemonic = instruction.mnemonic;
+      const text = instruction.normalizedText;
+      const matched = op5 === "PUSHAD" ? mnemonic === "pushad" : op5 === "POP" ? mnemonic === "pop" && operands[0] === dst && keptAfter(at, [dst]) : op5 === "MOV" ? mnemonic === "mov" && operands[0] === "esp" && operands[1] === src && untouchedBefore(at, [src]) : op5 === "XCHG" ? mnemonic === "xchg" && operands.length === 2 && operands.indexOf(src) >= 0 && operands.indexOf(dst) >= 0 : op5 === "ADD" || op5 === "SUB" ? mnemonic === op5.toLowerCase() && operands[0] === dst && operands[1] === src && untouchedBefore(at, [src, dst]) && keptAfter(at, [dst]) : op5 === "NEG" || op5 === "INC" || op5 === "DEC" ? mnemonic === op5.toLowerCase() && operands[0] === dst && untouchedBefore(at, [dst]) && keptAfter(at, [dst]) : op5 === "READ" ? mnemonic === "mov" && operands[0] === dst && memoryBase((_e = operands[1]) != null ? _e : "").base === src && untouchedBefore(at, [src]) && keptAfter(at, [dst]) : mnemonic === "mov" && operands[1] === src && memoryBase((_f = operands[0]) != null ? _f : "").base === dst && untouchedBefore(at, [src, dst]);
+      if (matched)
+        return text;
+    }
+    return void 0;
+  }
+  function costsOf(gadget, shape, text) {
+    const pops = extraPops(gadget, shape.op === "POP" ? 1 : 0);
+    const retn = lastRetN(gadget);
+    const mine = shape.op === "XCHG" ? [shape.src, shape.dst] : shape.op === "WRITE" ? [] : [shape.dst];
+    const writes2 = writtenRegisters(gadget).filter((reg2) => mine.indexOf(reg2) < 0);
+    const reads = dereferencedRegisters(gadget, text);
+    const at = shape.op === "READ" || shape.op === "WRITE" ? memoryBase(text) : void 0;
+    const reg = shape.op === "READ" ? shape.src : shape.dst;
+    const costs = [
+      at && at.offset !== 0 ? `${shape.op === "READ" ? "reads" : "writes"} [${reg}${at.offset > 0 ? "+" : "-"}0x${Math.abs(at.offset).toString(16)}], not [${reg}]` : "",
+      pops > 0 ? `${pops} extra pop${pops > 1 ? "s" : ""}` : "",
+      retn > 0 ? `ret 0x${retn.toString(16)}` : "",
+      writes2.length > 0 ? `writes ${writes2.join(" ")}` : "",
+      reads.length > 0 ? `reads memory through ${reads.join(", ")}` : ""
+    ].filter(Boolean);
+    return { gadget, costs, pops, retn };
+  }
+  function pickShape(gadgets, shape) {
+    var _a2;
+    const fits = [];
+    for (const gadget of rankCandidates(gadgets)) {
+      const last = gadget.instructions[gadget.instructions.length - 1];
+      if (!last || last.mnemonic !== "ret" || setsEsp(gadget) !== pivots(shape) || shape.op !== "PUSHAD" && returnsIntoPush(gadget))
+        continue;
+      const text = own(gadget, shape);
+      if (text === void 0 || memoryWrites(gadget, shape.op === "WRITE" ? text : "").length > 0)
+        continue;
+      fits.push(costsOf(gadget, shape, text));
+    }
+    return (_a2 = fits.map((fit, at) => ({ fit, at })).sort((left, right) => left.fit.costs.length - right.fit.costs.length || left.at - right.at)[0]) == null ? void 0 : _a2.fit;
+  }
+  function paletteLines(entries, extras, modules) {
+    const width = Math.max(...entries.map((entry) => entry.shape.name.length), ...extras.map((extra) => extra.name.length));
+    const lines = [];
+    for (const group of GROUPS) {
+      const mine = entries.filter((entry) => entry.shape.op === group.op);
+      lines.push(`# ${group.title}. ${mine.filter((entry) => entry.pick).length} of ${mine.length} in ${modules}`);
+      for (const { shape, pick: pick2, dirty } of mine) {
+        lines.push(pick2 ? `${shape.name.padEnd(width)} = ${hex325(gadgetAddress(pick2.gadget))}   # ${sequence(pick2.gadget)}${pick2.costs.length > 0 ? `   costs (${pick2.pops}, ${pick2.retn ? `0x${pick2.retn.toString(16)}` : 0}): ${pick2.costs.join(", ")}` : ""}` : `${shape.name.padEnd(width)} = None${dirty > 0 ? `         # ${dirty} only at an address holding a bad byte` : ""}`);
+      }
+      lines.push("");
+    }
+    if (extras.length > 0) {
+      lines.push(`# Also in the corpus, outside the fixed set above, so never None`);
+      for (const extra of extras)
+        lines.push(`${extra.name.padEnd(width)} = ${hex325(gadgetAddress(extra.gadget))}   # ${sequence(extra.gadget)}`);
+    }
+    while (lines[lines.length - 1] === "")
+      lines.pop();
+    return lines;
+  }
+  function extrasOf(gadgets) {
+    const out = [];
+    for (const [kind, op5] of [["ZERO_REGISTER", "ZERO"], ["REGISTER_NOT", "NOT"]]) {
+      for (const reg of GENERAL) {
+        const found = rankCandidates(gadgets).find((gadget) => !setsEsp(gadget) && !returnsIntoPush(gadget) && memoryWrites(gadget, "").length === 0 && gadget.capabilities.some((capability2) => capability2.kind === kind && capability2.register === reg) && writtenRegisters(gadget).every((written) => written === reg));
+        if (found)
+          out.push({ name: `GADGET_${op5}_${up(reg)}`, gadget: found });
+      }
+    }
+    return out;
+  }
+
   // src/commands/dep_function.ts
   var STYLES = ["skeleton", "pushad"];
   var FRAMES2 = {
@@ -15639,8 +15804,8 @@ var osed_bundle = (() => {
       }
     }
     toString() {
-      const pairs2 = Object.entries(this).filter(([, value]) => typeof value === "string");
-      return pairs2.map(([key2, value]) => `${key2}: ${stripDml(value)}`).join(" | ");
+      const pairs3 = Object.entries(this).filter(([, value]) => typeof value === "string");
+      return pairs3.map(([key2, value]) => `${key2}: ${stripDml(value)}`).join(" | ");
     }
   };
   var DxRows = class {
@@ -18111,10 +18276,10 @@ if __name__ == "__main__":
 `;
 
   // src/shellcode/writer.ts
-  var REGS3 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var REGS4 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
   var SCRATCH = ["eax", "ecx", "edx"];
-  var regIndex = (reg) => REGS3.indexOf(reg);
-  var isReg = (value) => REGS3.includes(value);
+  var regIndex = (reg) => REGS4.indexOf(reg);
+  var isReg = (value) => REGS4.includes(value);
   var hex6 = (value) => `0x${(value >>> 0).toString(16)}`;
   var hex326 = (value) => `0x${(value >>> 0).toString(16).padStart(8, "0")}`;
   var fitsImm8 = (value) => (value | 0) >= -128 && (value | 0) <= 127;
@@ -18268,7 +18433,7 @@ if __name__ == "__main__":
     if (arg.kind === "register")
       return [arg.reg];
     if (arg.kind === "expr")
-      return REGS3.filter((reg) => new RegExp(`\\b${reg}\\b`, "i").test(arg.text));
+      return REGS4.filter((reg) => new RegExp(`\\b${reg}\\b`, "i").test(arg.text));
     return arg.kind === "frame" ? ["ebp"] : [];
   }
   function callFrame(api, rawArgs, bad) {
@@ -20303,6 +20468,20 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       example: 'dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")',
       output: "One block per job: the registers to keep in its title, up to 3 higher-ranked gadgets with why each was rejected, the pick marked >, and up to 2 usable alternatives, each with its address, instructions and side effects. A warning names any job with no pick.",
       report: "Picked the gadgets of <module> for each job of the <style> chain with dep_candidates, with bad characters <badchars>, keeping at each step the registers the chain still needed."
+    },
+    {
+      name: "palette",
+      summary: "Every gadget shape for a hand-written chain, None if absent",
+      what: "Lists, for <module>, the gadget that does each shape of a fixed set (pop, mov, xchg, add, sub, neg, inc, dec, a memory read, a memory write, pushad) for each register, named such as GADGET_MOV_EAX2ECX (ecx = eax) or GADGET_NEG_EAX, and None for each shape the module does not have.",
+      how: "Scans <module> for gadgets whose address holds no byte from <badchars> and keeps, per shape, the gadgets whose effect still holds at their ret, with the fewest side effects first. Each shape no scanned gadget fills is searched for in every byte of the module by its plain encodings before it is called None.",
+      when: "Writing a ROP chain by hand, for DEP, SEH or an egghunter, to see what the module can and cannot do.",
+      args: [
+        { name: "module", meaning: "Module without ASLR that supplies the gadgets." },
+        BADCHARS('Bytes the target corrupts or cuts, as one hex string such as "00 0A 0D". Every gadget address that holds one is dropped.', "none")
+      ],
+      example: 'dx @$osed().palette("libbkup", "00 09 0A 0B 0C 0D 20")',
+      output: "A count per group of shapes and the names found, then below the copy separator one GADGET_ line per shape with its address and instructions, or None.",
+      report: "Listed the gadgets of <module> by shape with palette, with bad characters <badchars>; a shape reported absent was searched for in every byte of the module."
     },
     // Gadget corpus
     {
@@ -22993,11 +23172,11 @@ ${INDENT}`)]);
     if (value === __bi(0))
       return { value, pointerSize, provenance: "debugger_observed", kind: "null" };
     const module = findModule(value);
-    const memory = inspectMemory(value);
+    const memory2 = inspectMemory(value);
     if (module)
-      return { value, pointerSize, provenance: "debugger_observed", kind: "module_pointer", module: { name: module.name, rva: value - module.base, aslr: module.aslr }, memory };
-    const kind = memory.source === "unavailable" || memory.state === "unknown" ? "unknown" : memory.state === "free" ? "unmapped" : memory.state === "reserve" ? "reserved" : "memory_pointer";
-    return { value, pointerSize, provenance: "debugger_observed", kind, memory };
+      return { value, pointerSize, provenance: "debugger_observed", kind: "module_pointer", module: { name: module.name, rva: value - module.base, aslr: module.aslr }, memory: memory2 };
+    const kind = memory2.source === "unavailable" || memory2.state === "unknown" ? "unknown" : memory2.state === "free" ? "unmapped" : memory2.state === "reserve" ? "reserved" : "memory_pointer";
+    return { value, pointerSize, provenance: "debugger_observed", kind, memory: memory2 };
   }
   function extractHexPointers(text, pointerSize) {
     const minimumDigits = pointerSize === 8 ? 8 : 6;
@@ -26236,14 +26415,14 @@ ${INDENT}`)]);
     const directRoute = (depApi, modules) => {
       var _a2;
       const rows = slotsOf(depApi).filter((row) => row.fixed);
-      const own = (_a2 = rows.find((row) => modules.some((module) => sameModule2(row.owner, module)))) != null ? _a2 : rows[0];
-      return own ? { api: depApi, owner: own.owner, slot: own.slot } : void 0;
+      const own2 = (_a2 = rows.find((row) => modules.some((module) => sameModule2(row.owner, module)))) != null ? _a2 : rows[0];
+      return own2 ? { api: depApi, owner: own2.owner, slot: own2.slot } : void 0;
     };
     const routeFor = (depApi, modules, badchars, fixed) => {
       var _a2, _b, _c;
-      const own = directRoute(depApi, modules);
-      if (own || fixed.length === 0)
-        return own;
+      const own2 = directRoute(depApi, modules);
+      if (own2 || fixed.length === 0)
+        return own2;
       for (const dll of ["kernel32", "kernelbase"]) {
         const anchors = sc.api_plan(`${dll}!${depApi}`, badchars, fixed).candidates.filter((candidate) => candidate.strategy === "derived-address" && candidate.anchor);
         const inGadgets = (candidate) => modules.some((module) => sameModule2(candidate.ownerModule, module));
@@ -26268,18 +26447,10 @@ ${INDENT}`)]);
       }
       return void 0;
     };
-    const solveStyles = (scanned, modules, badchars, exclude) => {
+    const searchEncodings = (scanned, modules, groups, badchars) => {
       var _a2;
-      const planBoth = (index) => ({ skeleton: planJobs(index, "skeleton", exclude), pushad: planJobs(index, "pushad", exclude) });
-      let plans = planBoth(scanned);
-      const open = [];
-      for (const plan of [...plans.skeleton, ...plans.pushad])
-        if (!plan.pick && open.every((job) => job.key !== plan.job.key))
-          open.push(plan.job);
-      if (open.length === 0 || modules.length === 0)
-        return { corpus: scanned, plans, settled: {} };
       const encodings = [];
-      const owners = open.map((job) => encodingsFor(job).map((encoding) => encodings.push(encoding) - 1));
+      const owners = groups.map((group) => group.map((encoding) => encodings.push(encoding) - 1));
       const clean = badcharAddressFilter(badchars, 4);
       const known = new Set(((_a2 = scanned == null ? void 0 : scanned.gadgets) != null ? _a2 : []).map((gadget) => gadgetAddress(gadget)));
       const hits = [];
@@ -26297,19 +26468,32 @@ ${INDENT}`)]);
         }
       }
       const corpus = hits.length > 0 ? mergeCapabilityIndexes([...scanned ? [scanned] : [], buildCapabilityIndexFromSequences(sequencesFromLiveHits(hits))]) : scanned;
-      if (hits.length > 0)
-        plans = planBoth(corpus);
-      const settled = {};
-      open.forEach((job, i) => {
-        const mine = owners[i];
-        settled[job.key] = {
-          modules: modules.map(moduleLabel2).join(", "),
-          encodings: mine.length,
+      return {
+        corpus,
+        groups: owners.map((mine) => ({
           clean: found.filter((hit) => mine.indexOf(hit.encoding) >= 0).map((hit) => hit.address),
           dirty: mine.reduce((sum, index) => sum + dirty[index], 0)
-        };
+        }))
+      };
+    };
+    const solveStyles = (scanned, modules, badchars, exclude) => {
+      const planBoth = (index) => ({ skeleton: planJobs(index, "skeleton", exclude), pushad: planJobs(index, "pushad", exclude) });
+      let plans = planBoth(scanned);
+      const open = [];
+      for (const plan of [...plans.skeleton, ...plans.pushad])
+        if (!plan.pick && open.every((job) => job.key !== plan.job.key))
+          open.push(plan.job);
+      if (open.length === 0 || modules.length === 0)
+        return { corpus: scanned, plans, settled: {} };
+      const groups = open.map((job) => encodingsFor(job));
+      const search = searchEncodings(scanned, modules, groups, badchars);
+      if (search.corpus !== scanned)
+        plans = planBoth(search.corpus);
+      const settled = {};
+      open.forEach((job, i) => {
+        settled[job.key] = __spreadValues({ modules: modules.map(moduleLabel2).join(", "), encodings: groups[i].length }, search.groups[i]);
       });
-      return { corpus, plans, settled };
+      return { corpus: search.corpus, plans, settled };
     };
     const otherStyle = (style) => style === "pushad" ? "skeleton" : "pushad";
     const neededBy = (job, style) => jobsFor(style).some((other) => other.capabilities.some((kind) => job.capabilities.indexOf(kind) >= 0) && (other.register === void 0 || other.register === job.register));
@@ -26410,6 +26594,62 @@ ${INDENT}`)]);
       });
       return toDxResult("DEP Candidates", rows);
     };
+    const executePalette = (...args) => {
+      var _a2, _b;
+      if (args.length === 1 && args[0] === "help")
+        return helperHelp("palette");
+      const [moduleArg, badArg] = args;
+      const modules = (typeof moduleArg === "string" ? moduleArg : "").split(",").map((name) => name.trim()).filter(Boolean);
+      const badText = typeof badArg === "string" ? badArg : "";
+      const badchars = parseHexByteList(badText);
+      const fail3 = (message) => {
+        const rows2 = [{ Error: message }];
+        renderRows("Gadget Palette", rows2);
+        info("Usage: dx @$osed().palette(module, badchars)");
+        setResult({ command: "palette", args: { module: moduleArg, badchars: badArg }, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("Gadget Palette", rows2);
+      };
+      if (!Array.isArray(badchars))
+        return fail3('badchars must be hex bytes such as "00 0A 0D".');
+      const unknown = modules.length === 0 ? [""] : modules.filter((module) => !moduleInfoByName(module));
+      if (unknown.length > 0)
+        return fail3(`Module "${unknown[0]}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
+      section(dxCall("palette", [modules.join(","), badText]));
+      const scanned = loadedCorpusCovers(modules, badchars) ? currentRopCorpus : mergeCapabilityIndexes(discoverLiveIndexes(modules, { badchars }).indexes);
+      const first = SHAPES.map((shape) => {
+        var _a3;
+        return pickShape((_a3 = scanned == null ? void 0 : scanned.gadgets) != null ? _a3 : [], shape);
+      });
+      const open = SHAPES.filter((_, i) => first[i] === void 0);
+      const search = searchEncodings(scanned, modules, open.map(shapeEncodings), badchars);
+      const gadgets = (_b = (_a2 = search.corpus) == null ? void 0 : _a2.gadgets) != null ? _b : [];
+      const entries = SHAPES.map((shape, i) => {
+        var _a3;
+        const at = open.indexOf(shape);
+        return { shape, pick: (_a3 = first[i]) != null ? _a3 : at >= 0 ? pickShape(gadgets, shape) : void 0, dirty: at >= 0 ? search.groups[at].dirty : 0 };
+      });
+      const label = modules.map(moduleLabel2).join(", ");
+      info(`Every shape below that no scanned gadget fills was searched for in every byte of ${label}, by its plain encodings, before it is None. Addresses hold none of the bad bytes.`);
+      for (const group of GROUPS) {
+        const found = entries.filter((entry) => entry.shape.op === group.op && entry.pick).map((entry) => entry.shape.name.slice("GADGET_".length));
+        const total = entries.filter((entry) => entry.shape.op === group.op).length;
+        print(`  ${group.op.padEnd(6)} ${String(found.length).padStart(2)} of ${String(total).padEnd(2)}  ${found.join(" ")}`);
+      }
+      print("");
+      print(COPY_SEPARATOR);
+      for (const line of paletteLines(entries, extrasOf(gadgets), label))
+        print(line);
+      const rows = entries.filter((entry) => entry.pick).map((entry) => ({ Name: entry.shape.name, Address: hex325(gadgetAddress(entry.pick.gadget)), Gadget: gadgetSequence(entry.pick.gadget) }));
+      setResult({
+        command: "palette",
+        args: { module: modules.join(","), badchars: badText },
+        success: true,
+        findings: entries.map((entry) => ({ name: entry.shape.name, address: entry.pick ? gadgetAddress(entry.pick.gadget) : null })),
+        warnings: [],
+        errors: []
+      });
+      return toDxResult("Gadget Palette", rows);
+    };
     const executeDepPlan = (...args) => {
       var _a2, _b, _c, _d, _e, _f, _g, _h;
       if (args.length === 1 && args[0] === "help") {
@@ -26471,7 +26711,7 @@ ${INDENT}`)]);
       section(dxCall("dep_plan", callArgs(styleText, anyway)));
       const n = DEP_PLAN_SECTIONS;
       const summary = [];
-      const SEPARATOR = "# ------------------ copy into your exploit ------------------";
+      const SEPARATOR = COPY_SEPARATOR;
       const printBlock = (block) => {
         print("");
         if ("none" in block) {
@@ -26805,6 +27045,7 @@ ${INDENT}`)]);
     api.rop_find = (...args) => invoke("rop", args);
     api.dep_plan = executeDepPlan;
     api.dep_candidates = executeDepCandidates;
+    api.palette = executePalette;
     api.exploit = {
       workflow: (...args) => {
         if (args.length === 1 && args[0] === "help")
