@@ -11200,14 +11200,14 @@ var osed_bundle = (() => {
     {
       name: "dep_plan",
       summary: "Whole DEP bypass discovery in seven sections",
-      description: "Runs the DEP bypass discovery for VirtualAlloc, VirtualProtect or WriteProcessMemory in one command. Each step prints under its own [n/7] header: module protections, IAT slot, gadget corpus, the best 3 gadgets per job with side effects, clean constants, the frame or PUSHAD map, and a Python draft to verify field by field.",
-      usage: "dx @$osed().dep_plan(api, module, badchars, style?)",
+      description: "Given the bad chars, decides whether DEP needs a chain at all, which modules give gadgets, which API to call and how to reach its address, and which style the gadgets support. Each step prints under its own [n/7] header, and the run ends on a verdict or on the one layer that failed: module, API or method.",
+      usage: "dx @$osed().dep_plan(badchars)    or    dx @$osed().dep_plan(api, module, badchars, style?, firstStage?, exclude?, anyway?)",
       examples: [
+        'dx @$osed().dep_plan("00 09 0A 0B 0C 0D 20")',
         'dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20")',
-        'dx @$osed().dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad")',
-        'dx @$osed().dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D")'
+        'dx @$osed().dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad")'
       ],
-      details: "The draft is not a finished chain. It fills in the top-ranked gadget per job and marks with TODO the distances only a debugger run can give, with the commands that measure them. It does not check that one gadget's output register is the next gadget's input.",
+      details: "The draft is not a finished chain until you have measured what it marks. It fills in the [4/7] pick per job and marks with hole() each value only a debugger run can give, with the command that measures it.",
       seeAlso: ["rop.scan_live", "rop.query", "rop.construct", "dep_candidates"]
     },
     {
@@ -11692,10 +11692,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T16:06:55.122Z" : globalThis[key2];
+        value = true ? "2026-11-22T17:29:07.923Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "dd7271b6036e" : globalThis[key2];
+        value = true ? "cb8fbea145f5" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13619,6 +13619,410 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/core/backward_scanner.ts
+  var REG_NAMES = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var ALU_REG_OPCODES = [
+    { opcode: 1, name: "add", form: "rm" },
+    { opcode: 3, name: "add", form: "reg" },
+    { opcode: 9, name: "or", form: "rm" },
+    { opcode: 11, name: "or", form: "reg" },
+    { opcode: 17, name: "adc", form: "rm" },
+    { opcode: 19, name: "adc", form: "reg" },
+    { opcode: 25, name: "sbb", form: "rm" },
+    { opcode: 27, name: "sbb", form: "reg" },
+    { opcode: 33, name: "and", form: "rm" },
+    { opcode: 35, name: "and", form: "reg" },
+    { opcode: 41, name: "sub", form: "rm" },
+    { opcode: 43, name: "sub", form: "reg" },
+    { opcode: 49, name: "xor", form: "rm" },
+    { opcode: 51, name: "xor", form: "reg" },
+    { opcode: 57, name: "cmp", form: "rm" },
+    { opcode: 59, name: "cmp", form: "reg" },
+    { opcode: 133, name: "test", form: "rm" },
+    { opcode: 135, name: "xchg", form: "rm" },
+    { opcode: 137, name: "mov", form: "rm" },
+    { opcode: 139, name: "mov", form: "reg" }
+  ];
+  var ALU_EAX_IMM32 = [
+    { opcode: 5, name: "add" },
+    { opcode: 13, name: "or" },
+    { opcode: 21, name: "adc" },
+    { opcode: 29, name: "sbb" },
+    { opcode: 37, name: "and" },
+    { opcode: 45, name: "sub" },
+    { opcode: 53, name: "xor" }
+  ];
+  var GRP1_NAMES = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
+  var FPU_D9_MNEMONICS = {
+    224: "fchs",
+    225: "fabs",
+    228: "ftst",
+    229: "fxam",
+    232: "fld1",
+    233: "fldl2t",
+    234: "fldl2e",
+    235: "fldpi",
+    236: "fldlg2",
+    237: "fldln2",
+    238: "fldz",
+    240: "f2xm1",
+    241: "fyl2x",
+    242: "fptan",
+    243: "fpatan",
+    244: "fxtract",
+    245: "fprem1",
+    246: "fdecstp",
+    247: "fincstp",
+    248: "fprem",
+    249: "fyl2xp1",
+    250: "fsqrt",
+    251: "fsincos",
+    252: "frndint",
+    253: "fscale",
+    254: "fsin",
+    255: "fcos"
+  };
+  function formatHex(value) {
+    return `0x${(value >>> 0).toString(16)}`;
+  }
+  function signedByte(value) {
+    return value > 127 ? value - 256 : value;
+  }
+  function signedDword(bytes, offset) {
+    if (offset + 3 >= bytes.length) return void 0;
+    return bytes[offset] | bytes[offset + 1] << 8 | bytes[offset + 2] << 16 | bytes[offset + 3] << 24 | 0;
+  }
+  function formatDisplacement(value) {
+    if (value === 0) return "";
+    return value < 0 ? `-0x${(-value).toString(16)}` : `+0x${value.toString(16)}`;
+  }
+  function decodeModRM(bytes, offset) {
+    if (offset >= bytes.length) return void 0;
+    const modrm = bytes[offset];
+    const mod = modrm >> 6;
+    const reg = modrm >> 3 & 7;
+    const rm2 = modrm & 7;
+    if (mod === 3) return { reg, rm: rm2, length: 1 };
+    let cursor = offset + 1;
+    let base;
+    let index;
+    let scale = 1;
+    let displacement = 0;
+    let hasDisplacement = false;
+    if (rm2 === 4) {
+      if (cursor >= bytes.length) return void 0;
+      const sib = bytes[cursor++];
+      scale = 1 << (sib >> 6);
+      const indexId = sib >> 3 & 7;
+      const baseId = sib & 7;
+      if (indexId !== 4) index = REG_NAMES[indexId];
+      if (!(mod === 0 && baseId === 5)) base = REG_NAMES[baseId];
+      if (mod === 0 && baseId === 5) {
+        const value = signedDword(bytes, cursor);
+        if (value === void 0) return void 0;
+        displacement = value;
+        hasDisplacement = true;
+        cursor += 4;
+      }
+    } else if (mod === 0 && rm2 === 5) {
+      const value = signedDword(bytes, cursor);
+      if (value === void 0) return void 0;
+      displacement = value;
+      hasDisplacement = true;
+      cursor += 4;
+    } else {
+      base = REG_NAMES[rm2];
+    }
+    if (mod === 1) {
+      if (cursor >= bytes.length) return void 0;
+      displacement = signedByte(bytes[cursor++]);
+      hasDisplacement = true;
+    } else if (mod === 2) {
+      const value = signedDword(bytes, cursor);
+      if (value === void 0) return void 0;
+      displacement = value;
+      hasDisplacement = true;
+      cursor += 4;
+    }
+    const terms = [];
+    if (base) terms.push(base);
+    if (index) terms.push(scale === 1 ? index : `${index}*${scale}`);
+    let expression = terms.join("+");
+    if (hasDisplacement || !expression) {
+      if (!expression) expression = formatHex(displacement);
+      else expression += formatDisplacement(displacement);
+    }
+    return { reg, memory: `dword [${expression}]`, length: cursor - offset };
+  }
+  function tryDecodeInsn(bytes, offset) {
+    if (offset >= bytes.length) return void 0;
+    const b0 = bytes[offset];
+    if (b0 >= 64 && b0 <= 71) return { length: 1, mnemonic: `inc ${REG_NAMES[b0 - 64]}` };
+    if (b0 >= 72 && b0 <= 79) return { length: 1, mnemonic: `dec ${REG_NAMES[b0 - 72]}` };
+    if (b0 >= 80 && b0 <= 87) return { length: 1, mnemonic: `push ${REG_NAMES[b0 - 80]}` };
+    if (b0 >= 88 && b0 <= 95) return { length: 1, mnemonic: `pop ${REG_NAMES[b0 - 88]}` };
+    if (b0 === 96) return { length: 1, mnemonic: "pushad" };
+    if (b0 === 97) return { length: 1, mnemonic: "popad" };
+    if (b0 === 144) return { length: 1, mnemonic: "nop" };
+    if (b0 >= 145 && b0 <= 151) return { length: 1, mnemonic: `xchg eax, ${REG_NAMES[b0 - 144]}` };
+    if (b0 === 201) return { length: 1, mnemonic: "leave" };
+    if (b0 === 248) return { length: 1, mnemonic: "clc" };
+    if (b0 === 249) return { length: 1, mnemonic: "stc" };
+    if (b0 === 104) {
+      const immediate = signedDword(bytes, offset + 1);
+      if (immediate === void 0) return void 0;
+      return { length: 5, mnemonic: `push ${formatHex(immediate)}` };
+    }
+    if (b0 === 106) {
+      if (offset + 1 >= bytes.length) return void 0;
+      return { length: 2, mnemonic: `push ${formatHex(signedByte(bytes[offset + 1]))}` };
+    }
+    if (b0 >= 184 && b0 <= 191) {
+      const immediate = signedDword(bytes, offset + 1);
+      if (immediate === void 0) return void 0;
+      return { length: 5, mnemonic: `mov ${REG_NAMES[b0 - 184]}, ${formatHex(immediate)}` };
+    }
+    if (offset + 1 >= bytes.length) return void 0;
+    const b1 = bytes[offset + 1];
+    for (const entry of ALU_REG_OPCODES) {
+      if (b0 === entry.opcode) {
+        const decoded = decodeModRM(bytes, offset + 1);
+        if (!decoded) return void 0;
+        if (decoded.rm !== void 0) {
+          const dst2 = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
+          const src2 = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
+          return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst2}, ${src2}` };
+        }
+        if (entry.name !== "xchg" && entry.name !== "mov") return void 0;
+        if (!decoded.memory) return void 0;
+        const dst = entry.form === "rm" ? decoded.memory : REG_NAMES[decoded.reg];
+        const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : decoded.memory;
+        return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst}, ${src}` };
+      }
+    }
+    if (b0 === 141) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!(decoded == null ? void 0 : decoded.memory)) return void 0;
+      return { length: 1 + decoded.length, mnemonic: `lea ${REG_NAMES[decoded.reg]}, ${decoded.memory}` };
+    }
+    if (b0 === 247) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded || decoded.rm === void 0) return void 0;
+      const op5 = b1 >> 3 & 7;
+      if (op5 === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
+      if (op5 === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
+      return void 0;
+    }
+    if (b0 === 255) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded) return void 0;
+      const op5 = b1 >> 3 & 7;
+      const operand = decoded.rm !== void 0 ? REG_NAMES[decoded.rm] : decoded.memory;
+      if (!operand) return void 0;
+      if (op5 === 2) return { length: 1 + decoded.length, mnemonic: `call ${operand}` };
+      if (op5 === 4) return { length: 1 + decoded.length, mnemonic: `jmp ${operand}` };
+      return void 0;
+    }
+    if (b0 === 217) {
+      const name = FPU_D9_MNEMONICS[b1];
+      if (name) return { length: 2, mnemonic: name };
+      return void 0;
+    }
+    if (b0 === 131) {
+      if (offset + 2 >= bytes.length) return void 0;
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded || decoded.rm === void 0) return void 0;
+      const op5 = b1 >> 3 & 7;
+      const imm8 = bytes[offset + 2];
+      const signed = imm8 > 127 ? imm8 - 256 : imm8;
+      const name = GRP1_NAMES[op5];
+      return { length: 3, mnemonic: `${name} ${REG_NAMES[decoded.rm]}, ${formatHex(signed < 0 ? signed >>> 0 : imm8)}` };
+    }
+    if (b0 === 129) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded || decoded.rm === void 0) return void 0;
+      const immediateOffset = offset + 1 + decoded.length;
+      const imm = signedDword(bytes, immediateOffset);
+      if (imm === void 0) return void 0;
+      const op5 = b1 >> 3 & 7;
+      return { length: 1 + decoded.length + 4, mnemonic: `${GRP1_NAMES[op5]} ${REG_NAMES[decoded.rm]}, ${formatHex(imm)}` };
+    }
+    for (const entry of ALU_EAX_IMM32) {
+      if (b0 === entry.opcode) {
+        if (offset + 4 >= bytes.length) return void 0;
+        const imm = bytes[offset + 1] | bytes[offset + 2] << 8 | bytes[offset + 3] << 16 | bytes[offset + 4] << 24 >>> 0;
+        return { length: 5, mnemonic: `${entry.name} eax, ${formatHex(imm >>> 0)}` };
+      }
+    }
+    return void 0;
+  }
+  function tryDecodeSequence(bytes, startOffset, targetOffset, maxInsns) {
+    const insns = [];
+    let pos = startOffset;
+    while (pos < targetOffset && insns.length < maxInsns) {
+      const decoded = tryDecodeInsn(bytes, pos);
+      if (!decoded) return void 0;
+      pos += decoded.length;
+      insns.push(decoded);
+    }
+    return pos === targetOffset ? insns : void 0;
+  }
+  var PATTERN_SCANNER_PREFIXES = /* @__PURE__ */ new Set(["pop ", "push ", "pushad", "popad", "nop", "xchg eax, "]);
+  function isPatternScannerGadget(mnemonic) {
+    for (const prefix of PATTERN_SCANNER_PREFIXES) {
+      if (mnemonic.startsWith(prefix) || mnemonic === prefix.trimEnd()) return true;
+    }
+    return false;
+  }
+  function hasUsefulEffect(insns, retImm) {
+    if (insns.every((insn) => insn.mnemonic === "nop")) return false;
+    if (insns.length === 1 && retImm === 0 && isPatternScannerGadget(insns[0].mnemonic)) return false;
+    return true;
+  }
+  function dispatchKind(mnemonic) {
+    if (mnemonic.startsWith("jmp ")) return "JMP_DISPATCH";
+    if (mnemonic.startsWith("call ")) return "CALL_DISPATCH";
+    return void 0;
+  }
+  function isSequentialRetChain(mnemonics) {
+    return !mnemonics.some((mnemonic) => dispatchKind(mnemonic) !== void 0);
+  }
+  function scanBackward(options) {
+    var _a2, _b, _c;
+    if (getPointerSize() !== 4) {
+      return { gadgets: [], warnings: ["Backward scanning is x86-only."], stats: {} };
+    }
+    const maxResults = (_a2 = options.maxResults) != null ? _a2 : 500;
+    const maxInsns = (_b = options.maxInstructionsPerGadget) != null ? _b : 3;
+    const maxBack = (_c = options.maxBackwardBytes) != null ? _c : 12;
+    const scanOpts = {
+      module: options.module,
+      executableOnly: true,
+      maxResults: 200,
+      chunkSize: 16384
+    };
+    const scope = forEachSection(scanOpts);
+    const warnings = scope.warnings.map((w) => w);
+    const seen = /* @__PURE__ */ new Set();
+    const gadgets = [];
+    let terminatorsFound = 0;
+    let dispatchFound = 0;
+    let nonSequentialRejected = 0;
+    for (const section2 of scope.sections) {
+      const readAhead = maxBack + 6;
+      for (let offset = 0; offset < section2.size; offset += 16384) {
+        const chunkStart = section2.start + BigInt(offset);
+        const remaining = section2.size - offset;
+        const size = Math.min(remaining, 16384 + readAhead);
+        const bytes = tryReadMemory(chunkStart, size);
+        if (!bytes) continue;
+        const scanLimit = Math.min(bytes.length, remaining < 16384 ? remaining : 16384);
+        for (let i = 0; i < scanLimit; i++) {
+          const standalone = tryDecodeInsn(bytes, i);
+          const standaloneKind = standalone ? dispatchKind(standalone.mnemonic) : void 0;
+          if (standaloneKind) {
+            const addr = chunkStart + BigInt(i);
+            const key2 = addr.toString();
+            if (!seen.has(key2)) {
+              seen.add(key2);
+              gadgets.push({ address: addr, mnemonic: standalone.mnemonic, retImm: 0, kind: standaloneKind });
+              dispatchFound++;
+              if (gadgets.length >= maxResults) {
+                return {
+                  gadgets,
+                  warnings,
+                  stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 }
+                };
+              }
+            }
+          }
+          let retMnemonic;
+          let retImm = 0;
+          if (bytes[i] === 195) {
+            retMnemonic = "ret";
+          } else if (bytes[i] === 194 && i + 2 < bytes.length) {
+            retImm = bytes[i + 1] | bytes[i + 2] << 8;
+            if (retImm === 0 || retImm > 4096) continue;
+            retMnemonic = `ret ${formatHex(retImm)}`;
+          } else {
+            continue;
+          }
+          terminatorsFound++;
+          const termStart = i;
+          const lookBack = Math.min(termStart, maxBack);
+          for (let back = 1; back <= lookBack; back++) {
+            const candidateStart = termStart - back;
+            const insns = tryDecodeSequence(bytes, candidateStart, termStart, maxInsns);
+            if (!insns || insns.length === 0) continue;
+            if (!hasUsefulEffect(insns, retImm)) continue;
+            if (!isSequentialRetChain(insns.map((insn) => insn.mnemonic))) {
+              nonSequentialRejected++;
+              continue;
+            }
+            const addr = chunkStart + BigInt(candidateStart);
+            const key2 = addr.toString();
+            if (seen.has(key2)) continue;
+            seen.add(key2);
+            const parts = insns.map((insn) => insn.mnemonic);
+            parts.push(retMnemonic);
+            gadgets.push({ address: addr, mnemonic: parts.join(" ; "), retImm, kind: "RET_CHAIN" });
+            if (gadgets.length >= maxResults) {
+              return {
+                gadgets,
+                warnings,
+                stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 }
+              };
+            }
+          }
+        }
+      }
+    }
+    return {
+      gadgets,
+      warnings,
+      stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 }
+    };
+  }
+  function findEncodings(module, encodings, clean, keep) {
+    var _a2;
+    const byFirst = {};
+    encodings.forEach((encoding, index) => {
+      var _a3;
+      (byFirst[encoding[0]] = (_a3 = byFirst[encoding[0]]) != null ? _a3 : []).push(index);
+    });
+    const longest = Math.max(1, ...encodings.map((encoding) => encoding.length));
+    const result3 = { hits: [], dirty: encodings.map(() => 0), bytes: 0 };
+    const kept = encodings.map(() => 0);
+    for (const section2 of forEachSection({ module, executableOnly: true, maxResults: 0, chunkSize: 16384 }).sections) {
+      for (let offset = 0; offset < section2.size; offset += 16384) {
+        const start = section2.start + BigInt(offset);
+        const length = Math.min(section2.size - offset, 16384);
+        const bytes = tryReadMemory(start, Math.min(section2.size - offset, 16384 + longest));
+        if (!bytes) continue;
+        result3.bytes += length;
+        for (let i = 0; i < length; i += 1) {
+          for (const index of (_a2 = byFirst[bytes[i]]) != null ? _a2 : []) {
+            const encoding = encodings[index];
+            if (i + encoding.length > bytes.length || encoding.some((byte, j) => byte >= 0 && bytes[i + j] !== byte)) continue;
+            const address = start + BigInt(i);
+            if (!clean(address)) {
+              result3.dirty[index] += 1;
+              continue;
+            }
+            if (kept[index] >= keep) continue;
+            const retImm = encoding[encoding.length - 1] === 195 ? 0 : bytes[i + encoding.length - 2] | bytes[i + encoding.length - 1] << 8;
+            const terminator = i + encoding.length - (retImm === 0 ? 1 : 3);
+            const insns = tryDecodeSequence(bytes, i, terminator, 6);
+            if (!insns || retImm === 0 && bytes[terminator] !== 195 || retImm !== 0 && retImm > 4096) continue;
+            kept[index] += 1;
+            result3.hits.push({ encoding: index, address, mnemonic: [...insns.map((insn) => insn.mnemonic), retImm ? `ret ${formatHex(retImm)}` : "ret"].join(" ; ") });
+          }
+        }
+      }
+    }
+    return result3;
+  }
+
   // src/commands/dep_plan.ts
   var DEP_PLAN_APIS = ["VirtualAlloc", "VirtualProtect", "WriteProcessMemory"];
   var DEP_PLAN_STYLES = ["skeleton", "pushad"];
@@ -13784,6 +14188,15 @@ var osed_bundle = (() => {
     }
     return found;
   }
+  var LARGE_STACK_MOVE = 64;
+  function stackMove(gadget) {
+    const deltas = [...gadget.semanticSummary.summary.stackDelta.values.exact];
+    return deltas.length === 1 ? Number(deltas[0]) - 4 : void 0;
+  }
+  function movesStackFar(gadget, job) {
+    const move = stackMove(gadget);
+    return job.key !== "pivot" && move !== void 0 && move > LARGE_STACK_MOVE;
+  }
   function rejection(gadget, job, at, live, bound) {
     var _a2, _b, _c, _d;
     const capability2 = jobCapability(gadget, job);
@@ -13846,30 +14259,38 @@ var osed_bundle = (() => {
     const jobs = jobsFor(style);
     const bound = {};
     return jobs.map((job, position) => {
-      var _a2, _b, _c;
       const later = liveAfter(jobs, position, true);
       const live = liveAfter(jobs, position).filter((role) => bound[role] !== void 0).map((role) => ({ role, register: bound[role] }));
       const pointed = POINTER_ROLES.map((role) => bound[role]).filter((register2) => register2 !== void 0);
       const verdicts = (index ? ranked(index, job, exclude) : []).map((gadget) => {
-        var _a3, _b2, _c2;
+        var _a2, _b, _c, _d;
         const at = ports(gadget, job);
-        const own = (_b2 = (_a3 = jobCapability(gadget, job)) == null ? void 0 : _a3.evidence[0]) != null ? _b2 : "";
-        const leads = own !== "" && own === ((_c2 = gadget.instructions[0]) == null ? void 0 : _c2.normalizedText);
+        const own = (_b = (_a2 = jobCapability(gadget, job)) == null ? void 0 : _a2.evidence[0]) != null ? _b : "";
+        const leads = own !== "" && own === ((_c = gadget.instructions[0]) == null ? void 0 : _c.normalizedText);
         const controlled = [...pointed, at.address].filter((register2) => register2 !== void 0);
         const uncontrolled = dereferencedRegisters(gadget, own).filter((register2) => controlled.indexOf(register2) < 0);
-        const note = uncontrolled.length > 0 ? `; reads through ${uncontrolled.join(", ")}, which nothing in the chain has pointed anywhere yet` : "";
+        const far2 = movesStackFar(gadget, job);
+        const note = (uncontrolled.length > 0 ? `; reads through ${uncontrolled.join(", ")}, which nothing in the chain has pointed anywhere yet` : "") + (far2 ? `; takes 0x${((_d = stackMove(gadget)) != null ? _d : 0).toString(16)} bytes of stack, all of it junk in the payload` : "");
         const rejected = rejection(gadget, job, at, live, bound);
-        if (rejected) return { gadget, at, usable: false, uncontrolled, leads, reason: rejected };
+        if (rejected) return { gadget, at, usable: false, far: far2, uncontrolled, leads, reason: rejected };
         const needed = moves(job, at, bound);
         if (needed.length > 0) {
           const back = readsOf(job).some((role) => later.indexOf(role) >= 0) ? ", and back after" : "";
           const move = `${needed.join(", ")} first${back}`;
-          return { gadget, at, usable: true, move, uncontrolled, leads, reason: `move ${move}${note}` };
+          return { gadget, at, usable: true, far: far2, move, uncontrolled, leads, reason: `move ${move}${note}` };
         }
-        return { gadget, at, usable: true, uncontrolled, leads, reason: `${exactReason(gadget, job, at, live, bound)}${note}` };
+        return { gadget, at, usable: true, far: far2, uncontrolled, leads, reason: `${exactReason(gadget, job, at, live, bound)}${note}` };
       });
-      const safe = (verdict) => verdict.uncontrolled.length === 0;
-      const pick2 = (_c = (_b = (_a2 = verdicts.filter((verdict) => verdict.usable && !verdict.move && safe(verdict))[0]) != null ? _a2 : verdicts.filter((verdict) => verdict.usable && safe(verdict))[0]) != null ? _b : verdicts.filter((verdict) => verdict.usable && !verdict.move)[0]) != null ? _c : verdicts.filter((verdict) => verdict.usable)[0];
+      const tiers = [
+        (verdict) => !verdict.move && verdict.uncontrolled.length === 0 && !verdict.far,
+        (verdict) => verdict.uncontrolled.length === 0 && !verdict.far,
+        (verdict) => !verdict.move && verdict.uncontrolled.length === 0,
+        (verdict) => verdict.uncontrolled.length === 0,
+        (verdict) => !verdict.move,
+        () => true
+      ];
+      const usable = verdicts.filter((verdict) => verdict.usable);
+      const pick2 = tiers.map((tier) => usable.filter(tier)[0]).filter((verdict) => verdict !== void 0)[0];
       const sets = job.flow.sets;
       if (pick2 && sets) {
         const register2 = ports(pick2.gadget, job)[sets.port];
@@ -13909,6 +14330,7 @@ var osed_bundle = (() => {
     ].filter(Boolean).join(", ");
   }
   function planLines(plan) {
+    var _a2;
     const { job, live, verdicts, pick: pick2 } = plan;
     if (verdicts.length === 0) return [`  ${job.title}: none in the corpus`];
     const keep = live.length > 0 ? ` (keep ${live.map((entry) => ROLE_NAMES[entry.role] ? `${entry.register} = ${ROLE_NAMES[entry.role]}` : entry.register).join(", ")})` : "";
@@ -13925,9 +14347,64 @@ var osed_bundle = (() => {
     if (pick2) lines.push(...line(pick2, ">", "PICK"));
     if (pick2 && pick2.uncontrolled.length > 0) {
       lines.push(`      !! every candidate for this job reads through ${pick2.uncontrolled.join(", ")}. Point ${pick2.uncontrolled.join(" and ")} at readable memory before this gadget runs, or the chain dies here.`);
-    } else lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
+    }
+    if (pick2 && pick2.far) {
+      lines.push(`      !! every usable candidate for this job takes more than 0x${LARGE_STACK_MOVE.toString(16)} bytes of stack. This one grows the payload by 0x${((_a2 = stackMove(pick2.gadget)) != null ? _a2 : 0).toString(16)} bytes of junk: check the overflow has room for it.`);
+    }
+    if (!pick2) lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
     for (const verdict of after) lines.push(...line(verdict, " ", "usable"));
     return lines;
+  }
+  var REGS2 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var NOT_ESP = [0, 1, 2, 3, 5, 6, 7];
+  var rm = (mod, reg, base) => mod << 6 | reg << 3 | base;
+  var pairs = () => NOT_ESP.flatMap((a) => NOT_ESP.filter((b) => b !== a).map((b) => [a, b]));
+  var BODIES = {
+    STACK_POINTER_CAPTURE: () => NOT_ESP.flatMap((r) => [[84, 88 + r], [139, rm(3, r, 4)], [137, rm(3, 4, r)]]),
+    REGISTER_ADD: () => pairs().flatMap(([dest, source]) => [[1, rm(3, source, dest)], [3, rm(3, dest, source)]]),
+    MOVE_REGISTER: () => pairs().flatMap(([dest, source]) => [[137, rm(3, source, dest)], [139, rm(3, dest, source)]]),
+    EXCHANGE_REGISTER: () => [...NOT_ESP.filter((r) => r > 0).map((r) => [144 + r]), ...pairs().filter(([a, b]) => a < b).map(([a, b]) => [135, rm(3, a, b)])],
+    MEMORY_READ: () => NOT_ESP.flatMap((r) => [0, 1, 2, 3, 6, 7].map((base) => [139, rm(0, r, base)])),
+    MEMORY_WRITE: () => NOT_ESP.flatMap((r) => [0, 1, 2, 3, 6, 7].map((base) => [137, rm(0, r, base)])),
+    REGISTER_INCREMENT: () => NOT_ESP.map((r) => [64 + r]),
+    REGISTER_NEGATE: () => NOT_ESP.map((r) => [247, 216 + r]),
+    STACK_PIVOT: () => [[148], [201], ...NOT_ESP.flatMap((r) => [[135, rm(3, r, 4)], [135, rm(3, 4, r)], [137, rm(3, r, 4)], [139, rm(3, 4, r)]])],
+    LOAD_REGISTER: (register2) => NOT_ESP.filter((r) => register2 === void 0 || REGS2[r] === register2).map((r) => [88 + r]),
+    DISPATCH_PUSHAD: () => [[96]]
+  };
+  function encodingsFor(job) {
+    return job.capabilities.flatMap((kind) => {
+      var _a2, _b;
+      return (_b = (_a2 = BODIES[kind]) == null ? void 0 : _a2.call(BODIES, job.register)) != null ? _b : [];
+    }).flatMap((body) => [[...body, 195], [...body, 194, -1, -1]]);
+  }
+  function settledLines(plan, settled, exclude) {
+    const searched = `every byte of ${settled.modules} searched for the ${settled.encodings} plain encodings of this job`;
+    if (plan.pick) {
+      return settled.clean.indexOf(gadgetAddress(plan.pick.gadget)) >= 0 ? [`      the scan had missed it: ${searched} found it`] : [];
+    }
+    const usable = settled.clean.filter((address) => exclude.indexOf(address) < 0);
+    if (settled.clean.length > 0 && usable.length === 0) return [`      absent but for what you excluded: ${searched}, and each hit is one of them`];
+    if (settled.clean.length > 0) return [`      ${searched}: ${settled.clean.length} at a clean address, and none of them fits either`];
+    return [`      absent from ${settled.modules}: ${searched}, ${settled.dirty > 0 ? `${settled.dirty} hit(s), every one at an address holding a bad byte` : "no hit at all"}`];
+  }
+  var NX_POLICY_ADDRESS = 2147353301;
+  var NX_POLICIES = ["AlwaysOff", "AlwaysOn", "OptIn", "OptOut"];
+  function depState(policy, exe, optIn) {
+    if (policy === void 0) return { enforced: void 0, why: `the system DEP policy at ${hex325(NX_POLICY_ADDRESS)} is unreadable` };
+    if (policy === "AlwaysOn") return { enforced: true, why: "the system policy is AlwaysOn: every process runs with DEP" };
+    if (policy === "AlwaysOff") return { enforced: false, why: "the system policy is AlwaysOff: no process runs with DEP" };
+    if (policy === "OptOut") return { enforced: true, why: "the system policy is OptOut: every process runs with DEP unless it is on the exceptions list" };
+    if (!exe) return { enforced: void 0, why: "the system policy is OptIn and the main executable is not among the loaded modules" };
+    if (exe.nx) return { enforced: true, why: `the system policy is OptIn and ${exe.name} opts in (NX_COMPAT enabled)` };
+    if (exe.forced) return { enforced: true, why: `Exploit Protection turns DEP on for ${exe.name} (MitigationOptions in its Image File Execution Options key), whatever its NX_COMPAT flag says` };
+    if (exe.forced === void 0) return { enforced: void 0, why: `the system policy is OptIn and ${exe.name} does not opt in, but its Exploit Protection setting could not be read` };
+    if (optIn.length > 0) return { enforced: void 0, why: `the system policy is OptIn and ${exe.name} does not opt in, but ${optIn.join(", ")} imports SetProcessDEPPolicy and may have turned DEP on at run time` };
+    return { enforced: false, why: `the system policy is OptIn, ${exe.name} does not opt in (NX_COMPAT disabled) and no Exploit Protection setting turns DEP on for it` };
+  }
+  function depPlanArgs(args) {
+    const short = typeof args[0] === "string" && /^\s*((\\x|0x)?[0-9a-f]{2}[\s,]*)+$/i.test(args[0]);
+    return short ? ["", "", args[0], "auto", args[1], args[2], args[3]] : args;
   }
 
   // src/commands/dep_build.ts
@@ -14000,6 +14477,10 @@ var osed_bundle = (() => {
   var hex5 = (value) => hex325(value);
   var isClean = (value, bad) => [0, 8, 16, 24].every((shift) => bad.indexOf(value >>> shift & 255) < 0);
   var ident = (name) => name.replace(/[^A-Za-z0-9]/g, "_").toLowerCase();
+  var far = (gadget) => {
+    var _a2;
+    return !movesEsp(gadget) && ((_a2 = stackMove(gadget)) != null ? _a2 : 0) > LARGE_STACK_MOVE;
+  };
   var ownsEsp = (operands, mnemonic) => operands[0] === "esp" || mnemonic === "leave" || mnemonic === "xchg" && operands.indexOf("esp") >= 0;
   function lastRetN(gadget) {
     const last = gadget.instructions[gadget.instructions.length - 1];
@@ -14051,13 +14532,17 @@ var osed_bundle = (() => {
     'def hole(name): raise SystemExit("still to fill: " + name)'
   ] };
   var CORPUS_BLOCK = { none: "the corpus is the search, not the exploit. The gadgets the chain keeps get their names in [4/7]." };
-  function slotBlock(api, module, iatSlot, badchars) {
+  function slotBlock(api, module, iatSlot, badchars, delta) {
     if (iatSlot === void 0) {
-      const hole = `IAT_SLOT: no module imports ${api}: resolve it at run time, dx @$osed().sc.iat_find("GetProcAddress")`;
+      const hole = `IAT_SLOT: no module with ASLR disabled imports ${api} or anything else from its DLL: the STOP says which layer failed`;
       return { block: { lines: [`# ${hole}`, 'IAT_SLOT = hole("IAT_SLOT")'] }, hole };
     }
     const note = isClean(iatSlot, badchars) ? "" : ". It holds a bad byte, so the chain builds it and never sends it";
-    return { block: { lines: [`IAT_SLOT = ${hex5(iatSlot)}     # ${api} in ${module}${note}`] } };
+    if (!delta) return { block: { lines: [`IAT_SLOT = ${hex5(iatSlot)}     # ${api} in ${module}${note}`] } };
+    return { block: { lines: [
+      `IAT_SLOT = ${hex5(iatSlot)}     # ${delta.dll}!${delta.anchor} in ${module}${note}`,
+      `API_DELTA = ${hex5(delta.value)}    # ${api} - ${delta.anchor}, measured on this machine. Any Windows update moves it: measure it again on the target`
+    ] } };
   }
   function buildExploit(input) {
     var _a2, _b, _c, _d, _e, _f, _g, _h;
@@ -14086,7 +14571,7 @@ var osed_bundle = (() => {
         var _a3, _b2;
         return verdict.at.dest === chosen.at.dest && verdict.at.source === chosen.at.source && verdict.at.address === chosen.at.address && ((_a3 = verdict.at.offset) != null ? _a3 : 0) === ((_b2 = chosen.at.offset) != null ? _b2 : 0);
       };
-      return plan.verdicts.slice(plan.verdicts.indexOf(chosen) + 1).filter((verdict) => verdict.usable && !verdict.move && verdict.uncontrolled.length === 0 && verdict.leads && chosen.leads && sameAt(verdict) && input.exclude.indexOf(gadgetAddress(verdict.gadget)) < 0).slice(0, 2).map((verdict) => ({
+      return plan.verdicts.slice(plan.verdicts.indexOf(chosen) + 1).filter((verdict) => verdict.usable && !verdict.move && verdict.uncontrolled.length === 0 && !verdict.far && verdict.leads && chosen.leads && sameAt(verdict) && input.exclude.indexOf(gadgetAddress(verdict.gadget)) < 0).slice(0, 2).map((verdict) => ({
         address: gadgetAddress(verdict.gadget),
         sequence: sequence(verdict.gadget),
         pops: extraPops(verdict.gadget, loads),
@@ -14116,12 +14601,13 @@ var osed_bundle = (() => {
     };
     const group = (title) => ({ line: `#-- ${title}` });
     const usable = (gadget, keep, own) => !movesEsp(gadget) && memoryWrites(gadget, "").length === 0 && writtenRegisters(gadget).every((register2) => own.indexOf(register2) >= 0 || keep.indexOf(register2) < 0);
-    const popGadget = (register2, keep) => rankCandidates(gadgets.filter((gadget) => {
+    const near = (ranked2) => [...ranked2.filter((gadget) => !far(gadget)), ...ranked2.filter(far)];
+    const popGadget = (register2, keep) => near(rankCandidates(gadgets.filter((gadget) => {
       var _a3;
       const first = gadget.instructions[0];
       return (first == null ? void 0 : first.mnemonic) === "pop" && ((_a3 = first.operands[0]) == null ? void 0 : _a3.trim().toLowerCase()) === register2 && usable(gadget, keep, [register2]);
-    }))[0];
-    const moveGadget = (from, to, keep) => rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability2) => capability2.kind === "MOVE_REGISTER" && capability2.register === to && capability2.targetRegister === from || capability2.kind === "EXCHANGE_REGISTER" && [capability2.register, capability2.targetRegister].sort().join() === [from, to].sort().join()) && holds(gadget, to, from) && usable(gadget, keep, keep.indexOf(from) >= 0 ? [to] : [to, from])))[0];
+    })))[0];
+    const moveGadget = (from, to, keep) => near(rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability2) => capability2.kind === "MOVE_REGISTER" && capability2.register === to && capability2.targetRegister === from || capability2.kind === "EXCHANGE_REGISTER" && [capability2.register, capability2.targetRegister].sort().join() === [from, to].sort().join()) && holds(gadget, to, from) && usable(gadget, keep, keep.indexOf(from) >= 0 ? [to] : [to, from]))))[0];
     const moveOps = (from, to, keep) => {
       if (from === to) return [];
       const direct = moveGadget(from, to, keep);
@@ -14151,7 +14637,7 @@ var osed_bundle = (() => {
       });
       return ops;
     };
-    const constOps = (register2, value, expression, keep, label) => {
+    const tryConstOps = (register2, value, expression, keep, label) => {
       if (isClean(value, badchars)) {
         const pop = popGadget(register2, keep);
         if (pop) return [{ call: entry(pop, `load ${register2}`, 1), values: [expression] }];
@@ -14170,7 +14656,24 @@ var osed_bundle = (() => {
           return [...recipeOps(recipe, label), ...move];
         }
       }
-      return hole(`${register2}_value`, `${register2} = ${hex5(value)} (${label}): no pop and no rop.construct recipe keeps ${keep.join(", ") || "the chain"}`);
+      return void 0;
+    };
+    const constOps = (register2, value, expression, keep, label) => {
+      var _a3;
+      return (_a3 = tryConstOps(register2, value, expression, keep, label)) != null ? _a3 : hole(`${register2}_value`, `${register2} = ${hex5(value)} (${label}): no pop and no rop.construct recipe keeps ${keep.join(", ") || "the chain"}`);
+    };
+    const addConst = (register2, value, expression, keep) => {
+      var _a3;
+      const adders = near(rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability2) => {
+        var _a4, _b2;
+        return capability2.kind === "REGISTER_ADD" && capability2.register === register2 && REGISTERS3.indexOf((_a4 = capability2.targetRegister) != null ? _a4 : "") >= 0 && capability2.targetRegister !== register2 && keep.indexOf((_b2 = capability2.targetRegister) != null ? _b2 : "") < 0;
+      }) && usable(gadget, keep, [register2]))));
+      for (const gadget of adders) {
+        const by = (_a3 = gadget.capabilities.filter((capability2) => capability2.kind === "REGISTER_ADD" && capability2.register === register2)[0].targetRegister) != null ? _a3 : "";
+        const ops = tryConstOps(by, value, expression, keep.concat(register2), `${by} = ${expression}`);
+        if (ops) return [...ops, { call: entry(gadget, `add ${expression}`), values: [] }];
+      }
+      return void 0;
     };
     const capture = pick2("capture");
     const add = pick2("add");
@@ -14186,10 +14689,10 @@ var osed_bundle = (() => {
     const arithmetic = (register2, keep) => {
       var _a3;
       for (const kind of ["REGISTER_SUB", "REGISTER_ADD"]) {
-        const options = rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability2) => {
+        const options = near(rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability2) => {
           var _a4, _b2;
           return capability2.kind === kind && capability2.register === register2 && REGISTERS3.indexOf((_a4 = capability2.targetRegister) != null ? _a4 : "") >= 0 && capability2.targetRegister !== register2 && keep.indexOf((_b2 = capability2.targetRegister) != null ? _b2 : "") < 0;
-        }) && usable(gadget, keep, [register2])));
+        }) && usable(gadget, keep, [register2]))));
         for (const gadget of options) {
           const by = (_a3 = gadget.capabilities.filter((capability2) => capability2.kind === kind && capability2.register === register2)[0].targetRegister) != null ? _a3 : "";
           const pop = popGadget(by, keep.concat(register2));
@@ -14199,7 +14702,7 @@ var osed_bundle = (() => {
       return void 0;
     };
     const load = (slot2, register2, keep) => {
-      var _a3, _b2;
+      var _a3, _b2, _c2, _d2;
       const source = slot2.source;
       const missing = (why) => hole(`${ident(slot2.name)}_value`, why);
       switch (source.kind) {
@@ -14209,10 +14712,15 @@ var osed_bundle = (() => {
           const expression = offset ? `IAT_SLOT ${offset < 0 ? "+" : "-"} ${hex5(Math.abs(offset))}` : "IAT_SLOT";
           const move = moveOps((_b2 = read.at.dest) != null ? _b2 : "", register2, keep);
           if (!move) return missing(`no gadget moves ${read.at.dest} into ${register2}`);
+          const before = input.delta && read.at.dest ? addConst(read.at.dest, input.delta.value, "API_DELTA", keep) : [];
+          const after = before ? [] : addConst(register2, (_d2 = (_c2 = input.delta) == null ? void 0 : _c2.value) != null ? _d2 : 0, "API_DELTA", keep);
+          if (!before && !after) return missing(`no gadget adds API_DELTA to ${read.at.dest} or ${register2} through a register the chain does not need here`);
           return [
             ...constOps(read.at.address, input.iatSlot - offset >>> 0, expression, keep, `${read.at.address} = ${expression}`),
             { call: entry(read.gadget, "read the IAT slot"), values: [] },
-            ...move
+            ...before != null ? before : [],
+            ...move,
+            ...after != null ? after : []
           ];
         }
         case "const":
@@ -14390,7 +14898,7 @@ var osed_bundle = (() => {
     const cost = table2.filter((entry2) => entry2.pops > 0 || entry2.retn > 0);
     const badText = badchars.map((b) => `\\x${b.toString(16).padStart(2, "0")}`).join("");
     const sized = style === "skeleton" && FRAMES[api].some((slot2) => slot2.source.kind === "size");
-    const slot = slotBlock(api, input.module, input.iatSlot, badchars);
+    const slot = slotBlock(api, input.module, input.iatSlot, badchars, input.delta);
     return {
       table: table2,
       stages,
@@ -14401,10 +14909,13 @@ var osed_bundle = (() => {
         2: slot.block,
         3: CORPUS_BLOCK,
         4: { lines: [
-          ...table2.flatMap((entry2) => [
-            `${entry2.name.padEnd(width)} = ${hex5(entry2.address)}   # ${entry2.sequence}${warnings[entry2.address] ? `   <<< ${warnings[entry2.address]}` : ""}`,
-            ...swapsFor(entry2.address, entry2.loads).map((swap) => `# ${entry2.name.padEnd(width - 2)} = ${hex5(swap.address)}   # ${swap.sequence}   drop-in swap, ranked lower: ${swap.why}`)
-          ]),
+          ...table2.flatMap((entry2) => {
+            var _a3;
+            return [
+              `${entry2.name.padEnd(width)} = ${hex5(entry2.address)}   # ${entry2.sequence}${warnings[entry2.address] ? `   <<< ${warnings[entry2.address]}` : byAddress[entry2.address] && far(byAddress[entry2.address]) ? `   <<< takes 0x${((_a3 = stackMove(byAddress[entry2.address])) != null ? _a3 : 0).toString(16)} bytes of stack: c.rop pads that much junk into the payload` : ""}`,
+              ...swapsFor(entry2.address, entry2.loads).map((swap) => `# ${entry2.name.padEnd(width - 2)} = ${hex5(swap.address)}   # ${swap.sequence}   drop-in swap, ranked lower: ${swap.why}`)
+            ];
+          }),
           `COST = {${[
             ...cost.map((entry2) => `${entry2.name}: (${entry2.pops}, ${entry2.retn ? `0x${entry2.retn.toString(16)}` : 0})`),
             ...table2.flatMap((entry2) => swapsFor(entry2.address, entry2.loads).filter((swap) => swap.pops > 0 || swap.retn > 0).map((swap) => `${hex5(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`))
@@ -14522,8 +15033,8 @@ var osed_bundle = (() => {
       }
     }
     toString() {
-      const pairs = Object.entries(this).filter(([, value]) => typeof value === "string");
-      return pairs.map(([key2, value]) => `${key2}: ${stripDml(value)}`).join(" | ");
+      const pairs2 = Object.entries(this).filter(([, value]) => typeof value === "string");
+      return pairs2.map(([key2, value]) => `${key2}: ${stripDml(value)}`).join(" | ");
     }
   };
   var DxRows = class {
@@ -16994,10 +17505,10 @@ if __name__ == "__main__":
 `;
 
   // src/shellcode/writer.ts
-  var REGS2 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var REGS3 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
   var SCRATCH = ["eax", "ecx", "edx"];
-  var regIndex = (reg) => REGS2.indexOf(reg);
-  var isReg = (value) => REGS2.includes(value);
+  var regIndex = (reg) => REGS3.indexOf(reg);
+  var isReg = (value) => REGS3.includes(value);
   var hex6 = (value) => `0x${(value >>> 0).toString(16)}`;
   var hex326 = (value) => `0x${(value >>> 0).toString(16).padStart(8, "0")}`;
   var fitsImm8 = (value) => (value | 0) >= -128 && (value | 0) <= 127;
@@ -17135,7 +17646,7 @@ if __name__ == "__main__":
   }
   function mentionedRegisters(arg) {
     if (arg.kind === "register") return [arg.reg];
-    if (arg.kind === "expr") return REGS2.filter((reg) => new RegExp(`\\b${reg}\\b`, "i").test(arg.text));
+    if (arg.kind === "expr") return REGS3.filter((reg) => new RegExp(`\\b${reg}\\b`, "i").test(arg.text));
     return arg.kind === "frame" ? ["ebp"] : [];
   }
   function callFrame(api, rawArgs, bad) {
@@ -19081,24 +19592,28 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     {
       name: "dep_plan",
       summary: "Whole DEP bypass discovery in seven sections",
-      what: "Runs the discovery for a <api> DEP bypass from <module> in one go, in the <style> style, and prints each step under its own [n/7] header.",
-      how: "Calls the existing commands in order: modules for <module>, sc.iat_find for <api>, rop.scan_live with <badchars>, dep_candidates to pick one gadget per job that keeps the registers the chain still needs, rop.construct for each constant, code_caves for writable and executable addresses, then dep_function in the <style> style, and last a Python draft. The draft fills in the [4/7] pick per job, marks with TODO the moves a pick needs and the distances only a debugger run can give, with the bp and dd commands that measure them.",
+      what: "Decides from what the debugger can see whether a DEP chain is needed, which modules can give gadgets, which API to call and how to reach its address, and which style the gadgets support, then prints each step under its own [n/7] header. Given only <badchars> it chooses all of that itself.",
+      how: "First it reads the system DEP policy at 0x7FFE02D5, the executable's NX_COMPAT flag and its Exploit Protection setting; the stack's page protection cannot say, because the stack is PAGE_READWRITE with DEP on or off. With DEP off it hands over a clean jmp esp and stops. Then it keeps every module without ASLR whose fixed high bytes are clean, takes the API's IAT slot from a module that does not move, or else the slot of another kernel32 export plus the distance to the API, measured now, and scans the modules to the end. A job no scan filled is searched for in every byte of the modules before anything is called absent. Both styles are solved, and the run ends on a chain or on one line naming the layer that failed: module, API or method.",
       when: "Later labs and the exam, once you know the method by hand and want every piece on one screen. Verify the draft field by field before you trust it.",
+      positional: depPlanArgs,
       args: [
-        { name: "api", meaning: "DEP bypass API.", values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into a code cave." } },
-        { name: "module", meaning: "Module without ASLR that supplies the gadgets and the IAT slot." },
-        BADCHARS('Bytes the target corrupts or cuts, as one hex string such as "00 0A 0D". Every address and constant is checked against them.', "none"),
-        { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "registers loaded, then one PUSHAD writes the frame." } }
+        { name: "api", meaning: 'DEP bypass API, or "" to let the tool choose.', optional: true, values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into a code cave." } },
+        { name: "module", meaning: 'Modules without ASLR that supply the gadgets, comma separated, or "" for every one that can.', optional: true },
+        BADCHARS('Bytes the target corrupts or cuts, as one hex string such as "00 0A 0D". Every address and constant is checked against them. Passed alone, it is the whole call.', "none"),
+        { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "registers loaded, then one PUSHAD writes the frame.", auto: "the style the gadgets support, the skeleton first." } },
+        { name: "firstStage", meaning: "The number of the next free payloadN() in your file.", optional: true, default: "1", kind: "number" },
+        { name: "exclude", meaning: "Gadget addresses the chain must not use, in hex.", optional: true },
+        { name: "anyway", meaning: "Build the chain even when DEP is off, as an exercise.", optional: true, default: "false" }
       ],
-      example: 'dx @$osed().dep_plan("VirtualAlloc", "libbkup", "00 09 0A 0B 0C 0D 20")',
-      output: "Seven sections: [1/7] module protections, [2/7] IAT slot, [3/7] gadget corpus, [4/7] the gadget picked per job, the ones rejected above it and why, and the alternatives, [5/7] clean recipes for the constants and the writable or cave addresses, [6/7] the frame or PUSHAD map, [7/7] a Python draft with TODO lines to measure.",
-      report: "Ran dep_plan for <api> from <module> with bad characters <badchars> in the <style> style, then verified each field of the draft in WinDbg before using it."
+      example: 'dx @$osed().dep_plan("00 09 0A 0B 0C 0D 20")',
+      output: "Whether DEP is on and why, then seven sections: [1/7] module protections and the modules chosen, [2/7] the IAT slot or the neighbour and distance, [3/7] gadget corpus, [4/7] the gadget picked per job, what was rejected and why, and what searching the module showed for a job no scan filled, [5/7] clean recipes for the constants, [6/7] the frame or PUSHAD map, [7/7] a Python draft. The last line is the verdict, or the layer that failed.",
+      report: "Ran dep_plan with bad characters <badchars>; it chose <api> from <module> in the <style> style, and each field of the draft was verified in WinDbg before use."
     },
     {
       name: "dep_candidates",
       summary: "The gadget picked for each DEP chain job, and why",
       what: "Picks, for each job of a <style> DEP chain, the gadget from <module> with the fewest side effects that keeps every register the chain still needs, the same list as step [4/7] of dep_plan.",
-      how: "Scans <module> for gadgets whose address holds no byte from <badchars>, keeps for each job the gadgets that do it, and sorts them by fewest side effects, then the smallest stack move. Walking the jobs in chain order, it rejects a gadget that writes a register still holding the captured ESP, the field address, the value to write or an already loaded pushad register, and picks the first one left. After each gadget it lists the registers it changes, how far it moves ESP, extra pops, a ret N and memory writes. A gadget that moves ESP only counts for the pivot job. The pushad style also runs find_bytes for jmp esp and call esp. It scans on its own and leaves the loaded corpus as it was.",
+      how: "Scans <module> for gadgets whose address holds no byte from <badchars>, keeps for each job the gadgets that do it, and sorts them by fewest side effects, then the smallest stack move. Walking the jobs in chain order, it rejects a gadget that writes a register still holding the captured ESP, the field address, the value to write or an already loaded pushad register, and picks the first one left. After each gadget it lists the registers it changes, how far it moves ESP, extra pops, a ret N and memory writes. A gadget that moves ESP only counts for the pivot job. A job no gadget fills is searched for in every byte of the modules before it is called absent, and when the other style needs no such gadget it says so. The pushad style also runs find_bytes for jmp esp and call esp. It uses the loaded corpus when that is a complete scan of the same modules for the same bad chars, and otherwise scans on its own and leaves the loaded corpus as it was.",
       when: "DEP bypass, to pick the gadget for each step of the chain, or to repeat step [4/7] of dep_plan on its own.",
       args: [
         { name: "module", meaning: "Module without ASLR that supplies the gadgets." },
@@ -19122,7 +19637,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         { name: "append", meaning: "true keeps the current corpus and adds to it.", optional: true, default: "false" },
         { name: "maxPerPattern", meaning: "Cap on gadgets kept per pattern.", optional: true, kind: "number" },
         { name: "maxInstructionsPerGadget", meaning: "Longest gadget, 1 to 12 instructions.", optional: true, default: "6", kind: "number" },
-        { name: "maxBackwardGadgets", meaning: "Cap on the backward scan.", optional: true, default: "10000", kind: "number" }
+        { name: "maxBackwardGadgets", meaning: "Cap on the backward scan. The default is the ceiling, so the scan covers the whole module unless you lower it.", optional: true, default: "100000", kind: "number" }
       ],
       example: 'dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D")',
       output: "The summary counts the gadgets kept and says whether the backward scan finished or hit its cap.",
@@ -20517,371 +21032,6 @@ ${INDENT}`)]);
     walk(api, "");
   }
 
-  // src/core/backward_scanner.ts
-  var REG_NAMES = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
-  var ALU_REG_OPCODES = [
-    { opcode: 1, name: "add", form: "rm" },
-    { opcode: 3, name: "add", form: "reg" },
-    { opcode: 9, name: "or", form: "rm" },
-    { opcode: 11, name: "or", form: "reg" },
-    { opcode: 17, name: "adc", form: "rm" },
-    { opcode: 19, name: "adc", form: "reg" },
-    { opcode: 25, name: "sbb", form: "rm" },
-    { opcode: 27, name: "sbb", form: "reg" },
-    { opcode: 33, name: "and", form: "rm" },
-    { opcode: 35, name: "and", form: "reg" },
-    { opcode: 41, name: "sub", form: "rm" },
-    { opcode: 43, name: "sub", form: "reg" },
-    { opcode: 49, name: "xor", form: "rm" },
-    { opcode: 51, name: "xor", form: "reg" },
-    { opcode: 57, name: "cmp", form: "rm" },
-    { opcode: 59, name: "cmp", form: "reg" },
-    { opcode: 133, name: "test", form: "rm" },
-    { opcode: 135, name: "xchg", form: "rm" },
-    { opcode: 137, name: "mov", form: "rm" },
-    { opcode: 139, name: "mov", form: "reg" }
-  ];
-  var ALU_EAX_IMM32 = [
-    { opcode: 5, name: "add" },
-    { opcode: 13, name: "or" },
-    { opcode: 21, name: "adc" },
-    { opcode: 29, name: "sbb" },
-    { opcode: 37, name: "and" },
-    { opcode: 45, name: "sub" },
-    { opcode: 53, name: "xor" }
-  ];
-  var GRP1_NAMES = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
-  var FPU_D9_MNEMONICS = {
-    224: "fchs",
-    225: "fabs",
-    228: "ftst",
-    229: "fxam",
-    232: "fld1",
-    233: "fldl2t",
-    234: "fldl2e",
-    235: "fldpi",
-    236: "fldlg2",
-    237: "fldln2",
-    238: "fldz",
-    240: "f2xm1",
-    241: "fyl2x",
-    242: "fptan",
-    243: "fpatan",
-    244: "fxtract",
-    245: "fprem1",
-    246: "fdecstp",
-    247: "fincstp",
-    248: "fprem",
-    249: "fyl2xp1",
-    250: "fsqrt",
-    251: "fsincos",
-    252: "frndint",
-    253: "fscale",
-    254: "fsin",
-    255: "fcos"
-  };
-  function formatHex(value) {
-    return `0x${(value >>> 0).toString(16)}`;
-  }
-  function signedByte(value) {
-    return value > 127 ? value - 256 : value;
-  }
-  function signedDword(bytes, offset) {
-    if (offset + 3 >= bytes.length) return void 0;
-    return bytes[offset] | bytes[offset + 1] << 8 | bytes[offset + 2] << 16 | bytes[offset + 3] << 24 | 0;
-  }
-  function formatDisplacement(value) {
-    if (value === 0) return "";
-    return value < 0 ? `-0x${(-value).toString(16)}` : `+0x${value.toString(16)}`;
-  }
-  function decodeModRM(bytes, offset) {
-    if (offset >= bytes.length) return void 0;
-    const modrm = bytes[offset];
-    const mod = modrm >> 6;
-    const reg = modrm >> 3 & 7;
-    const rm = modrm & 7;
-    if (mod === 3) return { reg, rm, length: 1 };
-    let cursor = offset + 1;
-    let base;
-    let index;
-    let scale = 1;
-    let displacement = 0;
-    let hasDisplacement = false;
-    if (rm === 4) {
-      if (cursor >= bytes.length) return void 0;
-      const sib = bytes[cursor++];
-      scale = 1 << (sib >> 6);
-      const indexId = sib >> 3 & 7;
-      const baseId = sib & 7;
-      if (indexId !== 4) index = REG_NAMES[indexId];
-      if (!(mod === 0 && baseId === 5)) base = REG_NAMES[baseId];
-      if (mod === 0 && baseId === 5) {
-        const value = signedDword(bytes, cursor);
-        if (value === void 0) return void 0;
-        displacement = value;
-        hasDisplacement = true;
-        cursor += 4;
-      }
-    } else if (mod === 0 && rm === 5) {
-      const value = signedDword(bytes, cursor);
-      if (value === void 0) return void 0;
-      displacement = value;
-      hasDisplacement = true;
-      cursor += 4;
-    } else {
-      base = REG_NAMES[rm];
-    }
-    if (mod === 1) {
-      if (cursor >= bytes.length) return void 0;
-      displacement = signedByte(bytes[cursor++]);
-      hasDisplacement = true;
-    } else if (mod === 2) {
-      const value = signedDword(bytes, cursor);
-      if (value === void 0) return void 0;
-      displacement = value;
-      hasDisplacement = true;
-      cursor += 4;
-    }
-    const terms = [];
-    if (base) terms.push(base);
-    if (index) terms.push(scale === 1 ? index : `${index}*${scale}`);
-    let expression = terms.join("+");
-    if (hasDisplacement || !expression) {
-      if (!expression) expression = formatHex(displacement);
-      else expression += formatDisplacement(displacement);
-    }
-    return { reg, memory: `dword [${expression}]`, length: cursor - offset };
-  }
-  function tryDecodeInsn(bytes, offset) {
-    if (offset >= bytes.length) return void 0;
-    const b0 = bytes[offset];
-    if (b0 >= 64 && b0 <= 71) return { length: 1, mnemonic: `inc ${REG_NAMES[b0 - 64]}` };
-    if (b0 >= 72 && b0 <= 79) return { length: 1, mnemonic: `dec ${REG_NAMES[b0 - 72]}` };
-    if (b0 >= 80 && b0 <= 87) return { length: 1, mnemonic: `push ${REG_NAMES[b0 - 80]}` };
-    if (b0 >= 88 && b0 <= 95) return { length: 1, mnemonic: `pop ${REG_NAMES[b0 - 88]}` };
-    if (b0 === 96) return { length: 1, mnemonic: "pushad" };
-    if (b0 === 97) return { length: 1, mnemonic: "popad" };
-    if (b0 === 144) return { length: 1, mnemonic: "nop" };
-    if (b0 >= 145 && b0 <= 151) return { length: 1, mnemonic: `xchg eax, ${REG_NAMES[b0 - 144]}` };
-    if (b0 === 201) return { length: 1, mnemonic: "leave" };
-    if (b0 === 248) return { length: 1, mnemonic: "clc" };
-    if (b0 === 249) return { length: 1, mnemonic: "stc" };
-    if (b0 === 104) {
-      const immediate = signedDword(bytes, offset + 1);
-      if (immediate === void 0) return void 0;
-      return { length: 5, mnemonic: `push ${formatHex(immediate)}` };
-    }
-    if (b0 === 106) {
-      if (offset + 1 >= bytes.length) return void 0;
-      return { length: 2, mnemonic: `push ${formatHex(signedByte(bytes[offset + 1]))}` };
-    }
-    if (b0 >= 184 && b0 <= 191) {
-      const immediate = signedDword(bytes, offset + 1);
-      if (immediate === void 0) return void 0;
-      return { length: 5, mnemonic: `mov ${REG_NAMES[b0 - 184]}, ${formatHex(immediate)}` };
-    }
-    if (offset + 1 >= bytes.length) return void 0;
-    const b1 = bytes[offset + 1];
-    for (const entry of ALU_REG_OPCODES) {
-      if (b0 === entry.opcode) {
-        const decoded = decodeModRM(bytes, offset + 1);
-        if (!decoded) return void 0;
-        if (decoded.rm !== void 0) {
-          const dst2 = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
-          const src2 = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
-          return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst2}, ${src2}` };
-        }
-        if (entry.name !== "xchg" && entry.name !== "mov") return void 0;
-        if (!decoded.memory) return void 0;
-        const dst = entry.form === "rm" ? decoded.memory : REG_NAMES[decoded.reg];
-        const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : decoded.memory;
-        return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst}, ${src}` };
-      }
-    }
-    if (b0 === 141) {
-      const decoded = decodeModRM(bytes, offset + 1);
-      if (!(decoded == null ? void 0 : decoded.memory)) return void 0;
-      return { length: 1 + decoded.length, mnemonic: `lea ${REG_NAMES[decoded.reg]}, ${decoded.memory}` };
-    }
-    if (b0 === 247) {
-      const decoded = decodeModRM(bytes, offset + 1);
-      if (!decoded || decoded.rm === void 0) return void 0;
-      const op5 = b1 >> 3 & 7;
-      if (op5 === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
-      if (op5 === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
-      return void 0;
-    }
-    if (b0 === 255) {
-      const decoded = decodeModRM(bytes, offset + 1);
-      if (!decoded) return void 0;
-      const op5 = b1 >> 3 & 7;
-      const operand = decoded.rm !== void 0 ? REG_NAMES[decoded.rm] : decoded.memory;
-      if (!operand) return void 0;
-      if (op5 === 2) return { length: 1 + decoded.length, mnemonic: `call ${operand}` };
-      if (op5 === 4) return { length: 1 + decoded.length, mnemonic: `jmp ${operand}` };
-      return void 0;
-    }
-    if (b0 === 217) {
-      const name = FPU_D9_MNEMONICS[b1];
-      if (name) return { length: 2, mnemonic: name };
-      return void 0;
-    }
-    if (b0 === 131) {
-      if (offset + 2 >= bytes.length) return void 0;
-      const decoded = decodeModRM(bytes, offset + 1);
-      if (!decoded || decoded.rm === void 0) return void 0;
-      const op5 = b1 >> 3 & 7;
-      const imm8 = bytes[offset + 2];
-      const signed = imm8 > 127 ? imm8 - 256 : imm8;
-      const name = GRP1_NAMES[op5];
-      return { length: 3, mnemonic: `${name} ${REG_NAMES[decoded.rm]}, ${formatHex(signed < 0 ? signed >>> 0 : imm8)}` };
-    }
-    if (b0 === 129) {
-      const decoded = decodeModRM(bytes, offset + 1);
-      if (!decoded || decoded.rm === void 0) return void 0;
-      const immediateOffset = offset + 1 + decoded.length;
-      const imm = signedDword(bytes, immediateOffset);
-      if (imm === void 0) return void 0;
-      const op5 = b1 >> 3 & 7;
-      return { length: 1 + decoded.length + 4, mnemonic: `${GRP1_NAMES[op5]} ${REG_NAMES[decoded.rm]}, ${formatHex(imm)}` };
-    }
-    for (const entry of ALU_EAX_IMM32) {
-      if (b0 === entry.opcode) {
-        if (offset + 4 >= bytes.length) return void 0;
-        const imm = bytes[offset + 1] | bytes[offset + 2] << 8 | bytes[offset + 3] << 16 | bytes[offset + 4] << 24 >>> 0;
-        return { length: 5, mnemonic: `${entry.name} eax, ${formatHex(imm >>> 0)}` };
-      }
-    }
-    return void 0;
-  }
-  function tryDecodeSequence(bytes, startOffset, targetOffset, maxInsns) {
-    const insns = [];
-    let pos = startOffset;
-    while (pos < targetOffset && insns.length < maxInsns) {
-      const decoded = tryDecodeInsn(bytes, pos);
-      if (!decoded) return void 0;
-      pos += decoded.length;
-      insns.push(decoded);
-    }
-    return pos === targetOffset ? insns : void 0;
-  }
-  var PATTERN_SCANNER_PREFIXES = /* @__PURE__ */ new Set(["pop ", "push ", "pushad", "popad", "nop", "xchg eax, "]);
-  function isPatternScannerGadget(mnemonic) {
-    for (const prefix of PATTERN_SCANNER_PREFIXES) {
-      if (mnemonic.startsWith(prefix) || mnemonic === prefix.trimEnd()) return true;
-    }
-    return false;
-  }
-  function hasUsefulEffect(insns) {
-    if (insns.every((insn) => insn.mnemonic === "nop")) return false;
-    if (insns.length === 1 && isPatternScannerGadget(insns[0].mnemonic)) return false;
-    return true;
-  }
-  function dispatchKind(mnemonic) {
-    if (mnemonic.startsWith("jmp ")) return "JMP_DISPATCH";
-    if (mnemonic.startsWith("call ")) return "CALL_DISPATCH";
-    return void 0;
-  }
-  function isSequentialRetChain(mnemonics) {
-    return !mnemonics.some((mnemonic) => dispatchKind(mnemonic) !== void 0);
-  }
-  function scanBackward(options) {
-    var _a2, _b, _c;
-    if (getPointerSize() !== 4) {
-      return { gadgets: [], warnings: ["Backward scanning is x86-only."], stats: {} };
-    }
-    const maxResults = (_a2 = options.maxResults) != null ? _a2 : 500;
-    const maxInsns = (_b = options.maxInstructionsPerGadget) != null ? _b : 3;
-    const maxBack = (_c = options.maxBackwardBytes) != null ? _c : 12;
-    const scanOpts = {
-      module: options.module,
-      executableOnly: true,
-      maxResults: 200,
-      chunkSize: 16384
-    };
-    const scope = forEachSection(scanOpts);
-    const warnings = scope.warnings.map((w) => w);
-    const seen = /* @__PURE__ */ new Set();
-    const gadgets = [];
-    let terminatorsFound = 0;
-    let dispatchFound = 0;
-    let nonSequentialRejected = 0;
-    for (const section2 of scope.sections) {
-      const readAhead = maxBack + 6;
-      for (let offset = 0; offset < section2.size; offset += 16384) {
-        const chunkStart = section2.start + BigInt(offset);
-        const remaining = section2.size - offset;
-        const size = Math.min(remaining, 16384 + readAhead);
-        const bytes = tryReadMemory(chunkStart, size);
-        if (!bytes) continue;
-        const scanLimit = Math.min(bytes.length, remaining < 16384 ? remaining : 16384);
-        for (let i = 0; i < scanLimit; i++) {
-          const standalone = tryDecodeInsn(bytes, i);
-          const standaloneKind = standalone ? dispatchKind(standalone.mnemonic) : void 0;
-          if (standaloneKind) {
-            const addr = chunkStart + BigInt(i);
-            const key2 = addr.toString();
-            if (!seen.has(key2)) {
-              seen.add(key2);
-              gadgets.push({ address: addr, mnemonic: standalone.mnemonic, retImm: 0, kind: standaloneKind });
-              dispatchFound++;
-              if (gadgets.length >= maxResults) {
-                return {
-                  gadgets,
-                  warnings,
-                  stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 }
-                };
-              }
-            }
-          }
-          let retMnemonic;
-          let retImm = 0;
-          if (bytes[i] === 195) {
-            retMnemonic = "ret";
-          } else if (bytes[i] === 194 && i + 2 < bytes.length) {
-            retImm = bytes[i + 1] | bytes[i + 2] << 8;
-            if (retImm === 0 || retImm > 4096) continue;
-            retMnemonic = `ret ${formatHex(retImm)}`;
-          } else {
-            continue;
-          }
-          terminatorsFound++;
-          const termStart = i;
-          const lookBack = Math.min(termStart, maxBack);
-          for (let back = 1; back <= lookBack; back++) {
-            const candidateStart = termStart - back;
-            const insns = tryDecodeSequence(bytes, candidateStart, termStart, maxInsns);
-            if (!insns || insns.length === 0) continue;
-            if (!hasUsefulEffect(insns)) continue;
-            if (!isSequentialRetChain(insns.map((insn) => insn.mnemonic))) {
-              nonSequentialRejected++;
-              continue;
-            }
-            const addr = chunkStart + BigInt(candidateStart);
-            const key2 = addr.toString();
-            if (seen.has(key2)) continue;
-            seen.add(key2);
-            const parts = insns.map((insn) => insn.mnemonic);
-            parts.push(retMnemonic);
-            gadgets.push({ address: addr, mnemonic: parts.join(" ; "), retImm, kind: "RET_CHAIN" });
-            if (gadgets.length >= maxResults) {
-              return {
-                gadgets,
-                warnings,
-                stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 }
-              };
-            }
-          }
-        }
-      }
-    }
-    return {
-      gadgets,
-      warnings,
-      stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 }
-    };
-  }
-
   // src/analysis/live_gadgets.ts
   function discoverLiveGadgets(options = {}) {
     var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
@@ -20917,7 +21067,9 @@ ${INDENT}`)]);
     const seenAddresses = new Set(hits.map((h) => h.address.toString()));
     const backward = scanBackward({
       module: options.module,
-      maxResults: Math.min(Math.max(Math.floor((_d = options.maxBackwardGadgets) != null ? _d : 1e4), 1), 1e5),
+      // The scanner's own ceiling, not a budget. On the lab clone kernelbase's 2 MB of code scans fully in
+      // about 90 s; the old default of 10000 took 86 s there and stopped halfway, hiding half the module.
+      maxResults: Math.min(Math.max(Math.floor((_d = options.maxBackwardGadgets) != null ? _d : 1e5), 1), 1e5),
       maxInstructionsPerGadget: Math.min(Math.max(Math.floor((_e = options.maxInstructionsPerGadget) != null ? _e : 6), 1), 12),
       maxBackwardBytes: 12
     });
@@ -22562,6 +22714,7 @@ ${INDENT}`)]);
   var corpusOrigin = "rpplus";
   var corpusValidation = "unknown";
   var corpusBadchars;
+  var corpusComplete = false;
   var corpusGeneration = 0;
   var nextRopPlanId = 1;
   var ropPlans = /* @__PURE__ */ new Map();
@@ -23004,6 +23157,7 @@ ${INDENT}`)]);
     const scanCorpus = (text, options = {}, badchars) => {
       pendingImportedCorpus = void 0;
       corpusOrigin = "rpplus";
+      corpusComplete = false;
       corpusValidation = "unknown";
       corpusBadchars = badchars ? [...badchars] : [];
       invalidateCorpusPlans();
@@ -23016,8 +23170,8 @@ ${INDENT}`)]);
         filteredCount = removedCount;
         currentRopCorpus = filtered;
         if (removedCount > 0) {
-          const byteList3 = badchars.map((b) => `0x${(b & 255).toString(16).toUpperCase().padStart(2, "0")}`).join(" ");
-          warnings.push(`${removedCount} gadget(s) filtered \u2014 address contains badchar(s): ${byteList3}`);
+          const byteList4 = badchars.map((b) => `0x${(b & 255).toString(16).toUpperCase().padStart(2, "0")}`).join(" ");
+          warnings.push(`${removedCount} gadget(s) filtered \u2014 address contains badchar(s): ${byteList4}`);
         }
       } else {
         currentRopCorpus = raw;
@@ -23076,6 +23230,7 @@ ${INDENT}`)]);
         },
         { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardDispatch: 0, backwardNonSequentialRejected: 0, backwardGadgets: 0, backwardRawCandidates: 0, backwardFiltered: 0, backwardLimit: 0, backwardComplete: 1 }
       );
+      corpusComplete = !append && stats.backwardComplete === 1;
       const warnings = discoveries.flatMap((discovery) => discovery.warnings);
       const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
       for (let i = 0; i < modules.length; i++) {
@@ -23165,7 +23320,7 @@ ${INDENT}`)]);
       }
       const options = isPlainObject(args[0]) ? args[0] : parseScanLivePositionalArgs(args);
       const requested = Array.isArray(options.modules) ? options.modules : Array.isArray(options.module) ? options.module : [options.module];
-      const modules = requested.map((module) => module === void 0 ? void 0 : String(module).trim()).filter((module) => module === void 0 || module.length > 0);
+      const modules = requested.flatMap((module) => module === void 0 ? [void 0] : String(module).split(",")).map((module) => module === void 0 ? void 0 : String(module).trim()).filter((module) => module === void 0 || module.length > 0);
       const parsedBadchars = parseHexByteList(options.badchars);
       return scanLiveCorpus(
         modules.length > 0 ? modules : [void 0],
@@ -25279,34 +25434,186 @@ ${INDENT}`)]);
       });
       return toDxResult("Chain Verifier", rows);
     };
-    const printDepCandidates = (corpus, moduleName, badSet, style, exclude = []) => {
+    const shortName = (name) => {
+      var _a2;
+      return (_a2 = name.split("\\").pop()) != null ? _a2 : name;
+    };
+    const moduleLabel2 = (name) => {
+      var _a2, _b;
+      return shortName((_b = (_a2 = moduleInfoByName(name)) == null ? void 0 : _a2.name) != null ? _b : name);
+    };
+    const byteList3 = (bytes) => bytes.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+    const sameModule2 = (left, right) => {
+      const norm = (name) => shortName(name).toLowerCase().replace(/\.(dll|exe)$/, "");
+      return norm(left) === norm(right);
+    };
+    const sharedBadBytes = (info2, badSet) => {
+      const first = Number(info2.base);
+      const last = Number(info2.base + info2.size - BigInt(1));
+      const shared = [24, 16].filter((shift) => (first >>> shift & 255) === (last >>> shift & 255)).map((shift) => first >>> shift & 255);
+      return shared.filter((byte, i) => badSet.has(byte) && shared.indexOf(byte) === i);
+    };
+    const gadgetModules = (badSet) => listModulesWithMitigations().map((info2) => {
+      const bad = sharedBadBytes(info2, badSet);
+      const why = info2.aslr === "enabled" ? "ASLR" : info2.aslr !== "disabled" ? "its PE header is unreadable" : bad.length > 0 ? `every address holds the bad byte(s) ${byteList3(bad)}` : void 0;
+      return { info: info2, label: shortName(info2.name), why };
+    });
+    const IFEO = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options";
+    const perProgramDep = (exe) => {
+      let text = "";
+      try {
+        text = executeDebuggerCommand(`.shell -ci "x" reg query "${IFEO}\\${exe}" /s /v MitigationOptions`).join("\n");
+      } catch (_error) {
+        return void 0;
+      }
+      const value = /MitigationOptions\s+REG_BINARY\s+([0-9A-F]{2})/i.exec(text);
+      if (value) return (parseInt(value[1], 16) & 1) !== 0;
+      return /unable to find/i.test(text) ? false : void 0;
+    };
+    const slotsOf = (symbol) => {
+      var _a2;
+      const rows = quietly(() => api.sc.iat_find(symbol).rows);
+      return Array.from({ length: (_a2 = rows == null ? void 0 : rows.length) != null ? _a2 : 0 }, (_, i) => rows[i]).filter((row) => {
+        var _a3;
+        return new RegExp(`(^|!)${symbol}$`, "i").test(stripDml(String((_a3 = row.Symbol) != null ? _a3 : "")).trim());
+      }).map((row) => {
+        var _a3, _b, _c;
+        const owner = stripDml(String((_a3 = row.Owner) != null ? _a3 : ""));
+        const match = /0x([0-9a-fA-F]+)/.exec(stripDml(String((_b = row.Slot) != null ? _b : "")));
+        return { owner, slot: match ? parseInt(match[1], 16) >>> 0 : 0, fixed: ((_c = moduleInfoByName(owner)) == null ? void 0 : _c.aslr) !== "enabled" };
+      }).filter((row) => row.slot !== 0);
+    };
+    const depVerdict = () => {
+      const policyByte = tryReadMemory(BigInt(NX_POLICY_ADDRESS), 1);
+      const policy = policyByte ? NX_POLICIES[policyByte[0] & 3] : void 0;
+      const exe = listModulesWithMitigations().find((info2) => info2.name.toLowerCase().endsWith(".exe"));
+      const name = exe ? shortName(exe.name) : "the process";
+      const nx = (exe == null ? void 0 : exe.nxcompat) === "enabled";
+      const needsMore = policy === "OptIn" && exe !== void 0 && !nx;
+      const forced = needsMore ? perProgramDep(name) : false;
+      const optIn = needsMore && forced === false ? slotsOf("SetProcessDEPPolicy").map((row) => shortName(row.owner)) : [];
+      return __spreadValues({ name }, depState(policy, exe ? { name, nx, forced } : void 0, optIn));
+    };
+    const routeFor = (depApi, modules, badchars) => {
+      var _a2, _b;
+      const rows = slotsOf(depApi).filter((row) => row.fixed);
+      const own = (_a2 = rows.find((row) => modules.some((module) => sameModule2(row.owner, module)))) != null ? _a2 : rows[0];
+      if (own) return { api: depApi, owner: own.owner, slot: own.slot };
+      for (const dll of ["kernel32", "kernelbase"]) {
+        const snapshot = sc.api_plan(`${dll}!${depApi}`, badchars);
+        const anchors = snapshot.candidates.filter((candidate) => {
+          var _a3;
+          return candidate.strategy === "derived-address" && candidate.anchor && ((_a3 = moduleInfoByName(candidate.ownerModule)) == null ? void 0 : _a3.aslr) !== "enabled";
+        });
+        const anchor = (_b = anchors.find((candidate) => modules.some((module) => sameModule2(candidate.ownerModule, module)))) != null ? _b : anchors[0];
+        if (anchor && anchor.anchor) {
+          return {
+            api: depApi,
+            owner: anchor.ownerModule,
+            slot: Number(anchor.slot) >>> 0,
+            delta: { dll, anchor: anchor.anchor.symbol, value: Number(anchor.anchor.delta) >>> 0, anchorAt: Number(anchor.pointer) >>> 0, apiAt: Number(anchor.target.address) >>> 0 }
+          };
+        }
+      }
+      return void 0;
+    };
+    const solveStyles = (scanned, modules, badchars, exclude) => {
+      var _a2;
+      const planBoth = (index) => ({ skeleton: planJobs(index, "skeleton", exclude), pushad: planJobs(index, "pushad", exclude) });
+      let plans = planBoth(scanned);
+      const open = [];
+      for (const plan of [...plans.skeleton, ...plans.pushad]) if (!plan.pick && open.every((job) => job.key !== plan.job.key)) open.push(plan.job);
+      if (open.length === 0 || modules.length === 0) return { corpus: scanned, plans, settled: {} };
+      const encodings = [];
+      const owners = open.map((job) => encodingsFor(job).map((encoding) => encodings.push(encoding) - 1));
+      const clean = badcharAddressFilter(badchars, 4);
+      const known = new Set(((_a2 = scanned == null ? void 0 : scanned.gadgets) != null ? _a2 : []).map((gadget) => gadgetAddress(gadget)));
+      const hits = [];
+      const found = [];
+      const dirty = encodings.map(() => 0);
+      for (const module of modules) {
+        const search = findEncodings(module, encodings, (address) => clean.predicate({ address }), 8);
+        search.dirty.forEach((count, i) => {
+          dirty[i] += count;
+        });
+        for (const hit of search.hits) {
+          found.push({ encoding: hit.encoding, address: Number(hit.address) });
+          if (!known.has(Number(hit.address))) hits.push({ mnemonic: hit.mnemonic, address: hit.address, module });
+        }
+      }
+      const corpus = hits.length > 0 ? mergeCapabilityIndexes([...scanned ? [scanned] : [], buildCapabilityIndexFromSequences(sequencesFromLiveHits(hits))]) : scanned;
+      if (hits.length > 0) plans = planBoth(corpus);
+      const settled = {};
+      open.forEach((job, i) => {
+        const mine = owners[i];
+        settled[job.key] = {
+          modules: modules.map(moduleLabel2).join(", "),
+          encodings: mine.length,
+          clean: found.filter((hit) => mine.indexOf(hit.encoding) >= 0).map((hit) => hit.address),
+          dirty: mine.reduce((sum, index) => sum + dirty[index], 0)
+        };
+      });
+      return { corpus, plans, settled };
+    };
+    const otherStyle = (style) => style === "pushad" ? "skeleton" : "pushad";
+    const neededBy = (job, style) => jobsFor(style).some((other) => other.capabilities.some((kind) => job.capabilities.indexOf(kind) >= 0) && (other.register === void 0 || other.register === job.register));
+    const WHY_NOT_NEEDED = { capture: ": pushad pushes ESP itself" };
+    const titles = (plans) => plans.map((plan) => plan.job.title).join(", ");
+    const chooseStyle = (solved) => {
+      const missing = (style) => solved.plans[style].filter((plan) => !plan.pick).length;
+      return missing("skeleton") <= missing("pushad") ? "skeleton" : "pushad";
+    };
+    const printDepCandidates = (solved, modules, badSet, style, exclude = []) => {
       var _a2;
       info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
-      const plans = planJobs(corpus, style, exclude);
+      const plans = solved.plans[style];
       for (const plan of plans) {
-        for (const line of planLines(plan)) print(line);
+        const settled = solved.settled[plan.job.key];
+        const lines = planLines(plan);
+        if (settled && plan.verdicts.length === 0) lines[0] = `  ${plan.job.title}: none in ${settled.modules}`;
+        for (const line of lines) print(line);
+        if (settled) for (const line of settledLines(plan, settled, exclude)) print(line);
       }
       let jmpEsp;
       if (style === "pushad") {
         for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
-          echo("find_bytes", [moduleName, bytes, 20]);
-          invoke("find_bytes", [moduleName, bytes, 20]);
-          const hits = ((_a2 = lastResult == null ? void 0 : lastResult.findings) != null ? _a2 : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0).slice(0, 3);
-          print(`  ${label}: ${hits.length > 0 ? hits.map(hex325).join("  ") : "none without bad bytes"}`);
+          const hits = [];
+          for (const module of modules) {
+            echo("find_bytes", [module, bytes, 20]);
+            invoke("find_bytes", [module, bytes, 20]);
+            hits.push(...((_a2 = lastResult == null ? void 0 : lastResult.findings) != null ? _a2 : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0));
+          }
+          print(`  ${label}: ${hits.length > 0 ? hits.slice(0, 3).map(hex325).join("  ") : "none without bad bytes"}`);
           jmpEsp = jmpEsp != null ? jmpEsp : hits[0];
         }
       }
-      const missing = plans.filter((plan) => !plan.pick).map((plan) => plan.job.title);
-      if (missing.length > 0) warn(`No candidate for: ${missing.join(", ")}. Scan more modules with rop.scan_live(..., true) or use another method.`);
-      return { plans, jmpEsp, missing };
+      const missing = plans.filter((plan) => !plan.pick);
+      const where = modules.map(moduleLabel2).join(", ");
+      if (missing.length > 0) warn(`No gadget in ${where} for: ${titles(missing)}. Each was searched for in every byte of it, so this is the module, not the scan.`);
+      const other = otherStyle(style);
+      const blocking = missing.filter((plan) => !neededBy(plan.job, other));
+      if (blocking.length > 0) {
+        const otherMissing = solved.plans[other].filter((plan) => !plan.pick);
+        warn(`${titles(blocking)} block${blocking.length === 1 ? "s" : ""} the ${style} style, and the ${other} style needs no such gadget${blocking.map((plan) => {
+          var _a3;
+          return (_a3 = WHY_NOT_NEEDED[plan.job.key]) != null ? _a3 : "";
+        }).join("")}.`);
+        warn(otherMissing.length === 0 ? `In ${where} the ${other} style has a gadget for every job: dx @$osed().dep_candidates("${modules.join(",")}", "${byteList3([...badSet])}", "${other}")` : `In ${where} the ${other} style lacks ${titles(otherMissing)}, so it is blocked too.`);
+      }
+      return { plans, jmpEsp, missing: missing.map((plan) => plan.job.title) };
+    };
+    const loadedCorpusCovers = (modules, badchars) => {
+      const loaded = corpusModules.map((entry) => entry.name);
+      const same = (left, right) => left.length === right.length && left.every((byte) => right.indexOf(byte) >= 0);
+      return currentRopCorpus !== void 0 && corpusOrigin === "live" && corpusComplete && loaded.length === modules.length && modules.every((module) => loaded.some((name) => sameModule2(name, module))) && same(corpusBadchars != null ? corpusBadchars : [], badchars) && corpusStaleModules().length === 0;
     };
     const executeDepCandidates = (...args) => {
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("dep_candidates");
       }
       const [moduleArg, badArg, styleArg] = args;
-      const style = String(styleArg != null ? styleArg : "skeleton").trim().toLowerCase();
-      const moduleName = typeof moduleArg === "string" ? moduleArg.trim() : "";
+      const styleText = String(styleArg != null ? styleArg : "skeleton").trim().toLowerCase();
+      const modules = (typeof moduleArg === "string" ? moduleArg : "").split(",").map((name) => name.trim()).filter(Boolean);
       const badText = typeof badArg === "string" ? badArg : "";
       const badchars = parseHexByteList(badText);
       const fail3 = (message) => {
@@ -25316,11 +25623,14 @@ ${INDENT}`)]);
         setResult({ command: "dep_candidates", args: { module: moduleArg, badchars: badArg, style: styleArg }, success: false, findings: [], warnings: [], errors: [message] });
         return toDxResult("DEP Candidates", rows2);
       };
-      if (!DEP_PLAN_STYLES.includes(style)) return fail3(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
+      if (styleText !== "auto" && !DEP_PLAN_STYLES.includes(styleText)) return fail3(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
       if (!Array.isArray(badchars)) return fail3('badchars must be hex bytes such as "00 0A 0D".');
-      if (!moduleName || !moduleInfoByName(moduleName)) return fail3(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
-      const corpus = mergeCapabilityIndexes(discoverLiveIndexes([moduleName], { badchars }).indexes);
-      const { plans, missing } = printDepCandidates(corpus, moduleName, new Set(badchars), style);
+      const unknown = modules.length === 0 ? [""] : modules.filter((module) => !moduleInfoByName(module));
+      if (unknown.length > 0) return fail3(`Module "${unknown[0]}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
+      const scanned = loadedCorpusCovers(modules, badchars) ? currentRopCorpus : mergeCapabilityIndexes(discoverLiveIndexes(modules, { badchars }).indexes);
+      const solved = solveStyles(scanned, modules, badchars, []);
+      const style = styleText === "auto" ? chooseStyle(solved) : styleText;
+      const { plans, missing } = printDepCandidates(solved, modules, new Set(badchars), style);
       const rows = plans.map((plan) => ({
         Job: plan.job.title,
         Pick: plan.pick ? hex325(gadgetAddress(plan.pick.gadget)) : "none",
@@ -25328,7 +25638,7 @@ ${INDENT}`)]);
       }));
       setResult({
         command: "dep_candidates",
-        args: { module: moduleName, badchars: badText, style },
+        args: { module: modules.join(","), badchars: badText, style },
         success: true,
         findings: rows,
         warnings: missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : [],
@@ -25337,35 +25647,57 @@ ${INDENT}`)]);
       return toDxResult("DEP Candidates", rows);
     };
     const executeDepPlan = (...args) => {
-      var _a2, _b, _c, _d, _e;
+      var _a2, _b, _c, _d, _e, _f, _g, _h;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("dep_plan");
       }
-      const [apiArg, moduleArg, badArg, styleArg, stageArg, excludeArg] = args;
-      const depApi = DEP_PLAN_APIS.find((name) => name.toLowerCase() === String(apiArg != null ? apiArg : "").trim().toLowerCase());
-      const style = String(styleArg != null ? styleArg : "skeleton").trim().toLowerCase();
+      const [apiArg, moduleArg, badArg, styleArg, stageArg, excludeArg, anywayArg] = depPlanArgs(args);
+      const apiText = String(apiArg != null ? apiArg : "").trim();
+      const autoApi = apiText === "";
+      const requestedApi = DEP_PLAN_APIS.find((name) => name.toLowerCase() === apiText.toLowerCase());
+      const styleText = styleArg === void 0 ? "skeleton" : String(styleArg).trim().toLowerCase() || "auto";
       const stage = stageArg === void 0 ? 1 : Math.trunc(Number(stageArg));
       const excludeText = typeof excludeArg === "string" ? excludeArg.trim() : "";
       const exclude = excludeText ? excludeText.split(/[\s,]+/).map((token) => parseInt(token.replace(/^0x/i, ""), 16) >>> 0) : [];
-      const moduleName = typeof moduleArg === "string" ? moduleArg.trim() : "";
+      const anyway = anywayArg === true;
+      const moduleText = typeof moduleArg === "string" ? moduleArg.trim() : "";
       const badText = typeof badArg === "string" ? badArg : "";
       const badchars = parseHexByteList(badText);
       const fail3 = (message) => {
         const rows = [{ Error: message }];
         renderRows("DEP Plan", rows);
-        info("Usage: dx @$osed().dep_plan(api, module, badchars, style?, firstStage?)");
+        info("Usage: dx @$osed().dep_plan(badchars)    or    dx @$osed().dep_plan(api, module, badchars, style?, firstStage?, exclude?, anyway?)");
         setResult({ command: "dep_plan", args: { api: apiArg, module: moduleArg, badchars: badArg, style: styleArg }, success: false, findings: [], warnings: [], errors: [message] });
         return toDxResult("DEP Plan", rows);
       };
-      if (!depApi) return fail3(`api must be one of ${DEP_PLAN_APIS.join(", ")}.`);
-      if (!DEP_PLAN_STYLES.includes(style)) return fail3(`style must be one of ${DEP_PLAN_STYLES.join(", ")}.`);
+      if (!autoApi && !requestedApi) return fail3(`api must be one of ${DEP_PLAN_APIS.join(", ")}, or "" to let the tool choose.`);
+      if (styleText !== "auto" && !DEP_PLAN_STYLES.includes(styleText)) return fail3(`style must be one of ${DEP_PLAN_STYLES.join(", ")}, or "auto".`);
       if (!Number.isFinite(stage) || stage < 1) return fail3("firstStage must be the number of the next free payloadN() in your file, 1 or more.");
       if (exclude.some((address) => !Number.isFinite(address) || address === 0)) return fail3('exclude must be gadget addresses in hex, such as "6A42F3CD 6A411118".');
       if (!Array.isArray(badchars)) return fail3('badchars must be hex bytes such as "00 0A 0D".');
-      const moduleInfo = moduleName ? moduleInfoByName(moduleName) : void 0;
-      if (!moduleInfo) return fail3(`Module "${moduleName}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
-      section(dxCall("dep_plan", excludeText ? [depApi, moduleName, badText, style, stage, excludeText] : [depApi, moduleName, badText, style, stage]));
+      const named2 = moduleText.split(",").map((name) => name.trim()).filter(Boolean);
+      const missingModule = named2.find((name) => !moduleInfoByName(name));
+      if (missingModule) return fail3(`Module "${missingModule}" is not loaded. dx @$osed().modules() lists the loaded modules.`);
       const badSet = new Set(badchars);
+      const candidates2 = gadgetModules(badSet);
+      const usable = candidates2.filter((entry) => entry.why === void 0);
+      const chosen = named2.length > 0 ? named2.map((name) => candidates2.find((entry) => sameModule2(entry.info.name, moduleInfoByName(name).name))).filter((entry) => entry !== void 0) : usable;
+      const modules = named2.length > 0 ? named2 : usable.map((entry) => entry.label);
+      const modulesArg = modules.join(",");
+      const modulesLabel = chosen.map((entry) => entry.label).join(", ") || "no module";
+      const routes = (autoApi ? DEP_PLAN_APIS : [requestedApi]).map((name) => routeFor(name, modules, badchars));
+      const route = (_a2 = routes.find((candidate) => candidate !== void 0 && !candidate.delta)) != null ? _a2 : routes.find((candidate) => candidate !== void 0);
+      const depApi = (_c = (_b = route == null ? void 0 : route.api) != null ? _b : requestedApi) != null ? _c : "VirtualAlloc";
+      const callArgs = (styleValue, force) => [
+        autoApi && !route ? "" : depApi,
+        modulesArg,
+        badText,
+        styleValue,
+        stage,
+        ...excludeText || force ? [excludeText] : [],
+        ...force ? [true] : []
+      ];
+      section(dxCall("dep_plan", callArgs(styleText, anyway)));
       const n = DEP_PLAN_SECTIONS;
       const summary = [];
       const SEPARATOR = "# ------------------ copy into your exploit ------------------";
@@ -25378,118 +25710,153 @@ ${INDENT}`)]);
         print(SEPARATOR);
         for (const line of block.lines) print(line);
       };
+      const dep = depVerdict();
+      if (dep.enforced === false) {
+        section(`DEP is OFF for ${dep.name}: no chain needed`);
+        error(`The stack executes: ${dep.why}.`);
+        const jumps = [];
+        for (const module of modules) {
+          echo("find_bytes", [module, "FF E4", 20, badText]);
+          invoke("find_bytes", [module, "FF E4", 20, badText]);
+          jumps.push(...((_d = lastResult == null ? void 0 : lastResult.findings) != null ? _d : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit)));
+        }
+        error(jumps.length > 0 ? `Jump straight to your shellcode: payload = b"A" * OFFSET + p32(${hex325(jumps[0])}) + b"\\x90" * 16 + shellcode    (${hex325(jumps[0])} is jmp esp, no bad byte)` : `No jmp esp without a bad byte in ${modulesLabel}. dx @$osed().find_bytes("", "FF E4", 20, "${badText}") searches every module.`);
+        if (!anyway) {
+          error(`The chain sections are skipped: they solve a problem this process does not have. To build the chain anyway, as an exercise: ${dxCall("dep_plan", callArgs(styleText, true))}`);
+          setResult({ command: "dep_plan", args: { badchars: badText }, success: true, findings: [{ dep: "off", why: dep.why, jmpEsp: jumps[0] }], warnings: [], errors: [] });
+          return toDxResult("DEP Plan", [{ Section: "DEP", Result: `off: ${dep.why}` }]);
+        }
+      } else if (dep.enforced === true) {
+        section(`DEP is on for ${dep.name}`);
+        info(`${dep.why[0].toUpperCase()}${dep.why.slice(1)}. The stack does not execute, so the shellcode needs the chain below.`);
+      } else {
+        section(`DEP for ${dep.name}: unknown`);
+        warn(`Assumed on: ${dep.why}.`);
+      }
+      summary.push({ Section: "DEP", Result: dep.enforced === void 0 ? "unknown, assumed on" : dep.enforced ? "on" : "off, built anyway" });
       let blocker;
-      const shortName = (name) => {
-        var _a3;
-        return (_a3 = name.split("\\").pop()) != null ? _a3 : name;
-      };
-      const moduleLabel2 = shortName(moduleInfo.name);
-      const stop = (what, ...next) => {
+      const stop = (layer, what, ...next) => {
         if (blocker) return;
-        blocker = { what, next };
-        section(`STOP: no ${depApi} chain from ${moduleLabel2}`);
-        error(what);
+        blocker = { layer, what, next };
+        section(`STOP: no ${depApi} chain from ${modulesLabel}`);
+        error(`The ${layer} layer fails: ${what}`);
         for (const line of next) error(line);
       };
-      const addressElsewhere = (first2) => [
-        `Keep ${depApi} and change where its address comes from, in this order:`,
-        `  1. ${first2}`,
-        `  2. dx @$osed().sc.iat_find("GetProcAddress")    if that is imported, resolve ${depApi} at run time instead of reading a slot of its own.`,
-        `  3. A fixed delta from a neighbouring kernel32 import, worked out once and written into the exploit. Any Windows update moves it, so this is the last resort.`,
-        `Only if you are free to choose the API: dx @$osed().rop.generate("auto", "", "${badText}", "${moduleName}")    scores the six bypass APIs by slot and bad chars.`
-      ];
-      const first = Number(moduleInfo.base);
-      const last = Number(moduleInfo.base + moduleInfo.size - BigInt(1));
-      const fixedByte = (shift) => (first >>> shift & 255) === (last >>> shift & 255) ? first >>> shift & 255 : void 0;
-      section(`[1/${n}] Module protections for ${moduleLabel2}`);
-      echo("modules", [moduleName]);
-      invoke("modules", [moduleName]);
-      const sharedBad = [...new Set([24, 16].map(fixedByte).filter((byte) => byte !== void 0 && badSet.has(byte)))];
-      const moduleWarnings = [
-        moduleInfo.aslr === "enabled" ? `${moduleLabel2} has ASLR: its addresses change on every run, so a chain built from it needs a leak.` : void 0,
-        moduleInfo.preferredBase !== BigInt(0) && moduleInfo.base !== moduleInfo.preferredBase ? `${moduleLabel2} is loaded at ${hex325(first)}, not at its preferred base ${hex325(Number(moduleInfo.preferredBase))}. Without ASLR it stays there for this boot, but every address below is this process's: never take one from the file on disk.` : void 0,
-        sharedBad.length > 0 ? `Every address in ${moduleLabel2} (${hex325(first)} to ${hex325(last)}) holds the bad byte(s) ${sharedBad.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ")}, so no gadget from it is usable.` : void 0
-      ].filter((warning) => warning !== void 0);
-      for (const warning of moduleWarnings) warn(warning);
-      if (moduleWarnings.length === 0) info(`${moduleLabel2} spans ${hex325(first)} to ${hex325(last)}: no ASLR, and its fixed high bytes are clean. The scan in [3/${n}] drops each address whose low bytes are bad.`);
+      const usableNext = () => usable.length > 0 ? [`Next: dx @$osed().dep_plan(${JSON.stringify(badText)})    builds from the modules that can give gadgets: ${usable.map((entry) => entry.label).join(", ")}.`] : [];
+      section(`[1/${n}] Module protections for ${modulesLabel}`);
+      echo("modules", named2.length === 1 ? [named2[0]] : []);
+      invoke("modules", named2.length === 1 ? [named2[0]] : []);
+      const moduleWarnings = [];
+      for (const entry of chosen) {
+        const info2 = entry.info;
+        const first = Number(info2.base);
+        const last = Number(info2.base + info2.size - BigInt(1));
+        const bad = sharedBadBytes(info2, badSet);
+        const warnings = [
+          info2.aslr === "enabled" ? `${entry.label} has ASLR: its addresses change on every run, so a chain built from it needs a leak.` : void 0,
+          info2.preferredBase !== BigInt(0) && info2.base !== info2.preferredBase ? `${entry.label} is loaded at ${hex325(first)}, not at its preferred base ${hex325(Number(info2.preferredBase))}. Without ASLR it stays there for this boot, but every address below is this process's: never take one from the file on disk.` : void 0,
+          bad.length > 0 ? `Every address in ${entry.label} (${hex325(first)} to ${hex325(last)}) holds the bad byte(s) ${byteList3(bad)}, so no gadget from it is usable.` : void 0
+        ].filter((warning) => warning !== void 0);
+        for (const warning of warnings) warn(warning);
+        if (warnings.length === 0) info(`${entry.label} spans ${hex325(first)} to ${hex325(last)}: no ASLR, and its fixed high bytes are clean. The scan in [3/${n}] drops each address whose low bytes are bad.`);
+        moduleWarnings.push(...warnings);
+      }
+      if (named2.length === 0) {
+        const fixedOut = candidates2.filter((entry) => entry.why !== void 0 && entry.info.aslr !== "enabled");
+        const moving = candidates2.filter((entry) => entry.info.aslr === "enabled").length;
+        info(`Gadgets come from every module that can give one: ${modulesLabel}. Not usable: ${[...fixedOut.map((entry) => `${entry.label}, ${entry.why}`), `${moving} with ASLR`].join("; ")}.`);
+      }
       printBlock(HELPER_BLOCK);
-      if (moduleInfo.aslr === "enabled") {
-        stop(
-          `${moduleLabel2} has ASLR: every gadget address in it moves on each run, so no chain built from it survives a reboot. This is the one case where you change module, and the API stays as it is.`,
-          `Next: dx @$osed().modules()    pick one with ASLR disabled and run dep_plan again with it.`
-        );
+      const unusable = chosen.find((entry) => entry.why !== void 0);
+      if (chosen.length === 0) {
+        const fixedOut = candidates2.filter((entry) => entry.info.aslr !== "enabled");
+        stop("module", `no loaded module can give gadgets: ${fixedOut.length > 0 ? fixedOut.map((entry) => `${entry.label} (${entry.why})`).join(", ") : "every one has ASLR"}${fixedOut.length > 0 ? ", and the rest have ASLR" : ""}.`);
+      } else if ((unusable == null ? void 0 : unusable.info.aslr) === "enabled") {
+        stop("module", `${unusable.label} has ASLR: every gadget address in it moves on each run, so no chain built from it survives a reboot. This is the one case where you change module, and the API stays as it is.`, ...usableNext());
+      } else if (unusable) {
+        stop("module", `${(_e = unusable.why) == null ? void 0 : _e.replace(/^every address/, `every address in ${unusable.label}`)}, so no gadget from it is usable.`, ...usableNext());
       }
       summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
       section(`[2/${n}] IAT slot of ${depApi}`);
       echo("sc.iat_find", [depApi]);
-      const iatRows = api.sc.iat_find(depApi).rows;
-      const slotRows = Array.from({ length: (_a2 = iatRows == null ? void 0 : iatRows.length) != null ? _a2 : 0 }, (_, i) => iatRows[i]).filter((row) => {
-        var _a3;
-        return new RegExp(`(^|!)${depApi}$`, "i").test(stripDml(String((_a3 = row.Symbol) != null ? _a3 : "")).trim());
-      });
-      const ownerAslrOf = (row) => {
-        var _a3, _b2;
-        return ((_b2 = moduleInfoByName(stripDml(String((_a3 = row.Owner) != null ? _a3 : "")))) == null ? void 0 : _b2.aslr) === "enabled";
-      };
-      const chosen = (_c = (_b = slotRows.find((row) => {
-        var _a3;
-        return stripDml(String((_a3 = row.Owner) != null ? _a3 : "")).toLowerCase().includes(moduleName.toLowerCase());
-      })) != null ? _b : slotRows.find((row) => !ownerAslrOf(row))) != null ? _c : slotRows[0];
-      const slotMatch = chosen ? /0x([0-9a-fA-F]+)/.exec(stripDml(String((_d = chosen.Slot) != null ? _d : ""))) : null;
-      const iatSlot = slotMatch ? parseInt(slotMatch[1], 16) >>> 0 : void 0;
+      api.sc.iat_find(depApi);
+      const iatSlot = route == null ? void 0 : route.slot;
       const slotBad = iatSlot === void 0 ? [] : addressBadBytes(BigInt(iatSlot), 4, badSet);
-      if (iatSlot === void 0) {
+      const owner = route ? shortName(route.owner) : "";
+      if (!route) {
+        const moving = slotsOf(depApi).filter((row) => !row.fixed).map((row) => shortName(row.owner));
+        const other = autoApi ? void 0 : DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => routeFor(name, modules, badchars)).find((found) => found !== void 0);
         stop(
-          `No module loaded right now imports ${depApi}, so there is no slot to read its address from. This is the rare one: an exam target is normally built so the API it mandates is importable.`,
-          ...addressElsewhere(`dx @$osed().sc.iat_find("${depApi}")    run it again at the crash, when more DLLs are mapped. Any importer serves, it does not have to be ${moduleLabel2}: the IAT you read and the module your gadgets come from are independent. It only has to show ASLR disabled in modules().`)
+          "API",
+          `no module with ASLR disabled imports ${autoApi ? DEP_PLAN_APIS.join(", ") : depApi}${moving.length > 0 ? ` (${moving.join(", ")} ${moving.length === 1 ? "does, and it has" : "do, and they have"} ASLR)` : ""}, nor any other export of kernel32 or kernelbase to reach it from by a fixed distance. Its address needs a leak first.`,
+          ...other ? [`If you are free to choose the API, ${other.api} has a route: dx @$osed().dep_plan("${other.api}", "${modulesArg}", "${badText}")`] : []
         );
+      } else if (route.delta) {
+        const delta = route.delta;
+        echo("rop.api_plan", [`${delta.dll}!${depApi}`, badText]);
+        executeRopApiPlan(`${delta.dll}!${depApi}`, badText);
+        const signed = delta.value > 2147483647 ? `- ${hex325(-delta.value >>> 0)}` : `+ ${hex325(delta.value)}`;
+        info(`No module with ASLR disabled imports ${depApi} itself, but ${owner} imports ${delta.dll}!${delta.anchor}, at slot ${hex325(route.slot)}. ${depApi} is a fixed distance from it inside ${delta.dll}: ${depApi} = [${hex325(route.slot)}] ${signed}, measured now with ${delta.anchor} at ${hex325(delta.anchorAt)} and ${depApi} at ${hex325(delta.apiAt)}. The chain reads the slot and adds API_DELTA.`);
+        warn(`That distance holds for this build of ${delta.dll} only. Any Windows update moves it, so the exploit is right for the machine it was measured on: run this again on the target.`);
+        const direct = DEP_PLAN_APIS.filter((name) => name !== depApi).map((name) => routeFor(name, modules, badchars)).find((other) => other !== void 0 && !other.delta);
+        if (direct) info(`If you are free to choose the API, ${direct.api} needs no distance: ${shortName(direct.owner)} imports it at ${hex325(direct.slot)}. dx @$osed().dep_plan("${direct.api}", "${modulesArg}", "${badText}")`);
       } else {
-        const owner = stripDml(String(chosen.Owner));
-        info(`Slot ${hex325(iatSlot)} in ${owner}. The chain reads the API address from it with mov eax, [eax].`);
-        if (!owner.toLowerCase().includes(moduleName.toLowerCase())) {
-          if (ownerAslrOf(chosen)) {
-            stop(
-              `${moduleLabel2} does not import ${depApi}, and every module that does has ASLR, starting with ${owner}: the slot address moves on every boot, so reading it needs a leak first.`,
-              ...addressElsewhere(`dx @$osed().sc.iat_find("${depApi}")    the Owner column lists every importer; you need one whose module shows ASLR disabled in modules(). It does not have to be ${moduleLabel2}: the IAT you read and the module your gadgets come from are independent.`)
-            );
-          } else {
-            warn(`${moduleLabel2} does not import ${depApi}; this slot belongs to ${owner}. Check the other importers with sc.iat_find if you would rather stay inside one module.`);
-          }
-        }
-        if (slotBad.length > 0) info(`The slot address holds the bad byte(s) ${slotBad.map((b) => hex325(b).slice(-2)).join(" ")}. That is the usual case and nothing breaks: [5/${n}] builds the address from clean constants and the chain never sends it raw.`);
-        else info("The slot address has no bad byte, so it can be popped as it is.");
+        info(`Slot ${hex325(route.slot)} in ${owner}. The chain reads the API address from it with mov eax, [eax].`);
+        if (!modules.some((module) => sameModule2(route.owner, module))) warn(`${modulesLabel} does not import ${depApi}; this slot belongs to ${owner}, which does not move either. The IAT you read and the modules your gadgets come from are independent.`);
       }
-      printBlock(slotBlock(depApi, moduleName, iatSlot, badchars).block);
-      summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === void 0 ? "not found" : `${hex325(iatSlot)}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
-      section(`[3/${n}] Gadget corpus from ${moduleName}`);
-      echo("rop.scan_live", [moduleName, badText]);
-      executeRopScanLive(moduleName, badText);
-      const corpus = currentRopCorpus;
-      const gadgetCount = (_e = corpus == null ? void 0 : corpus.gadgets.length) != null ? _e : 0;
-      info(`${gadgetCount} gadgets and ${corpus ? summarizeCapabilities(corpus).length : 0} capabilities, every address free of the bad bytes.`);
+      if (route && slotBad.length > 0) info(`The slot address holds the bad byte(s) ${byteList3(slotBad)}. That is the usual case and nothing breaks: [5/${n}] builds the address from clean constants and the chain never sends it raw.`);
+      else if (route) info("The slot address has no bad byte, so it can be popped as it is.");
+      printBlock(slotBlock(depApi, owner || modulesLabel, iatSlot, badchars, route == null ? void 0 : route.delta).block);
+      summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === void 0 ? "no route" : `${hex325(iatSlot)}${(route == null ? void 0 : route.delta) ? ` + delta via ${route.delta.anchor}` : ""}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
+      const moduleFailed = blocker !== void 0 && blocker.layer === "module";
+      section(`[3/${n}] Gadget corpus from ${modulesLabel}`);
+      let scanned;
+      if (moduleFailed) error("Skipped: no module here can give gadgets. See the STOP above.");
+      else if (loadedCorpusCovers(modules, badchars)) {
+        scanned = currentRopCorpus;
+        info(`Using the corpus already loaded: a complete live scan of ${modulesLabel} for these bad chars, so scanning again could only find the same gadgets.`);
+      } else {
+        echo("rop.scan_live", [modulesArg, badText]);
+        executeRopScanLive(modulesArg, badText);
+        scanned = currentRopCorpus;
+      }
+      const gadgetCount = (_f = scanned == null ? void 0 : scanned.gadgets.length) != null ? _f : 0;
+      if (!moduleFailed) info(`${gadgetCount} gadgets and ${scanned ? summarizeCapabilities(scanned).length : 0} capabilities, every address free of the bad bytes.`);
       printBlock(CORPUS_BLOCK);
-      summary.push({ Section: `[3/${n}] corpus`, Result: `${gadgetCount} gadgets` });
+      summary.push({ Section: `[3/${n}] corpus`, Result: moduleFailed ? "skipped" : `${gadgetCount} gadgets` });
       const pickCave = (minSize, capability2) => {
-        const { caves } = findCodeCaves(moduleName, minSize, 25, badText, capability2);
-        const found = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
-        if (!found) return void 0;
-        return Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address);
+        for (const module of modules) {
+          const { caves } = findCodeCaves(module, minSize, 25, badText, capability2);
+          const found = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
+          if (found) return Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address);
+        }
+        return void 0;
       };
-      const writable = depApi === "VirtualAlloc" ? void 0 : quietly(() => pickCave(4, "STAGING"));
-      const cave = depApi === "WriteProcessMemory" ? quietly(() => pickCave(528, "EXEC")) : void 0;
-      section(`[4/${n}] The gadget picked per job (${style} style)`);
-      echo("dep_candidates", [moduleName, badText, style]);
-      if (exclude.length > 0) info(`Excluding ${exclude.length} gadget(s) by request: ${exclude.map(hex325).join(", ")}. The chain is solved again without them, so other jobs may pick differently.`);
-      const { plans, jmpEsp, missing } = printDepCandidates(corpus, moduleName, badSet, style, exclude);
+      const writable = depApi === "VirtualAlloc" || moduleFailed ? void 0 : quietly(() => pickCave(4, "STAGING"));
+      const cave = depApi === "WriteProcessMemory" && !moduleFailed ? quietly(() => pickCave(528, "EXEC")) : void 0;
+      const solved = moduleFailed ? void 0 : solveStyles(scanned, modules, badchars, exclude);
+      const style = styleText === "auto" ? solved ? chooseStyle(solved) : "skeleton" : styleText;
+      const corpus = solved == null ? void 0 : solved.corpus;
+      const otherBlocked = solved ? titles(solved.plans[otherStyle(style)].filter((plan) => !plan.pick)) : "";
+      section(`[4/${n}] The gadget picked per job (${style} style${styleText === "auto" && otherBlocked ? `: the ${otherStyle(style)} style lacks ${otherBlocked}` : ""})`);
+      let plans = [];
+      let jmpEsp;
+      let missing = [];
+      if (solved) {
+        echo("dep_candidates", [modulesArg, badText, style]);
+        if (exclude.length > 0) info(`Excluding ${exclude.length} gadget(s) by request: ${exclude.map(hex325).join(", ")}. The chain is solved again without them, so other jobs may pick differently.`);
+        ({ plans, jmpEsp, missing } = printDepCandidates(solved, modules, badSet, style, exclude));
+      } else error("Skipped: there is no corpus. See the STOP above.");
       const solvable = corpus && exclude.length > 0 ? buildCapabilities(corpus.gadgets.filter((gadget) => exclude.indexOf(gadgetAddress(gadget)) < 0)) : corpus;
       const build = buildExploit({
         api: depApi,
         style,
-        module: moduleName,
+        module: modulesLabel,
         badchars,
         index: corpus,
         plans,
         iatSlot,
+        delta: route == null ? void 0 : route.delta,
         writable,
         cave,
         jmpEsp,
@@ -25497,8 +25864,8 @@ ${INDENT}`)]);
         exclude,
         solve: (register2, value, keep) => solvable ? solveValue(solvable, register2, value, badchars, keep, buildStableAddressPredicate()) : void 0
       });
-      printBlock(build.blocks[4]);
-      summary.push({ Section: `[4/${n}] candidates`, Result: missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
+      if (solved) printBlock(build.blocks[4]);
+      summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
       section(`[5/${n}] Clean recipes for the constants`);
       if (blocker) error(`Skipped: these are the arguments of a ${depApi} call this chain cannot make. See the STOP above.`);
       for (const constant of blocker ? [] : CONSTANTS[depApi]) {
@@ -25506,20 +25873,21 @@ ${INDENT}`)]);
         echo("rop.construct", ["eax", hex(constant.value), badText]);
         executeRopConstruct("eax", constant.value, badText);
       }
-      if (iatSlot !== void 0 && slotBad.length > 0) {
-        info(`IAT slot = ${hex325(iatSlot)}`);
-        echo("rop.construct", ["eax", hex(iatSlot), badText]);
-        executeRopConstruct("eax", iatSlot, badText);
+      for (const [label, value] of [["IAT slot", iatSlot], ["API_DELTA", (_g = route == null ? void 0 : route.delta) == null ? void 0 : _g.value]]) {
+        if (blocker || value === void 0 || addressBadBytes(BigInt(value), 4, badSet).length === 0) continue;
+        info(`${label} = ${hex325(value)}`);
+        echo("rop.construct", ["eax", hex(value), badText]);
+        executeRopConstruct("eax", value, badText);
       }
       if (depApi !== "VirtualAlloc" && !blocker) {
         const field = depApi === "VirtualProtect" ? "lpflOldProtect" : "lpNumberOfBytesWritten";
-        echo("code_caves", [moduleName, hex(4), 25, badText, "STAGING"]);
-        if (writable === void 0) warn(`${field}: no clean writable cave in ${moduleName}. Try dx @$osed().code_caves("", 4, 25, "${badText}", "STAGING").`);
+        echo("code_caves", [modules[0], hex(4), 25, badText, "STAGING"]);
+        if (writable === void 0) warn(`${field}: no clean writable cave in ${modulesLabel}. Try dx @$osed().code_caves("", 4, 25, "${badText}", "STAGING").`);
         else info(`${field} = ${hex325(writable)}, a writable cave with no bad byte (code_caves STAGING).`);
       }
       if (depApi === "WriteProcessMemory" && !blocker) {
-        echo("code_caves", [moduleName, hex(528), 25, badText, "EXEC"]);
-        if (cave === void 0) warn(`Code cave: none of 0x210 bytes with a clean address in ${moduleName}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
+        echo("code_caves", [modules[0], hex(528), 25, badText, "EXEC"]);
+        if (cave === void 0) warn(`Code cave: none of 0x210 bytes with a clean address in ${modulesLabel}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
         else info(`Code cave (return address and lpBaseAddress) = ${hex325(cave)}, executable (code_caves EXEC).`);
       }
       if (!blocker) printBlock(build.blocks[5]);
@@ -25536,24 +25904,36 @@ ${INDENT}`)]);
       summary.push({ Section: `[6/${n}] frame`, Result: blocker ? "skipped" : style === "pushad" ? "register map" : "dep_function frame" });
       section(`[7/${n}] The exploit, with a placeholder for every value only a run can give`);
       if (blocker) {
-        error(`Skipped: there is no chain to write. See the STOP above.`);
+        error("Skipped: there is no chain to write. See the STOP above.");
       } else {
         info(build.holes.length === 0 ? "Nothing left to measure: paste the seven blocks and the file runs." : `${build.holes.length} hole(s) to fill, each a hole(...) line with its command in the comment above it: ${build.holes.join("; ")}`);
         printBlock(build.blocks[7]);
       }
       summary.push({ Section: `[7/${n}] exploit`, Result: blocker ? "skipped" : build.holes.length === 0 ? "no holes" : `${build.holes.length} hole(s)` });
-      if (blocker) {
-        section(`STOP: no ${depApi} chain from ${moduleLabel2}`);
-        error(blocker.what);
-        for (const line of blocker.next) error(line);
+      if (!blocker && solved && missing.length > 0 && solved.plans[otherStyle(style)].some((plan) => !plan.pick)) {
+        const lacks = (name) => `the ${name} style lacks ${titles(solved.plans[name].filter((plan) => !plan.pick))}`;
+        blocker = { layer: "method", what: `no style has a gadget for every job in ${modulesLabel}: ${lacks("skeleton")}, and ${lacks("pushad")}. Each was searched for in every byte of it.`, next: [] };
+      }
+      const ending = blocker;
+      if (ending) {
+        section(`STOP: no ${depApi} chain from ${modulesLabel}`);
+        error(`The ${ending.layer} layer fails: ${ending.what}`);
+        for (const line of ending.next) error(line);
+      } else if (missing.length > 0) {
+        section("Verdict");
+        warn(`No complete ${depApi} chain in the ${style} style: ${modulesLabel} has no gadget for ${missing.join(", ")}, so [7/7] holds a hole for each. The ${otherStyle(style)} style has a gadget for every job: ${dxCall("dep_plan", [depApi, modulesArg, badText, otherStyle(style), stage, ...excludeText || anyway ? [excludeText] : [], ...anyway ? [true] : []])}`);
+      } else {
+        section("Verdict");
+        info(`A ${depApi} chain from ${modulesLabel} in the ${style} style${(route == null ? void 0 : route.delta) ? `, the API reached from ${route.delta.dll}!${route.delta.anchor} by a distance measured on this machine` : ""}${build.holes.length > 0 ? `, with ${build.holes.length} hole(s) to fill` : ""}.`);
+        info(`The same run with every choice written out: ${dxCall("dep_plan", callArgs(style, anyway))}`);
       }
       setResult({
         command: "dep_plan",
-        args: { api: depApi, module: moduleName, badchars: badText, style },
-        success: blocker === void 0,
-        findings: [{ api: depApi, module: moduleName, style, iatSlot, writable, cave, gadgets: gadgetCount, missing, holes: blocker ? [] : build.holes }],
+        args: { api: depApi, module: modulesArg, badchars: badText, style },
+        success: ending === void 0 && missing.length === 0,
+        findings: [{ api: depApi, module: modulesArg, style, dep: dep.enforced, iatSlot, delta: (_h = route == null ? void 0 : route.delta) == null ? void 0 : _h.value, writable, cave, gadgets: gadgetCount, missing, holes: ending ? [] : build.holes }],
         warnings: [...moduleWarnings, ...missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : []],
-        errors: blocker ? [blocker.what, ...blocker.next] : []
+        errors: ending ? [`The ${ending.layer} layer fails: ${ending.what}`, ...ending.next] : []
       });
       return toDxResult("DEP Plan", summary);
     };
