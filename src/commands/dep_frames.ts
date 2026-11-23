@@ -79,8 +79,32 @@ export const PUSHAD_TAIL: Record<DepApi, Slot[]> = {
   ],
 };
 
-/** The addresses a frame's slots need, each measured by the run and none of them guessable. */
-export type FrameFacts = { iatSlot?: number; delta?: number; writable?: number; cave?: number };
+/** The addresses a frame needs, each measured by the run and none of them guessable: the first four are
+ * what its slots hold, `staging` is where a staged frame is laid. */
+export type FrameFacts = { iatSlot?: number; delta?: number; writable?: number; cave?: number; staging?: number };
+
+/** The dwords a staged chain pops off the frame's base, as offsets from it. One per field, shifted back
+ * by the write gadget's own displacement, because a gadget that stores to `[reg+4]` is handed the field's
+ * address minus four; and the pivot's, shifted back by the dwords the pivot takes off the new stack
+ * before its ret, so that ret lands on field 1. Which gadgets those are is the run's answer, so where a
+ * staged frame can go is not a property of the frame alone. */
+export function stagedPops(api: DepApi, writeOffset: number, pivotPops: number): number[] {
+  return [...FRAMES[api].map((_, i) => 4 * i - writeOffset), 0 - 4 * pivotPops];
+}
+
+/** Where a staged frame can be laid inside one run of writable bytes, or undefined when nowhere in it
+ * can. The frame is read as dwords by the call it dispatches, so its base is dword-aligned and its whole
+ * span has to fit the run. The chain pops each of `pops`, relative to that base, and sends it as it is,
+ * so every one of those addresses has to be free of the bad chars; they are not the frame's own bytes and
+ * need not be writable. One clean address at the head of a long run proves nothing about the rest, which
+ * is why this walks the run a dword at a time instead of testing it once. */
+export function stagingBase(run: { at: number; size: number }, span: number, pops: number[], bad: number[]): number | undefined {
+  const clean = (value: number): boolean => [0, 8, 16, 24].every((shift) => bad.indexOf((value >>> shift) & 0xff) < 0);
+  for (let base = Math.ceil(run.at / 4) * 4; base + span <= run.at + run.size; base += 4) {
+    if (pops.every((offset) => clean(base + offset))) return base;
+  }
+  return undefined;
+}
 
 /** What a slot asks the search to leave in a register, for the slots whose value is a number or a dword in
  * memory. A slot whose value is frame arithmetic (the shellcode's address on the stack), one the emitted

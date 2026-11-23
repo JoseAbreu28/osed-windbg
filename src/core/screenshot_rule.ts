@@ -20,7 +20,7 @@ const EVIDENCE_PREFIX = /^(\[[+!-]\] |=== |dx @\$osed\(\))/;
 // and the register map are indented or carry no `=`, so they never match.
 const PYTHON = /^(from [\w.]+ import |import [\w.]+|def \w+\(|class \w+[(:]|[A-Za-z_][\w.]*(\[[^\]]*\])?\s*[-+*|]?=\s*\S)/;
 const APIS = ["VirtualAlloc", "VirtualProtect", "WriteProcessMemory"];
-const STYLES = ["pushad", "skeleton"];
+const STYLES = ["pushad", "skeleton", "staged"];
 
 const trimEnd = (lines: string[]): string[] => {
   let end = lines.length;

