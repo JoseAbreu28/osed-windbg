@@ -515,6 +515,107 @@ fourteen passes and insufficient. No tool change was made for T08, by that reaso
 No `--ref` pass was made at this commit. The tool is byte for byte the bundle the eighth run measured, so no guide or
 Workflows page is affected.
 
+## Corpus run, 2026-11-23, measured at `88f6095`, under the API each lab's brief demands
+
+**Thirteen of seventeen under the demanded APIs, from twelve, and sixteen of seventeen under `--auto`,
+unchanged.** T17 is the one that moved. Nothing regressed under either reading. WriteProcessMemory, the
+one weak API, goes from six of eleven to seven of eleven.
+
+`dist/osed-legacy.js` sha256 `453f76cd2aa0526738c191944a53d5b17b3d71821314efc8faa88453646929d6`, the one
+bundle both runs were measured against, built from the source at `88f6095`. The run directories are
+`harness/runs/corpus-88f6095`, `harness/runs/corpus-88f6095-auto` and `harness/runs/t05-rerun`. The
+comparison is `harness/runs/corpus-brief-879216e`, whose own section was never written because the agent
+that made that measurement was stopped before it could report. The one holdout left was not run, opened,
+read or grepped. The demanded run took 1673 seconds and the `--auto` run 1686.
+
+**A provenance note on the `--auto` run's stamp.** Its `results.json` records commit `9ba38e9`, because the
+runner stamps `git rev-parse HEAD` rather than the bundle's own provenance, and two commits had landed
+after the bundle was built. Neither can change any corpus run: one prints a different sentence when the
+debugger lists no module at all, which no target in either run reached, and the other moves a comment. The
+sha256 is the thing to trust, and it is the same in both runs.
+
+**On the denominator, because it is not the one the sections above use.** This section counts all
+seventeen targets the manifest runs, the two spent holdouts T16 and T17 included, because the demanded API
+is a property of a lab's brief and both of those are labs. The sections above counted fifteen and reported
+the spent holdouts on a separate line. Twelve of seventeen is what the run at `879216e` scored under this
+same convention, so the two numbers compare as they stand, and sixteen of seventeen under `--auto` is the
+fourteen of fifteen recorded at `ca2b7db` plus those two, both of which pass on their automatic choice.
+
+**What the demanded API is, and why the two readings differ at all.** Bruno's rule, set 2026-11-23, is
+that a lab's `ENUNCIADO` or `README` names the API the assignment wants, and a working exploit with the
+wrong API is not something he can hand in. Eleven of the seventeen demand WriteProcessMemory, one
+VirtualProtect, four VirtualAlloc, and one target is not a lab and has no brief. The tool's automatic
+choice prefers VirtualAlloc, which is why the corpus read fourteen of fifteen through a programme in which
+the API the assignments ask for was failing four times in eleven.
+
+Under the demanded APIs:
+
+| Result | Targets |
+|---|---|
+| marker landed | T01, T02, T05, T06, T07, T09, T10, T11, T12, T17, T18 |
+| refused correctly, leak named | T13, T15 |
+| still failing | T03, T04, T08, T16 |
+
+| API | Demanded by | Pass | Then |
+|---|---|---|---|
+| VirtualAlloc | 4 | 4 | 4 of 4 |
+| VirtualProtect | 1 | 1 | 1 of 1 |
+| WriteProcessMemory | 11 | 7 | 6 of 11 |
+| no brief, the short form | 1 | 1 | 1 of 1 |
+
+Under `--auto`, on the same bundle: **sixteen of seventeen, T08 the only failure**, which is target for
+target what `ca2b7db` recorded. Fourteen land the marker and T13 and T15 refuse correctly and name the
+leak. The automatic choice took VirtualAlloc on eleven, VirtualProtect on two and WriteProcessMemory on
+two. Every target that passes on its automatic choice still passes, which is what that run was for.
+
+| # | Target | Then | Now |
+|---|---|---|---|
+| 1 | T17 | `still to fill: return_value` and `still to fill: lpbaseaddress_value`, both for "no clean cave address" in the only module it has | its whole `.text` is writable as well as executable, and an `EXEC` search now returns such a run, so the cave is found, the copy is the full 0x210 and the only hole left is the shellcode. The marker lands |
+| 2 | T04 | the same two holes, for the same reason | the cave is found in the module's writable executable section, and the chain completes and reaches the API. It then fails for the reason T03 fails, which is under "Known gaps" and which this run is the first to see on T04 |
+| 3 | T03 | a 0x206 byte read-only cave, the copy clamped to it, and a fault at the cave | a 0x1000 byte writable cave and the full 0x210 copy. Still fails, at the same layer and for the same cause as before, which the cave was never part of |
+
+**The screenshot rule on all thirty-four transcripts across both runs, scored by the harness with the same
+module the tests use: no violation in any section of any target.** The two lines `[5/7]` now prints when
+the copy's destination is read-only appear on five of the passing targets and cost none of them its
+budget.
+
+**One flake, and the score is not readable without checking for it.** T05 passed at `879216e`, failed in
+the demanded run and passed again on a re-run against the same bundle. All three captured the same crash,
+`eip=0040adc0`. What differed is that in the failing run `[1/7]` listed no module at all, so `dep_plan`
+refused at the module layer with nothing to weigh. Its row above is the re-run. The flake is the harness
+or the clone and not the tool: nothing in this change runs before the module layer, and a module list
+arriving empty is the debugger's view of the process. It hit one target in seventeen in the demanded run,
+one in four in an earlier subset, none in the `--auto` run, and it had not been seen before this day. The
+check is the string `Not usable: 0 with ASLR` in a transcript. The number matters and the sentence alone
+does not: a class B target correctly prints a count of the modules it does have, as in
+`Not usable: 7 with ASLR`, and that is a verdict.
+
+**Three premises of the brief for this change, disproved by measurement.**
+
+- **`return_value` is not a defect in the WriteProcessMemory frame.** The brief put it first because the
+  hole appeared on two targets and so read as a repeated fault in the frame or its register plumbing. It
+  was the executable-cave search. `classifyCapabilities` gave an RWX run `STAGING` and `ROP_WORKSPACE` and
+  withheld `EXEC` from it alone, so a module whose only executable caves are writable read as having none,
+  and the two slots that need an executable address were left unfillable. The frame, the register routes
+  and the write gadget were never involved. The fix is `if (x) caps.push("EXEC")`.
+- **"Never reached a DEP API" was wrong on both targets it was claimed of.** T16 and T03 each reached
+  WriteProcessMemory, and the `api_hits` entry in the brief's own run records the call with the frame in
+  it. The grader decides `from_chain` by the return address, and that is false for every skeleton
+  WriteProcessMemory hit in this corpus, the ten passing ones included, so the phrase reports the
+  heuristic and not the run. Anyone taking it at face value looks for the cause one layer too early.
+- **It was not the same cause as the two that faulted.** Closing the cave fixed T17 and completed T04's
+  chain, and left T16 and T03 where they were. The four remaining failures are three causes and none of
+  them is `return_value`: a read-only cave under a shellcode that decodes itself in place (T16), a frame
+  the vulnerable function writes over (T03 and T04), and T08's unmodelled read that is also the pivot.
+  The first two are measured under "Known gaps".
+
+**And one about this file.** The sha256 values it publishes identify the bundle as `npm run build` writes
+it, with LF endings. The repository has `core.autocrlf` true and no `.gitattributes`, so the copy in a
+working tree git has checked out is CRLF and hashes differently: the same source and the same build stamp,
+29509 bytes longer. Stripping the carriage returns from both leaves two files differing in the eight bytes
+of `__OSED_BUILD_TIME__`. So a sha256 here is checkable against a build output and never against a
+checkout, and the earlier sections' "differ only in the build stamp" holds for build outputs.
+
 ## Target or tool: T07 and T14, 2026-11-23
 
 Asked to separate, not to fix. Both answers are measured.
@@ -734,6 +835,117 @@ answer is a refusal that names the leak. That one measures the honest exit rathe
 no pass on a class A target can stand in for it.
 
 ## Known gaps, newest first
+
+- **No test in the suite can reach a line that depends on a cave, because the fixture host answers
+  nothing to `!vprot`.** Measured on 2026-11-23, and it is why the defect above survived the whole
+  programme.
+
+  `code_caves` will not call a run executable or writable until `memoryRegion` has answered for it, and
+  `tests/helpers/fixture_process.ts` returns `[]` for every `!vprot`. So `classifyCapabilities` is handed
+  three nulls, every cave comes back `UNUSABLE`, and a fixture run of `dep_plan` prints no `Code cave`
+  line, no `CAVE =`, no `WRITABLE =` and no `nSize` clamp. Checked by running the Sync Breeze fixture
+  under WriteProcessMemory in the skeleton style and looking for each of those strings: none is present.
+
+  What that costs. The cave address, the writable dword for an out-parameter, the clamped copy size and
+  the read-only-cave sentence are exercised only by `tools/harness/replay.ts` and by the clone, never by
+  the 1060 unit tests. The screenshot rule's ratchet is an exact empty list over fixture transcripts, so
+  it cannot see any of that output either; what grades it is the harness scoring the real captures.
+
+  And it is how an RWX run came to be denied `EXEC` for the life of the programme with a green suite:
+  `tests/code_caves.test.ts` pinned the behaviour directly, asserting `not.toContain("EXEC")` for an RWX
+  region, so the one test that touched it asserted the defect, and nothing downstream of it was reachable
+  to contradict that. A fixture that answered `!vprot` from the section characteristics, which
+  `replay.ts` already does in thirty lines, would close the whole class. It was not done here because
+  `fixture_process.ts` is shared by most of the suite and the IAT slot's own writability is read the same
+  way, so changing it is its own change with its own measurement.
+
+- **A shellcode that decodes itself cannot run from a cave that is executable and not writable, and the
+  run reported that as never having reached the API.** T16 under WriteProcessMemory, measured on
+  2026-11-23 in `harness/runs/corpus-brief-879216e`, again in `harness/runs/iter1-subset` at `e720ace`,
+  and again at `88f6095`. The same fault address all three times.
+
+  **It did reach the API.** The fire log carries `HARNESS_API WriteProcessMemory` with the frame right in
+  every field, the cave in both `return` and `lpBaseAddress`, the copy's source on the stack and the count
+  dword in the module. The grader printed `never reached a DEP API; faulted at 6b416567` anyway, because
+  it decides `from_chain` by the return address and that is false for every skeleton WriteProcessMemory
+  hit in the corpus, the ten passing ones included. The sentence describes the heuristic, not the run, and
+  a reader who believed it would look for the bug one layer too early.
+
+  **Where it dies, to the byte.** The marker shellcode for T16's bad chars is XOR-encoded, so it carries a
+  decoder that writes over its own bytes: `jmp` / `pop esi` / `push esi` / `xor ecx, ecx` /
+  `mov cx, 0x12a` / `xor byte [esi], 0x85` / `inc esi` / `loop` / `ret` / `call`, 22 bytes, then 0x12a
+  encoded ones. `[7/7]` lays 16 NOPs before it and the copy carries the sled into the cave like any other
+  byte, so the decoder's first write sits at cave + 0x10 + 0x0A. That is cave + 0x1A, and
+  `6b416567 - 6b41654d` is 0x1A. The cave is in `.text`, `PAGE_EXECUTE_READ`. WriteProcessMemory makes
+  the destination hold the bytes; it does not leave the page writable, so the decoder faults on its own
+  first write.
+
+  **Why three other targets pass from a read-only cave.** T01, T09 and T10 take the same style, the same
+  API and a `.text` cave, and their marker shellcode for their bad chars is plain. Nothing in it writes.
+  The difference is the shellcode, not the chain, the cave or the style, and no part of it is the tool's
+  choice: the shellcode is the hole `[7/7]` leaves for him.
+
+  **What shipped is the sentence, not a fix.** `[5/7]` now says the cave is executable and not writable,
+  that a shellcode which decodes itself in place faults on its own first write a few bytes into its stub,
+  that a plain one runs there unchanged, and gives the `code_caves ... "RWX"` call that answers whether
+  the module has writable executable bytes at all. T16's answer is none: one module without ASLR and every
+  executable cave in it read-only, so nothing in that process can hold self-modifying code. Under its own
+  automatic choice, VirtualAlloc, it passes, which is how it passed cold as the first holdout. Under the
+  API its brief demands it takes an unencoded shellcode only, and that is a fact about the target.
+
+- **The skeleton lays its call frame where the vulnerable function's own locals live, and the function
+  writes over two of its dwords between the copy and the ret.** T03 and T04, measured on 2026-11-23 by
+  breaking on the chain's first gadget before any gadget had run. The probe log is outside the repo, with
+  the run. **This is the largest remaining item under the demanded APIs: it is two of the four failures,
+  and T04 only reached it once the cave fix closed its holes.**
+
+  `FRAME_AT = CHAIN_AT - len(frame)`, so the seven-dword frame sits in the buffer immediately below the
+  saved return address. Two of those dwords never survive to the chain:
+
+      0019fc70  45454545   field 1, the placeholder the chain patches   as sent
+      0019fc74  6c930101   field 2, return, the cave                   as sent
+      0019fc78  ffffffff   field 3, hProcess                           as sent
+      0019fc7c  a97a35aa   field 4, lpBaseAddress, sent as 6c930101    the program wrote here
+      0019fc80  000001ae   field 5, lpBuffer, sent as 49494949         the program wrote here
+      0019fc84  51515151   field 6, nSize, the placeholder             as sent
+      0019fc88  6c92e0c9   field 7, lpNumberOfBytesWritten             as sent
+
+  Field 5 is patched by the chain afterwards and recovers; field 4 is a constant written into the payload
+  and nothing puts it back. WriteProcessMemory is then called with `lpBaseAddress` unmapped, writes
+  nothing, returns false, and the chain returns into a cave that still holds its own padding:
+  `add byte ptr [eax], al` with `eax = 0`, which is the access violation at the cave's first byte.
+
+  **Two measurements say the program wrote it and the chain did not.** Both dwords are already wrong at
+  the breakpoint on the first gadget, before anything the chain does. And the value differs from run to
+  run on the same build and the same bad chars, `bad03b95` then `a97a35aa`, which no value the chain
+  sends can. It is the same family as the T11 note below, where the crash dereferences the dword just
+  past the saved return address, except that here the function writes rather than reads.
+
+  **The cave was never T03's problem.** Its failure looked cave-shaped, because it faulted at the cave
+  and its cave was a marginal 0x206 bytes. Giving it a 0x1000 byte writable cave moved the fault address
+  and changed nothing else.
+
+  **T04 is the same function and the same clobber.** It is T03's sibling lab. Before the cave fix it
+  stopped two layers earlier, at `still to fill: return_value`, so this was invisible there. With the
+  cave found its chain completes, reaches the API and is called with `lpBaseAddress` = `7c73a1bd`, again
+  a value that differs from run to run. So closing the cave did not fix T04; it moved T04 onto T03's
+  wall, and one fix now carries two targets.
+
+  Nothing was changed for it. Where a frame may go is read by `stagingBase` for the staged style only;
+  the skeleton's placement is one subtraction, and moving it changes the pivot arithmetic, the sled
+  distance patches and the payload layout of every skeleton target that passes today. The cheap next
+  thread is a measurement, not a search: the crash already gives the stack, so a run that sent a known
+  pattern and read back which dwords below the saved return address the program altered before the ret
+  would know this target's two, and the skeleton could lay its frame clear of them.
+
+- **The advice a missing cave prints sends the user to search every module, and on every target that has
+  ever printed it there is only one module to search.** Measured on 2026-11-23. T04 and T17 both said
+  `no clean cave address in <module>` and offered `dx @$osed().code_caves("", 0x210, 25, "<bad>", "EXEC")`,
+  whose empty first argument means every module. Both processes have exactly one module without ASLR, and
+  so does T16; `[1/7]` says so six lines above, counting the rest as "6 more with ASLR". The empty-module
+  form can only ever repeat what the named one found. The hole it was attached to is closed, so the line
+  is no longer printed on any corpus target, but the same wording is still attached to the writable-dword
+  and staging searches and would mislead the same way.
 
 - ~~**The staged style pivots ESP onto its frame and never puts it back, so the API it just reached dies
   on its own stack.**~~ Closed on 2026-11-23 at `2757bb1`, and **the cause written down here was wrong.**
