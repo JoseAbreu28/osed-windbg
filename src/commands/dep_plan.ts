@@ -715,9 +715,13 @@ export function planLines(plan: JobPlan, shown = SHOWN_ABOVE): string[] {
     ? ` (keep ${live.map((entry) => ROLE_NAMES[entry.role] ? `${entry.register} = ${ROLE_NAMES[entry.role]}` : entry.register).join(", ")})` : "";
   const at = pick ? verdicts.indexOf(pick) : verdicts.length;
   const above = verdicts.slice(0, at);
-  const row = (verdict: Verdict, mark: string): string =>
-    `  ${mark} ${hex32(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}  ${sideEffects(verdict.gadget, job)}`;
-  const line = (verdict: Verdict, mark: string, label: string) => [row(verdict, mark), `      ${label}: ${verdict.reason}`];
+  // A gadget whose disassembly is long pushes its side effects past the screen, so they go under it.
+  const row = (verdict: Verdict, mark: string): string[] => {
+    const head = `  ${mark} ${hex32(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}`;
+    const effects = sideEffects(verdict.gadget, job);
+    return `${head}  ${effects}`.length <= SCREEN.columns ? [`${head}  ${effects}`] : [head.trimEnd(), `      ${effects}`];
+  };
+  const line = (verdict: Verdict, mark: string, label: string) => [...row(verdict, mark), `      ${label}: ${verdict.reason}`];
   const rejected = (verdict: Verdict): string[] => {
     const label = verdict.usable ? "usable" : "no";
     const one = `    ${hex32(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}  ${label}: ${verdict.reason}`;

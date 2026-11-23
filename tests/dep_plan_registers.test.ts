@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { buildExploit } from "../src/commands/dep_build";
 import { stagedPops, stagingBase } from "../src/commands/dep_frames";
-import { jobsFor, met, planJobs, planWrites, sequence } from "../src/commands/dep_plan";
+import { jobsFor, met, planJobs, planLines, planWrites, sequence } from "../src/commands/dep_plan";
+import { SCREEN } from "../src/core/screenshot_rule";
 import { buildCapabilityIndexFromRpPlusText } from "../src/rop";
 
 // A skeleton chain carries the address of the field it is writing in one register and the value going
@@ -237,4 +238,15 @@ describe("a read that writes back is a read only where the slot is writable", ()
   test("a writable slot lets the same gadget do it", () => {
     expect(read(true).pick && sequence(read(true).pick!.gadget)).toBe("xchg dword [ecx], eax ; ret");
   });
+});
+
+// T08's third swap is `xor eax, eax ; mov ecx, 0x631052d4 ; xchg dword [ecx], eax ; pop ebp ; ret`, long
+// enough that its row ran to 133 columns once the read job printed it as a rejection.
+test("a candidate too long for one row puts its side effects on the next", () => {
+  const long = "xor eax, eax ; mov ecx, 0x11225544 ; xchg dword [ecx], eax ; pop ebp ; pop esi ; pop edi ; ret";
+  const plan = planWrites(corpus(...NO_COPY.filter((line) => line !== "mov eax, dword [eax] ; ret"), long), [], "WriteProcessMemory",
+    { iatSlot: IAT_SLOT, writable: 0x11224444, cave: 0x11114444 }, BAD, "staged").plans.filter((entry) => entry.job.key === "read")[0];
+  const lines = planLines(plan);
+  expect(lines.some((line) => line.indexOf("xchg dword [ecx], eax") >= 0)).toBe(true);
+  for (const line of lines) expect(line.length, line).toBeLessThanOrEqual(SCREEN.columns);
 });
