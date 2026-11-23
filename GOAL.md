@@ -67,6 +67,7 @@ iteration, and a change that fixes one must not regress another.
 | Sync Breeze 10.0.28 `syncbrs.exe` | `libspp` | no fixed module imports any DEP API; the route is a kernel32 neighbour plus a distance; only one of four fixed modules is usable; pushad is the only viable style |
 | T06 | one exe | no register copy anywhere in the module and no `pushad ; ret` either, so neither stack-frame style can be built: the frame has to be staged at a fixed writable address |
 | T07 | one dll, one exe | no saved EIP takes the overwrite: the overflow faults on a pointer it replaced inside a `__try` and the chain arrives through the SEH handler the dispatcher calls next. The delivery, not the style, is what the target picks |
+| T11 | one dll, one exe | every address in the exe carries the first bad char, and the one usable module has no `pushad`, no `jmp esp`, no `call esp` and no `push esp ; ret` at all, so the frame must be staged and ESP pivoted onto it. Adds what T06 does not: the staged frame is not on the thread's stack, so the API's return has to restore ESP before the API's own stack use runs off the section. Its crash also dereferences the dword just past the saved return address before the function returns, so a payload must keep that dword a readable pointer |
 
 Add a target whenever one teaches a shape the corpus does not already hold. Record what
 shape it adds, not just that it was added.
@@ -637,6 +638,41 @@ answer is a refusal that names the leak. That one measures the honest exit rathe
 no pass on a class A target can stand in for it.
 
 ## Known gaps, newest first
+
+- **The staged style pivots ESP onto its frame and never puts it back, so the API it just reached dies
+  on its own stack.** Measured 2026-11-23 at commit `2559eb3`, dist sha256
+  `a469f1bef699504a40b2f7dedb2fb5bd695909fb0f7ec2c9a33ecbf08f8e522e`, on T11, which became attemptable
+  that day once its offset was measured. T11 is the hardest supply in the corpus: its main image is
+  based where the first bad char rules out every address in it, and the one usable module has no
+  `pushad`, no `jmp esp`, no `call esp` and no `push esp ; ret` anywhere in its `.text`, so the frame
+  has to be built in writable memory at a fixed address and ESP pivoted onto it. `dep_plan` got all of
+  that right with nothing but the bad chars and stage 1. It chose VirtualAlloc from the fixed module in
+  the staged style, built a frame in that module's writable section and reached the API with arguments
+  that are correct on their face:
+
+      HARNESS_API VirtualAlloc
+      63c99fec  0019ed54     <- return, into the shellcode on the stack
+      63c99ff0  0019ed54     <- lpAddress
+      63c99ff4  0000013e     <- dwSize
+      63c99ff8  00001000     <- MEM_COMMIT
+      63c99ffc  00000040     <- PAGE_EXECUTE_READWRITE
+
+  Then it faulted inside `ntdll` with `esp=63c97df0`, which is below the writable page the frame sits
+  on. The call never returned. VirtualAlloc's own path through the loader spent about 8 KB of stack and
+  walked straight off the bottom of the section, into memory that is read only. Nothing about the chain
+  or the arguments is wrong; what is missing is a step. A frame built anywhere other than the thread's
+  own stack needs the API's return address to lead back to a pivot that restores ESP to the stack
+  before anything else runs, and the stack address to restore has to be measured in the same run, from
+  the same ESP capture the frame's `lpAddress` already comes from. Two values measured instead of one,
+  and one more dword in the frame. Writing it down rather than fixing it: this is not where the tool
+  gets touched.
+
+  A second thing the same run showed, smaller and separate. The run printed `never reached a DEP API`
+  while its own `api_hits` records that VirtualAlloc call with ESP on the chain's frame. The grader
+  decides `from_chain` by whether the return address is one of the chain's gadgets, and in the staged
+  style the return address is the shellcode, so a correct staged call always reads as not from the
+  chain. The verdict contradicts the evidence next to it, and the fix belongs in the grader, not the
+  chain.
 
 - ~~**A DEP chain delivered through an overwritten SEH handler is a shape `dep_plan` does not model.**~~
   Closed on 2026-11-23, as a delivery rather than a style: see "Target or tool: T07 and T14" above for
