@@ -57,6 +57,10 @@ export type Job = {
   title: string;
   capabilities: CapabilityKind[];
   register?: string;
+  /** The chain runs it once per field, so a role it reads is live again when the next field comes
+   * round. Liveness is read off this rather than off a list of keys, so a style's own fill jobs say
+   * for themselves that they repeat. */
+  repeats?: boolean;
   flow: Flow;
 };
 
@@ -67,10 +71,10 @@ const SKELETON_JOBS: Job[] = [
   { key: "copy", title: "copy a register", capabilities: ["MOVE_REGISTER", "EXCHANGE_REGISTER"],
     flow: { reads: { source: "pointer" }, sets: { role: "field", port: "dest" } } },
   { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], flow: { sets: { role: "value", port: "dest" } } },
-  { key: "write", title: "write a field", capabilities: ["MEMORY_WRITE"], flow: { reads: { address: "field", source: "value" } } },
-  { key: "advance", title: "advance the pointer (inc reg)", capabilities: ["REGISTER_INCREMENT"],
+  { key: "write", title: "write a field", capabilities: ["MEMORY_WRITE"], repeats: true, flow: { reads: { address: "field", source: "value" } } },
+  { key: "advance", title: "advance the pointer (inc reg)", capabilities: ["REGISTER_INCREMENT"], repeats: true,
     flow: { reads: { dest: "field" }, sets: { role: "field", port: "dest" } } },
-  { key: "negate", title: "negate", capabilities: ["REGISTER_NEGATE"], flow: { sets: { role: "value", port: "dest" } } },
+  { key: "negate", title: "negate", capabilities: ["REGISTER_NEGATE"], repeats: true, flow: { sets: { role: "value", port: "dest" } } },
   { key: "pivot", title: "pivot ESP onto the frame", capabilities: ["STACK_PIVOT"], flow: { reads: { source: "field" } } },
 ];
 
@@ -124,15 +128,15 @@ function readsOf(job: Job): Role[] {
   return Object.keys(reads).map((port) => reads[port]);
 }
 
-// A role is live after a job when a later job reads it before any job sets it again. The fill jobs
-// (write, advance, negate) repeat once per field, so for them the list wraps: the next field's write
-// reads the field address again. The role the job itself sets is its output, not something to keep.
-// Each pass of the loop starts with the next field's loader, which sets the value afresh, so the value
-// written to one field is never live across the advance to the next.
+// A role is live after a job when a later job reads it before any job sets it again. A job marked
+// `repeats` runs once per field, so for it the list wraps: the next field's write reads the field
+// address again. The role the job itself sets is its output, not something to keep. Each pass of the
+// loop starts with the next field's loader, which sets the value afresh, so the value written to one
+// field is never live across the advance to the next.
 const NEXT_FIELD: Job = { key: "load", title: "load the next field's value", capabilities: [], flow: { sets: { role: "value", port: "dest" } } };
 
 export function liveAfter(jobs: Job[], index: number, withOwn = false): Role[] {
-  const loop = [NEXT_FIELD, ...jobs.filter((job) => ["write", "advance", "negate"].indexOf(job.key) >= 0)];
+  const loop = [NEXT_FIELD, ...jobs.filter((job) => job.repeats)];
   const later = jobs.slice(index + 1).concat(loop.indexOf(jobs[index]) >= 0 ? loop : []);
   const own = withOwn ? undefined : jobs[index].flow.sets?.role;
   const live: Role[] = [];
@@ -286,6 +290,18 @@ export type JobPlan = {
 /** A job is done when one gadget does it or a sequence of them does. */
 export const met = (plan: JobPlan): boolean => plan.pick !== undefined || plan.path !== undefined;
 
+/** The job that first puts the address of the field being written into a register. The skeleton copies
+ * the captured ESP there, a staged frame pops a constant, and the jobs after it read it off whichever
+ * register that one landed in. Found by the role it sets, so no job after it names a key. */
+const fieldSetter = <T extends { job: Job }>(jobs: T[]): T | undefined =>
+  jobs.filter((entry) => entry.job.flow.sets?.role === "field")[0];
+
+/** Where the chain holds the address of the field it is writing, by a single gadget or by a path. */
+export function fieldRegister(plans: JobPlan[]): string | undefined {
+  const plan = fieldSetter(plans);
+  return plan?.pick?.at.dest ?? plan?.path?.to;
+}
+
 // Rejections no register move can fix: the gadget destroys a value the chain still needs, or it cannot do the job.
 function rejection(gadget: RopGadget, job: Job, at: Ports, live: Array<{ role: Role; register: string }>, bound: Partial<Record<Role, string>>): string | undefined {
   const capability = jobCapability(gadget, job);
@@ -359,6 +375,7 @@ function moves(job: Job, at: Ports, bound: Partial<Record<Role, string>>): strin
 export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle, exclude: number[] = [], api: DepApi = "VirtualAlloc", copiedTo?: string, preferred: Record<string, number> = {}): JobPlan[] {
   const jobs = jobsFor(style, api);
   const bound: Partial<Record<Role, string>> = {};
+  const firstField = fieldSetter(jobs.map((job) => ({ job })))?.job;
   const plans = jobs.map((job, position) => {
     const later = liveAfter(jobs, position, true);
     const live = liveAfter(jobs, position)
@@ -405,28 +422,28 @@ export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle
     const pick = named ?? tiers.map((tier) => usable.filter(tier)[0]).filter((verdict) => verdict !== undefined)[0];
     const sets = job.flow.sets;
     // A copy no single gadget does still leaves the field address somewhere: where the path put it.
-    if (!pick && sets && job.key === "copy" && copiedTo) bound[sets.role] = copiedTo;
+    if (!pick && sets && job === firstField && copiedTo) bound[sets.role] = copiedTo;
     if (pick && sets) {
       const register = ports(pick.gadget, job)[sets.port];
       if (register && (bound[sets.role] === undefined || !pick.move)) bound[sets.role] = register;
     }
     return { job, live, verdicts, pick };
   });
-  // The copy exists to put the field address where the write reads it from. Its own ranking cannot know
-  // that, because the write comes after it and nothing has bound the field yet, so a module with several
-  // copies takes the cheapest and the chain then pays a move on every field, or lands the field in the
-  // register the values have to be loaded into. Once the write's pick is known the copy is picked again
-  // to land there, once, and only then does the path search get asked for one.
+  // The field setter exists to put the field address where the write reads it from. Its own ranking
+  // cannot know that, because the write comes after it and nothing has bound the field yet, so a module
+  // with several copies takes the cheapest and the chain then pays a move on every field, or lands the
+  // field in the register the values have to be loaded into. Once the write's pick is known the setter is
+  // picked again to land there, once, and only then does the path search get asked for one.
   const writeAt = plans.filter((plan) => plan.job.key === "write")[0]?.pick?.at.address;
-  const copyPick = plans.filter((plan) => plan.job.key === "copy")[0];
-  if (writeAt && preferred.copy === undefined && copyPick?.pick && copyPick.pick.at.dest !== writeAt) {
-    const better = copyPick.verdicts.filter((verdict) => verdict.usable && verdict.at.dest === writeAt)[0];
-    if (better) return planJobs(index, style, exclude, api, copiedTo, { ...preferred, copy: gadgetAddress(better.gadget) });
+  const setter = fieldSetter(plans);
+  if (writeAt && setter && preferred[setter.job.key] === undefined && setter.pick && setter.pick.at.dest !== writeAt) {
+    const better = setter.verdicts.filter((verdict) => verdict.usable && verdict.at.dest === writeAt)[0];
+    if (better) return planJobs(index, style, exclude, api, copiedTo, { ...preferred, [setter.job.key]: gadgetAddress(better.gadget) });
   }
   const done = withPaths(plans, index, exclude);
-  const copied = done.filter((plan) => plan.job.key === "copy")[0]?.path?.to;
-  // The jobs after the copy were picked not knowing where the field address is. Now that the path says,
-  // they are picked again keeping it, once.
+  const copied = fieldSetter(done)?.path?.to;
+  // The jobs after the field setter were picked not knowing where the field address is. Now that the
+  // path says, they are picked again keeping it, once.
   return copied && copied !== copiedTo ? withPaths(planJobs(index, style, exclude, api, copied, preferred), index, exclude) : done;
 }
 
@@ -434,10 +451,11 @@ export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle
  * frame's values the corpus can then load into the one it reads the value from. */
 export type WriteTrial = { address: number; sequence: string; value: string; field: string; filled: number; of: number; unmet: number };
 
-/** The skeleton style's plans, with the write gadget chosen by the frame it has to fill.
+/** The plans of a style that writes the frame field by field, with the write gadget chosen by the frame
+ * it has to fill. The skeleton and the staged style both do that; PUSHAD does not write memory at all.
  *
- * A skeleton chain carries two things from gadget to gadget: the address of the field it is writing and
- * the value going into it. Which register holds which is decided entirely by the write gadget's two
+ * Such a chain carries two things from gadget to gadget: the address of the field it is writing and the
+ * value going into it. Which register holds which is decided entirely by the write gadget's two
  * operands, and every loader after it must then produce its value in one register while keeping the
  * other. The old ranking picks that gadget for its side effects alone, so a module whose cheapest write
  * is `mov [eax+4], ecx` forces every value into ECX with EAX held, and a value the corpus can only reach
@@ -446,19 +464,20 @@ export type WriteTrial = { address: number; sequence: string; value: string; fie
  * So which write to use is a question about the values the frame carries, not about the gadget on its
  * own. Each usable candidate is tried, the whole job list re-planned around it, and the one whose frame
  * the corpus can actually fill is kept. The PUSHAD style already settles its register order this way
- * before a single loader is written; this asks the same question for the skeleton.
+ * before a single loader is written; this asks the same question for a frame written field by field.
  *
  * `tried` is the evidence for the choice and is printed, because a decision the tool cannot show is
  * worse than one it does not make.
  */
-export function planSkeleton(
+export function planWrites(
   index: CapabilityIndex | undefined,
   exclude: number[],
   api: DepApi,
   facts: FrameFacts,
   badchars: number[],
+  style: DepPlanStyle = "skeleton",
 ): { plans: JobPlan[]; tried: WriteTrial[] } {
-  const base = planJobs(index, "skeleton", exclude, api);
+  const base = planJobs(index, style, exclude, api);
   const goals = FRAMES[api].map((slot) => frameGoal(slot, facts)).filter((goal): goal is Val => goal !== undefined);
   const write = base.filter((plan) => plan.job.key === "write")[0];
   if (!index || !write || goals.length === 0) return { plans: base, tried: [] };
@@ -493,10 +512,9 @@ export function planSkeleton(
 
   const tried: WriteTrial[] = pairs.map((candidate) => {
     const address = gadgetAddress(candidate.gadget);
-    const plans = candidate === write.pick ? base : planJobs(index, "skeleton", exclude, api, undefined, { write: address });
+    const plans = candidate === write.pick ? base : planJobs(index, style, exclude, api, undefined, { write: address });
     const chosen = plans.filter((plan) => plan.job.key === "write")[0]?.pick;
-    const copy = plans.filter((plan) => plan.job.key === "copy")[0];
-    const field = copy?.pick?.at.dest ?? copy?.path?.to ?? "";
+    const field = fieldRegister(plans) ?? "";
     const value = chosen?.at.source ?? "";
     return {
       address, sequence: sequence(candidate.gadget), value, field,
@@ -510,7 +528,7 @@ export function planSkeleton(
   // candidate that fills no more of the frame than the ranking's own pick never displaces it.
   const best = tried.slice().sort((a, b) => a.unmet - b.unmet || b.filled - a.filled || tried.indexOf(a) - tried.indexOf(b))[0];
   const plans = best.address === gadgetAddress(write.pick?.gadget ?? pairs[0].gadget)
-    ? base : planJobs(index, "skeleton", exclude, api, undefined, { write: best.address });
+    ? base : planJobs(index, style, exclude, api, undefined, { write: best.address });
   return { plans, tried };
 }
 

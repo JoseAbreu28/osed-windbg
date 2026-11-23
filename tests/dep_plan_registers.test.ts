@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { jobsFor, met, planJobs, planSkeleton, sequence } from "../src/commands/dep_plan";
+import { jobsFor, met, planJobs, planWrites, sequence } from "../src/commands/dep_plan";
 import { buildCapabilityIndexFromRpPlusText } from "../src/rop";
 
 // A skeleton chain carries the address of the field it is writing in one register and the value going
@@ -39,7 +39,7 @@ describe("the skeleton style's registers, weighed against the frame", () => {
 
   test("the write gadget is chosen by how much of the frame the corpus can then load", () => {
     const index = corpus(...TWO_WRITES);
-    const { plans, tried } = planSkeleton(index, [], "VirtualProtect", facts, BAD);
+    const { plans, tried } = planWrites(index, [], "VirtualProtect", facts, BAD);
     // Every candidate is weighed, and what each one can fill is the evidence for the choice.
     const byValue = Object.fromEntries(tried.map((trial) => [trial.value, trial]));
     expect(byValue.ecx.filled).toBeLessThan(byValue.eax.filled);
@@ -51,7 +51,7 @@ describe("the skeleton style's registers, weighed against the frame", () => {
 
   test("the copy lands the field address where the write reads it from", () => {
     const index = corpus(...TWO_WRITES);
-    const { plans } = planSkeleton(index, [], "VirtualProtect", facts, BAD);
+    const { plans } = planWrites(index, [], "VirtualProtect", facts, BAD);
     const copy = plans.filter((plan) => plan.job.key === "copy")[0];
     const write = plans.filter((plan) => plan.job.key === "write")[0];
     expect(copy.pick?.at.dest ?? copy.path?.to).toBe(write.pick!.at.address);
@@ -61,7 +61,7 @@ describe("the skeleton style's registers, weighed against the frame", () => {
 
   test("a module with one write is left alone, and nothing is weighed", () => {
     const index = corpus(...TWO_WRITES.filter((line) => line !== "mov dword [ecx], eax ; ret"));
-    const { plans, tried } = planSkeleton(index, [], "VirtualProtect", facts, BAD);
+    const { plans, tried } = planWrites(index, [], "VirtualProtect", facts, BAD);
     expect(tried).toEqual([]);
     expect(sequence(plans.filter((plan) => plan.job.key === "write")[0].pick!.gadget)).toBe("mov dword [edi], ecx ; ret");
   });
@@ -69,7 +69,7 @@ describe("the skeleton style's registers, weighed against the frame", () => {
   // The field address reaches the write's register by a sequence when no single gadget takes it there.
   test("with no single copy into the write's register, a path carries the field address", () => {
     const index = corpus(...TWO_WRITES.filter((line) => line !== "mov ecx, esi ; ret"), "xchg edi, ecx ; ret");
-    const { plans } = planSkeleton(index, [], "VirtualProtect", facts, BAD);
+    const { plans } = planWrites(index, [], "VirtualProtect", facts, BAD);
     const copy = plans.filter((plan) => plan.job.key === "copy")[0];
     const write = plans.filter((plan) => plan.job.key === "write")[0];
     expect(write.pick!.at.address).toBe("ecx");

@@ -4,7 +4,7 @@ import { RopGadget } from "../rop/types";
 import { buildRopIndexFromRpPlusText } from "../rop";
 import { MAX_HOPS, Path, ReachIndex, Reg, Unreached, Val, constVal, describe, effectOf, isPath } from "../rop/reach";
 import { FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, PUSHAD_TAIL, Slot } from "./dep_frames";
-import { DepPlanStyle, JobPlan, LARGE_STACK_MOVE, Verdict, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, stackMove, writtenRegisters } from "./dep_plan";
+import { DepPlanStyle, JobPlan, LARGE_STACK_MOVE, Verdict, fieldRegister, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, stackMove, writtenRegisters } from "./dep_plan";
 import { DepApi } from "./rop_template";
 
 // One row per gadget the chain uses. Every block is a rendering of this table.
@@ -513,7 +513,7 @@ export function buildExploit(input: BuildInput): Build {
   const advance = pick("advance");
   const negate = pick("negate");
   const pivot = pick("pivot");
-  const field = copy?.at.dest ?? copyPath?.to ?? "";
+  const field = fieldRegister(input.plans) ?? "";
   const valueRegister = write?.at.source ?? "eax";
   const writeOffset = write?.at.offset ?? 0;
 
