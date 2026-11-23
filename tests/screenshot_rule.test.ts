@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { SCREEN, SEPARATOR, screenshotViolations } from "../src/core/screenshot_rule";
-import { GADGETS, load, sehRun, syncBreeze, text } from "./helpers/fixture_process";
+import { GADGETS, load, sehRun, sehShape, syncBreeze, text } from "./helpers/fixture_process";
 
 const ECHO = '=== dx @$osed().dep_plan("VirtualAlloc", "libspp.dll", "00 0A", "pushad", 1) ===';
 const rules = (transcript: string): string[] => screenshotViolations(transcript).map((v) => `${v.section} ${v.rule}`);
@@ -79,6 +79,12 @@ describe("dep_plan's output against the screenshot rule", () => {
   // its [6/7] is the longest one the delivery can produce.
   test("skeleton, delivered through an SEH handler", () => {
     expect(rules(sehRun("skeleton"))).toEqual([]);
+  });
+
+  // The tallest [6/7] of all: a crash that reached a record and cannot be delivered through it prints
+  // the SEH facts and the saved-EIP landing both, and most of the corpus is that shape.
+  test.each(["skeleton", "pushad"])("%s, a crash that reached a record and falls back to the saved EIP", (style) => {
+    expect(rules(sehRun(style, sehShape.modulesWithout(0x1401)))).toEqual([]);
   });
 
   // A run that never reached a corpus chose no style, so it keeps "auto" rather than writing out the
