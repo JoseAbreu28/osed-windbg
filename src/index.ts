@@ -3692,18 +3692,19 @@ function bindApi(): OsedApi {
     if (solved) printBlock(build.blocks[4]);
     summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
 
-    out.section(`[5/${n}] Clean recipes for the constants`);
+    out.section(`[5/${n}] The constants the call needs, and the route to each`);
     if (blocker) out.error(`Skipped: these are the arguments of a ${depApi} call this chain cannot make. See the STOP above.`);
+    // Each constant is one line and the command that builds it by hand. rop.construct's own recipe is
+    // printed only when he asks for it: it targets eax whatever register the frame wants, so running it
+    // here put a clean eax recipe directly above a loader saying the register it needs cannot be reached.
     for (const constant of blocker ? [] : CONSTANTS[depApi]) {
-      out.info(`${constant.field} = ${dwordHex(constant.value)}`);
+      out.info(`${constant.field} = ${dwordHex(constant.value)}. To build it in a register by hand:`);
       out.echo("rop.construct", ["eax", out.hex(constant.value), badText]);
-      executeRopConstruct("eax", constant.value, badText);
     }
     for (const [label, value] of [["IAT slot", iatSlot], ["API_DELTA", route?.delta?.value]] as Array<[string, number | undefined]>) {
       if (blocker || value === undefined || addressBadBytes(BigInt(value), 4, badSet).length === 0) continue;
-      out.info(`${label} = ${dwordHex(value)}`);
+      out.info(`${label} = ${dwordHex(value)}, which holds a bad byte. To build it in a register by hand:`);
       out.echo("rop.construct", ["eax", out.hex(value), badText]);
-      executeRopConstruct("eax", value, badText);
     }
     if (depApi !== "VirtualAlloc" && !blocker) {
       const field = depApi === "VirtualProtect" ? "lpflOldProtect" : "lpNumberOfBytesWritten";
@@ -3718,10 +3719,9 @@ function bindApi(): OsedApi {
     }
     // One line per loader before the loaders themselves: which gadgets the search chose, in order, and
     // why that route and not a shorter one. Their addresses and disassembly are the [4/7] table, so this
-    // stays a route and never repeats it. The recipes printed above are for eax alone and are a reference
-    // for building each constant by hand; what the chain does to each register is this list.
+    // stays a route and never repeats it. This list is the evidence for the chain.
     if (!blocker && build.routes.length > 0) {
-      out.info(`The recipes above build each constant in eax, as a reference. What the chain does is below: one line per register, searched through ${modulesLabel} rather than following one recipe.`);
+      out.info(`What the chain does, one line per register, each searched through ${modulesLabel} rather than following a recipe:`);
       for (const route of build.routes) out.info(`  ${route}`);
     }
     if (!blocker) printBlock(build.blocks[5]);

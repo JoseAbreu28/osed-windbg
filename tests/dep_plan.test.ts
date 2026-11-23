@@ -488,7 +488,11 @@ describe("dep_plan", () => {
   ])("pasting an echoed line of %s %s prints the same output dep_plan printed under it", (name, style) => {
     api.dep_plan(name, "libbkup", "00 0A 0D", style);
     const report = text();
-    const calls = report.split("\n").filter((line) => line.startsWith("dx @$osed().") && !line.includes("code_caves("));
+    // Two commands are offered rather than run: dep_plan reads the caves quietly and takes only the
+    // address, and rop.construct builds in eax whichever register the frame wants, so its recipe would
+    // sit above a loader that contradicts it. Nothing prints under either echo, so neither is compared.
+    const offered = (line: string): boolean => line.includes("code_caves(") || line.includes("rop.construct(");
+    const calls = report.split("\n").filter((line) => line.startsWith("dx @$osed().") && !offered(line));
     expect(calls.some((call) => call.includes(".dep_candidates("))).toBe(true);
     expect(calls.some((call) => call.includes(".dep_function("))).toBe(true);
     const osed = (globalThis as unknown as { osed: unknown }).osed;

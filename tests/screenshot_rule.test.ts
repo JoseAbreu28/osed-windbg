@@ -52,8 +52,7 @@ describe("the screenshot rule, one check per clause of GOAL.md", () => {
 // takes it off this list. Nothing here is accepted; it is the next iteration's work, written down.
 describe("dep_plan's output against the screenshot rule, as measured on 2026-11-22", () => {
   const { BAD, FORCED, shape } = syncBreeze;
-  const COMMON = ["DEP width", "[1/7] width", "[2/7] width", "[3/7] width", "[4/7] width", "[5/7] height", "[5/7] width",
-    "[5/7] python-above-separator", "Verdict width"];
+  const COMMON = ["DEP width", "[1/7] width", "[2/7] width", "[3/7] width", "[4/7] width", "[5/7] width", "Verdict width"];
 
   test("pushad, from the short call with only the bad chars", () => {
     load(shape(), { policy: 2, registry: FORCED }).dep_plan(BAD);

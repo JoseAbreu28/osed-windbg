@@ -47,8 +47,9 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
     expect(esi).toMatch(/c\.rop\((MOV_ESI_EAX|ADD_ESI_ECX)\)/);
     expect(esi).not.toContain("hole(");
     expect(esi.slice(esi.lastIndexOf("c.rop"))).toMatch(/now \[IAT_SLOT\] \+ API_DELTA/);
-    // Above the code, one line saying which gadgets were chosen for ESI and why that route.
-    expect(loaders).toContain("What the chain does is below: one line per register, searched through libspp.dll rather than following one recipe.");
+    // Above the code, one line saying which gadgets were chosen for ESI and why that route. The heading
+    // must say the list is the chain's own, because a reader who takes it for a reference stops trusting it.
+    expect(loaders).toMatch(/What the chain does, one line per register, each searched through libspp\.dll/);
     expect(loaders).toMatch(/esi = VirtualAlloc \(\[IAT_SLOT\] \+ API_DELTA\): [A-Z_0-9 ->]*MOV_EAX_MEM_EAX[A-Z_0-9 ->]*\. \d gadgets: the value is the dword at IAT_SLOT, known only at run time/);
     expect(output).toContain("A VirtualAlloc chain from libspp.dll in the pushad style, the API reached from kernel32!GetDriveTypeA by a distance measured on this machine");
     expect(api.last_result().success).toBe(true);
