@@ -3635,7 +3635,10 @@ function bindApi(): OsedApi {
       return toDxResult("DEP Plan", rows);
     };
     if (!autoApi && !requestedApi) return fail(`api must be one of ${DEP_PLAN_APIS.join(", ")}, or "" to let the tool choose.`);
-    if (styleText !== "auto" && !DEP_PLAN_STYLES.includes(styleText as DepPlanStyle)) return fail(`style must be one of ${DEP_PLAN_STYLES.join(", ")}, or "auto".`);
+    if (styleText !== "auto" && styleText !== "none" && !DEP_PLAN_STYLES.includes(styleText as DepPlanStyle)) {
+      return fail(`style must be one of ${DEP_PLAN_STYLES.join(", ")}, "auto", or "none" for a process without DEP.`);
+    }
+    if (styleText === "none" && anyway) return fail('style "none" builds no chain, and anyway asks for one: pass "auto" with anyway.');
     if (!Number.isFinite(stage) || stage < 1) return fail("firstStage must be the number of the next free payloadN() in your file, 1 or more.");
     if (exclude.some((address) => !Number.isFinite(address) || address === 0)) return fail('exclude must be gadget addresses in hex, such as "6A42F3CD 6A411118".');
     if (!Array.isArray(badchars)) return fail('badchars must be hex bytes such as "00 0A 0D".');
@@ -3670,6 +3673,9 @@ function bindApi(): OsedApi {
     // replayed under [3/7] where it belongs. An echoed "auto" hid the one choice a screenshot most needs
     // to show, and reprinting the header lower down cannot fix it: the first line is what gets framed.
     const dep = depVerdict();
+    if (styleText === "none" && dep.enforced !== false) {
+      return fail(`style "none" is the answer for a process without DEP, and ${dep.name} ${dep.enforced ? "has DEP on" : "may have it"}: pass "auto" to build the chain.`);
+    }
     // Without DEP the stack runs the shellcode as it is. There is no chain, so no style is chosen and
     // the scan that would choose one is skipped, exactly as before this reordering.
     const buildsChain = dep.enforced !== false || anyway;
@@ -3701,12 +3707,14 @@ function bindApi(): OsedApi {
     const solved = moduleFailed || !buildsChain ? undefined
       : solveStyles(scanned, modules, badchars as number[], exclude, depApi, frameFacts, stagingFor);
     const staging = solved?.staging;
-    const style: DepPlanStyle = styleText === "auto" ? (solved ? chooseStyle(solved) : "skeleton") : styleText as DepPlanStyle;
+    const style: DepPlanStyle = styleText === "auto" || styleText === "none" ? (solved ? chooseStyle(solved) : "skeleton") : styleText as DepPlanStyle;
 
     // A run with no corpus chose no style, so its echo keeps "auto" instead of writing out the fallback
     // the rest of this function uses. Writing a choice that was never made is the thing the echo exists
-    // to prevent, and the screenshot rule exempts a stopped run's echo for the same reason.
-    out.section(out.dxCall("dep_plan", callArgs(solved ? style : styleText, anyway)));
+    // to prevent, and the screenshot rule exempts a stopped run's echo for the same reason. A process
+    // without DEP is the other run with no corpus, and it did decide something: that no chain is needed.
+    const noChain = dep.enforced === false && !anyway;
+    out.section(out.dxCall("dep_plan", callArgs(solved ? style : noChain ? "none" : styleText, anyway)));
     const n = DEP_PLAN_SECTIONS;
     const summary: Array<Record<string, string>> = [];
     // Below each section's output, so a screenshot of the output stops here and the block below it is one
@@ -3736,7 +3744,7 @@ function bindApi(): OsedApi {
         ? `Jump straight to your shellcode: payload = b"A" * OFFSET + p32(${dwordHex(jumps[0])}) + b"\\x90" * 16 + shellcode    (${dwordHex(jumps[0])} is jmp esp, no bad byte)`
         : `No jmp esp without a bad byte in ${modulesLabel}. dx @$osed().find_bytes("", "FF E4", 20, "${badText}") searches every module.`);
       if (!anyway) {
-        out.error(`The chain sections are skipped: they solve a problem this process does not have. To build the chain anyway, as an exercise: ${out.dxCall("dep_plan", callArgs(styleText, true))}`);
+        out.error(`The chain sections are skipped: they solve a problem this process does not have. To build the chain anyway, as an exercise: ${out.dxCall("dep_plan", callArgs(styleText === "none" ? "auto" : styleText, true))}`);
         setResult({ command: "dep_plan", args: { badchars: badText }, success: true, findings: [{ dep: "off", why: dep.why, jmpEsp: jumps[0] }], warnings: [], errors: [] });
         return toDxResult("DEP Plan", [{ Section: "DEP", Result: `off: ${dep.why}` }]);
       }

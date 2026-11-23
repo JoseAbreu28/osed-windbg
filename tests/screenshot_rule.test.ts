@@ -30,6 +30,13 @@ describe("the screenshot rule, one check per clause of GOAL.md", () => {
     expect(rules(['=== dx @$osed().dep_plan("", "", "00 0A", "auto", 1) ===', "=== STOP: no chain ==="].join("\n"))).toEqual([]);
   });
 
+  test("a run without DEP decided that no chain is needed, and its echo says so rather than auto", () => {
+    const off = "=== DEP is OFF for vuln.exe: no chain needed ===";
+    expect(rules([ECHO.replace('"pushad"', '"none"'), off].join("\n"))).toEqual([]);
+    expect(rules([ECHO.replace('"pushad"', '"auto"'), off].join("\n"))).toEqual(["echo echo"]);
+    expect(rules([ECHO.replace('"pushad"', '"none"'), "=== Verdict ==="].join("\n"))).toEqual(["echo echo"]);
+  });
+
   test("Python above the separator fails; prose, tables and indented maps do not", () => {
     const evidence = ["[+] lpflOldProtect = 0x10115000", "Type    Value", "    [ESP+0]  = EDI", "dx @$osed().modules()"];
     expect(rules([ECHO, "=== [5/7] Constants ===", ...evidence, SEPARATOR].join("\n"))).toEqual([]);

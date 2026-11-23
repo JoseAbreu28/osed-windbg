@@ -62,7 +62,7 @@ function echoArgs(title: string): unknown[] | undefined {
   }
 }
 
-function echoViolation(first: Section | undefined, stopped: boolean): string | undefined {
+function echoViolation(first: Section | undefined, stopped: boolean, noChain: boolean): string | undefined {
   if (!first) return "the transcript holds no dep_plan section at all";
   const args = echoArgs(first.title);
   if (!args) return `the first line is not a dep_plan call: ${first.title.slice(0, 80)}`;
@@ -70,6 +70,8 @@ function echoViolation(first: Section | undefined, stopped: boolean): string | u
   if (typeof badchars !== "string" || typeof stage !== "number") return `the call does not write the bad chars and the stage: ${first.title}`;
   // A run that stopped made no choice of API, module or style, so it cannot write one out.
   if (stopped) return undefined;
+  // Without DEP the run decides that no chain is needed, and "none" is that decision written out.
+  if (noChain) return style === "none" ? undefined : `a run without DEP builds no chain, so its style is "none", not ${JSON.stringify(style)}`;
   const unwritten = [
     APIS.indexOf(String(api)) < 0 ? `api ${JSON.stringify(api)}` : undefined,
     typeof modules !== "string" || modules.trim() === "" ? `module ${JSON.stringify(modules)}` : undefined,
@@ -82,7 +84,9 @@ export function screenshotViolations(transcript: string): Violation[] {
   const all = sections(transcript);
   const found: Violation[] = [];
   const stopped = all.some((section) => section.title.indexOf("STOP") === 0);
-  const echo = echoViolation(all[0], stopped);
+  const noChain = all.some((section) => section.title.indexOf("DEP is OFF") === 0)
+    && !all.some((section) => /^\[\d+\/\d+\]/.test(section.title));
+  const echo = echoViolation(all[0], stopped, noChain);
   if (echo) found.push({ section: "echo", rule: "echo", detail: echo });
 
   for (const section of all.slice(1)) {

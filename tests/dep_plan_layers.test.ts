@@ -224,6 +224,7 @@ describe("dep_plan asks first whether a chain is needed", () => {
     api.dep_plan("00 0A 0D");
     const output = prose();
     expect(output).toContain("=== DEP is OFF for vuln.exe: no chain needed ===");
+    expect(output.split("\n").find((line) => line !== "")).toBe('=== dx @$osed().dep_plan("VirtualAlloc", "libbkup.dll", "00 0A 0D", "none", 1) ===');
     expect(output).toContain("[-] The stack executes: the system policy is OptIn, vuln.exe does not opt in (NX_COMPAT disabled) and no Exploit Protection setting turns DEP on for it.");
     expect(output).toContain('[-] Jump straight to your shellcode: payload = b"A" * OFFSET + p32(0x11111291) + b"\\x90" * 16 + shellcode');
     const anyway = 'dx @$osed().dep_plan("VirtualAlloc", "libbkup.dll", "00 0A 0D", "auto", 1, "", true)';
@@ -251,6 +252,13 @@ describe("dep_plan asks first whether a chain is needed", () => {
     expect(output).toContain(why);
     expect(output).toContain("=== [7/7]");
     expect(api.last_result().success).toBe(true);
+  });
+
+  test('"none" is the answer for a process without DEP, so asked of one with DEP on it builds nothing and says why', () => {
+    const api = load(vuln(true), { policy: 2, registry: ABSENT });
+    api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", "none");
+    expect(api.last_result().success).toBe(false);
+    expect(api.last_result().errors[0]).toContain('pass "auto" to build the chain');
   });
 });
 
