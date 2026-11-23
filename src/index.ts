@@ -3639,7 +3639,7 @@ function bindApi(): OsedApi {
   };
   // [6/7]'s evidence for an SEH delivery: why it is one, why pop pop ret is not the handler, the measured
   // ESP, and the handlers that land in the buffer.
-  const printSehDelivery = (delivery: Extract<Delivery, { kind: "seh" }>, crash: SehCrash, taken: boolean): void => {
+  const printSehDelivery = (delivery: Extract<Delivery, { kind: "seh" }>, crash: SehCrash, taken: boolean, lead: number, style: DepPlanStyle): void => {
     out.info(`${taken ? "Delivered through the SEH record, not a saved EIP" : "The overflow reached an SEH record as well"}: EIP ${dwordHex(crash.eip)} is in ${crash.eipModule}, and the first record, at ${dwordHex(delivery.record)}, holds handler ${dwordHex(delivery.handler)}, which is in no module (!exchain).`);
     const page = memoryRegion(BigInt(delivery.record));
     out.info(`Not pop pop ret: it returns into the record itself, ${page.executable === false ? "on a page that does not execute" : "on the stack"} (!vprot ${dwordHex(delivery.record)}). The handler moves ESP into the buffer instead.`);
@@ -3649,10 +3649,15 @@ function bindApi(): OsedApi {
       out.info(`ESP when the handler runs: ${dwordHex(handlerEsp)}, the record 0x${delivery.sehEsp.toString(16).toUpperCase()} above it. Measured: ${delivery.how}.`);
       out.info(`Reproduce: ${delivery.reproduce}`);
       if (delivery.pivots.length === 0) out.warn(`No handler lands between the faulting ESP ${dwordHex(crash.esp)} and the record, so the chain goes on the saved EIP instead. If this target's function never returns, the missing piece is one gadget that adds between 0x${((crash.esp - handlerEsp) >>> 0).toString(16).toUpperCase()} and 0x${delivery.sehEsp.toString(16).toUpperCase()} to ESP and returns: dx @$osed().rop.pivots()`);
+      // Which one the payload takes cannot be settled here: the chain lands at OFFSET minus the drop,
+      // and OFFSET is the user's measurement. So each candidate carries the smallest OFFSET it works at,
+      // which is the rule seh_pivot applies in the emitted file, and the reader reads the pick off it.
       for (const pivot of delivery.pivots.slice(0, 3)) {
-        out.info(`  ${dwordHex(pivot.address)}  ${pivot.sequence}: its ret lands 0x${(delivery.sehEsp - pivot.land).toString(16).toUpperCase()} below the record, at OFFSET - 0x${(delivery.sehEsp - pivot.land).toString(16).toUpperCase()}`);
+        const drop = delivery.sehEsp - pivot.land;
+        out.info(`  ${dwordHex(pivot.address)}  ${pivot.sequence}: lands at OFFSET - 0x${drop.toString(16).toUpperCase()}, so it needs OFFSET >= 0x${(drop + lead).toString(16).toUpperCase()}`);
       }
       if (delivery.pivots.length > 3) out.info(`  ${delivery.pivots.length - 3} more in SEH_PIVOTS below`);
+      if (taken) out.info(`seh_pivot takes the lowest landing that still leaves the ${lead} byte(s) of buffer the ${style} style keeps below the chain, and stops the file if none does.`);
     }
     out[delivery.tail === undefined ? "warn" : "info"](`Past the handler: ${delivery.tailHow}.`);
   };
@@ -4011,7 +4016,8 @@ function bindApi(): OsedApi {
         // frame sits in the program's own memory between the write and the call.
         out.warn("A run of zero, int3 or nop bytes in a writable section. Nothing here proves the program never writes there.");
       } else if (style === "staged") for (const line of solved?.unavailable ?? []) out.warn(line);
-      if (seh) printSehDelivery(seh, sehCrash!, delivery.kind === "seh");
+      // The skeleton lays its call frame under the chain; the other two keep nothing below it.
+      if (seh) printSehDelivery(seh, sehCrash!, delivery.kind === "seh", style === "skeleton" ? 4 * FRAMES[depApi].length : 0, style);
       if (delivery.kind !== "seh") {
         out[landing.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing.how}.`);
         out[landing.measured ? "info" : "warn"](!landing.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP."

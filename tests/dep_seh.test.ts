@@ -43,7 +43,8 @@ describe("dep_plan, delivered through an SEH handler", () => {
     expect(frame).toContain("Delivered through the SEH record, not a saved EIP: EIP 0x00401010 is in vuln.exe, and the first record, at 0x0019EC00, holds handler 0x43434343, which is in no module (!exchain).");
     expect(frame).toContain("Not pop pop ret: it returns into the record itself");
     expect(frame).toContain("ESP when the handler runs: 0x0019DF00, the record 0xD00 above it.");
-    expect(frame).toContain("0x11111401  add esp, 0x600 ; ret: its ret lands 0x700 below the record, at OFFSET - 0x700");
+    expect(frame).toContain("0x11111401  add esp, 0x600 ; ret: lands at OFFSET - 0x700, so it needs OFFSET >= 0x700");
+    expect(frame).toContain("seh_pivot takes the lowest landing that still leaves the 0 byte(s) of buffer the pushad style keeps below the chain");
     expect(frame).not.toContain("0x11111411");
     expect(frame).not.toContain("0x11111421");
     expect(frame).toContain("Past the handler: the crash wrote 0x200 bytes of 0x43 past the handler");
@@ -92,6 +93,9 @@ describe("dep_plan, delivered through an SEH handler", () => {
     const six = section(output, "=== [6/7]");
     const frameBytes = 4 * 6;
     expect(six).toContain(`HANDLER, CHAIN_AT, RET_GAP = seh_pivot(len(frame))`);
+    // The skeleton keeps its frame below the chain, so the same pivot needs that much more OFFSET.
+    expect(section(prose(), "=== [6/7]")).toContain(`lands at OFFSET - 0x700, so it needs OFFSET >= 0x${(0x700 + frameBytes).toString(16).toUpperCase()}`);
+    expect(section(prose(), "=== [6/7]")).toContain(`leaves the ${frameBytes} byte(s) of buffer the skeleton style keeps below the chain`);
     expect(six).toContain("FRAME_AT = CHAIN_AT - len(frame)");
     const { sent, error } = send(output);
     expect(error).toBe("");
@@ -118,6 +122,8 @@ describe("a crash that looks like an SEH delivery and cannot be one", () => {
     expect(frame).toContain("No handler lands between the faulting ESP 0x0019E3F4 and the record, so the chain goes on the saved EIP instead.");
     expect(frame).toContain("one gadget that adds between 0x4F4 and 0xD00 to ESP and returns");
     expect(frame).toContain("ESP after the crashing ret");
+    // There is no seh_pivot in the file on this path, so nothing says how one would choose.
+    expect(frame).not.toContain("seh_pivot takes the lowest landing");
     expect(section(prose(), "=== Verdict")).not.toContain("delivered through the SEH handler");
     // No SEH_ESP, no seh_record, and no hole for a pivot that was never going to be used.
     expect(section(output, "=== [6/7]")).not.toContain("SEH_ESP");
