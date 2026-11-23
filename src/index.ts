@@ -3238,13 +3238,17 @@ function bindApi(): OsedApi {
   // would reproduce something else.
   const frameAddresses = (modules: string[], badText: string, depApi: DepApi, moduleFailed = false): { writable?: number; cave?: number; caveBytes?: number; stagingFor: StagingFor } => {
     const bad = (parseHexByteList(badText) || []) as number[];
-    // The largest, not the first: how many bytes the copy may move is the size of the cave it lands in,
-    // so a bigger cave is strictly a better answer and the biggest one is the honest offer.
+    // Clean address first, then the largest. A cave whose own address holds a bad char is usable only from
+    // some dword inside it, and what made the run look like a cave need not hold that far in: on T06 the
+    // largest was a 0x1000 byte padding run whose shifted address took the chain into the module's first
+    // instructions. Among caves the chain can pop as they are, the largest, because how many bytes the
+    // copy may move is the size of the cave it lands in.
     const pickCave = (minSize: number, capability: string): { address: number; size: number } | undefined => {
+      const shifted = (cave: { addrSafe: boolean | null }): number => (cave.addrSafe !== false ? 0 : 1);
       for (const module of modules) {
         const { caves } = findCodeCaves(module, minSize, 25, badText, capability);
         const found = caves.filter((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null)
-          .sort((left, right) => right.size - left.size)[0];
+          .sort((left, right) => shifted(left) - shifted(right) || right.size - left.size)[0];
         if (found) return { address: Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address), size: found.size };
       }
       return undefined;

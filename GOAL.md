@@ -207,6 +207,70 @@ exact file shipped, not the source it came from.
 
 ## Known gaps, newest first
 
+- ~~**Both chain styles build the frame where only a run can know the address.**~~ The skeleton lays it in
+  the stack buffer and PUSHAD keeps it in registers until one gadget writes it, which is why the skeleton
+  needs six jobs to compute one address: capture ESP, add a distance, copy the result into the write
+  gadget's address register, and walk that pointer field by field. A module with no register copy and no
+  `pushad ; ret` was therefore refused outright, although a chain existed.
+
+  A third style lays the frame at a fixed writable address in the module, so every field address is a
+  constant the chain pops: per field, `pop <addr>, FRAME + n` then the write. No copy, no advance, and the
+  pivot targets a constant. Its job list comes off `FRAMES` like the other two. Two things fell out of
+  building it that are not obvious. The field job comes **after** the value jobs, because a constant can be
+  popped again at any point while a captured pointer has to stay live, so a staged chain's value loads keep
+  nothing and a gadget the skeleton refuses for clobbering the field address is usable here. And where the
+  frame can go is not a property of the frame: the chain pops `field - writeOffset`, so a write through
+  `[reg+4]` pops the dword below the frame too, and the pivot's own pops shift its dword as well.
+  `stagingBase` walks a writable run a dword at a time until a base makes every popped address clean; one
+  clean address at the head of a long cave proves nothing.
+
+  `chooseStyle` takes fewest jobs left open, then `skeleton`, `pushad`, `staged`. That order is a
+  preference and not a gadget count: nothing outside the process can touch a frame in the payload or in
+  registers, while a staged frame sits in memory the program owns and nothing here proves the program
+  leaves those bytes alone between the write and the call. `[6/7]` says so rather than hiding it. The
+  order is also what protects the targets that already pass: staged can at best tie them, and a tie keeps
+  the style they had.
+
+- ~~**The job list is per style but not per API.**~~ `jobsFor` reads the list off `FRAMES` and
+  `PUSHAD_FRAMES` in `src/commands/dep_frames.ts`, so a job can only be required by a slot that exists.
+  The skeleton asks for a negate only when the frame computes a size, and the PUSHAD frame for
+  WriteProcessMemory asks for five pops rather than seven, because its five arguments do not fit the four
+  spare registers and two of them are never loaded. `tests/dep_plan_registers.test.ts` holds both lists.
+
+  It moved no target. T06 and T08 were the two it was meant to free and their refusals turned out to be
+  honest: a register copy is absent from both modules outright, every byte searched for all 222 plain
+  encodings, and `pushad ; ret` with it. Neither existing style can be built there whatever the API.
+
+- ~~**The write gadget's two operands are chosen without reference to the frame.**~~ A skeleton chain
+  carries the field address in one register and the value in the other, and the write gadget decides
+  which. The old ranking chose it for its side effects alone, so a module whose cheapest write is
+  `mov [eax+4], ecx` forced every value into ECX with EAX held, and a value reachable only in EAX was
+  reported out of reach although a lower-ranked write would have taken it. `planWrites` tries each
+  usable candidate, re-plans the job list around it, and keeps the one whose frame the corpus can fill.
+  `[4/7]` prints what each candidate could fill, so the choice is on the screenshot.
+
+  The copy had the same blindness: it runs before the write, so nothing had bound the field and it landed
+  wherever was cheapest. It is picked again once the write's register is known, and only if no single
+  gadget lands there is the path search asked.
+
+- ~~**A cost row was a leftover measured at one call site.**~~ The emitted chain pads junk for the stack
+  dwords a gadget takes past the values handed to it, and read the count from one `COST` row per gadget.
+  The row held the leftover from wherever the gadget was first used, so a gadget used once with one value
+  and once with two could only be right in one place; and because a drop-in swap is written into `COST`
+  by address, and an address can be another gadget's chain row, Python let a swap's leftover define the
+  chain gadget's padding. A row now counts the dwords the gadget itself takes and the emitted `rop` pads
+  `max(0, pops - len(values))`. `tests/dep_build_cost.test.ts` goes red with either half reverted.
+
+  This is what killed T05 on the clone after its chain became complete: `pop ecx ; pop esi ; ret` was a
+  chain gadget called with both its dwords and also a swap of `pop ecx ; ret` with a leftover of one, so
+  the file padded one junk dword too many and the next `ret` took `0x41414141`.
+
+- ~~**`nSize` was 0x210 in four places, so a narrower cave read as no cave.**~~ WriteProcessMemory copies
+  into an executable cave, and how many bytes it copies is a fact about that cave. The cave search takes
+  the largest clean one rather than the first and reports its size; the slot's value, the printed recipe
+  and the loaders all read it from there. A copy smaller than the design size prints one line saying so
+  and saying the shellcode has to fit. Below `WPM_MIN_COPY` the cave is still the missing piece.
+
 - ~~Register loading follows one recipe, compute in EAX then move, instead of searching for a path.~~
   **Closed on 2026-11-22.** A register is now loaded by `ReachIndex.reach` in `src/rop/reach.ts`, a
   backward search over gadgets as register transitions. One mechanism covers every route, so a shape
@@ -285,6 +349,16 @@ Written down so the next agent does not look for it.
   which has no `mov <reg>, ebp`, `xchg ebp, <reg>`, `push ebp ; pop <reg>` or `add <reg>, ebp` reaches
   `[7/7]` and leaves every stack-address slot a hole. T08 again. The hole names the cause, which is one
   layer better than a refusal, and a job that tested the move would have said it at the method layer.
+
+- **The distance to the sled is one popped dword, so its sign decides whether a target is reachable.**
+  The emitted script works the distance out, patches it into the chain and loops a gap until it is clean,
+  so no static search owns it. Subtracted it pops as `0xFFFFFExx` and added as `0x000001xx`, which no
+  target with `00` as a bad char accepts, and no gap inside the loop's range changes that: the top two
+  bytes of a few hundred are zero whatever the gap. A module with no `sub` into the register the frame is
+  built in therefore cannot carry a stack address at all. Measured on T10, whose module has `add eax, edx`
+  and no `sub` anywhere, where it is the only hole left. The script knows the number, so a pop, a pop and
+  an add laid out in advance would let it split the distance into two clean dwords; that is a change to
+  what the chain emits for one slot, not to the search.
 
 ### What an adversarial review of the search found, and what it cost
 
