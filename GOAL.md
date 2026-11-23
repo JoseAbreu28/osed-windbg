@@ -145,6 +145,51 @@ past 130 columns on Sync Breeze. The echoed first line says `"auto"` for the sty
 built a chain: it prints before the style is chosen. Every run has a line past 130 columns somewhere, the
 widest 368 characters (T05).
 
+## Corpus run, 2026-11-23, measured at `0c58ee2`
+
+`dist/osed-legacy.js` sha256 `e89d94e2448a47f3ec6d29c3c74e13df7f6879913482475ac88329ebf98c1dbd`.
+The agent that made these changes was stopped by a model safeguard before it could write this
+section or commit the rebuilt bundle; both were finished by the parent, which rebuilt `dist` from
+the committed source, re-ran the suite and read the measured run rather than the agent's account
+of it.
+
+**Eight of fifteen pass, from zero.** Six class A targets land the marker, among them the only
+real application in the corpus. Two class B targets now refuse correctly *and* name the leak, which
+is what `GOAL.md` asks a refusal to do, so they count.
+
+| Result | Targets |
+|---|---|
+| marker landed | T01, T02, T03, T04, T09, T12 |
+| refused correctly, leak named | T13, T15 |
+| still failing | T05, T06, T07, T08, T10 |
+| not attempted, the target's fault | T11, T14 |
+
+What moved, against the previous run:
+
+| # | Targets | Then | Now |
+|---|---|---|---|
+| 1 | T01, T02, T04, T09 | the payload carried `0x00000014`, three `00` bytes, from a static `neg(-20)` in the pivot | every dword the planner sends is now built rather than written raw, so the bad char check is a property of emitting a dword at all. All four land the marker |
+| 2 | T12, Sync Breeze | the target returns with `ret 4`, ESP lands at OFFSET + 8, and the chain assumed OFFSET + 4, so every value popped one dword late | the gap is read from the crash instead of assumed. The marker lands. Two independent measurements agreed on it beforehand: a 1200 byte cyclic pattern put EIP at 780 with ESP pointing into the pattern at 788, and the harness found that four bytes of padding after EIP fixed the chain with nothing else changed |
+| 3 | T13, T15 | refused correctly and left the user standing there | the refusal names the leak as the missing piece. Both count as passes now |
+| 4 | T03 | refused at the method layer although the gadgets existed at clean addresses | a job is satisfied by a path, not by one named gadget. T03 lands the marker |
+
+What did not move, and why each is a different problem:
+
+- **T05** no longer refuses; it reaches the payload and stops on an unfilled hole,
+  `virtualprotect_value`. One layer further than before, and a different bug.
+- **T06, T08** still refuse at the method layer, for "copy a register" and for pops the pushad
+  style wants. Their references exploit them with chains that need neither, so the job list is
+  still too rigid per style and per API. This is the largest remaining item.
+- **T07** still faults at `0x0040126C`: its overwrite is a job pointer, not a saved EIP, and the
+  tool puts the chain where the pointer is. Its own reference also fails on the clone, so the
+  target is unverified and tool and target are not yet separated.
+- **T10** failed in the harness, not in the tool: the marker shellcode generator raised. That is
+  harness noise and must be fixed before T10 says anything about the tool.
+
+The build is reproducible apart from one stamp: `__OSED_BUILD_TIME__` differs between two builds of
+the same source and nothing else does, five bytes in 1.3 MB. So a published sha256 identifies the
+exact file shipped, not the source it came from.
+
 ## Known gaps, newest first
 
 - ~~Register loading follows one recipe, compute in EAX then move, instead of searching for a path.~~
