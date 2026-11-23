@@ -260,6 +260,16 @@ Written down so the next agent does not look for it.
   so in those words instead of claiming no path exists: a truncated verdict is not proof of absence.
 - **`cdq ; ret` and the one-operand `imul`, `mul`, `div`, `idiv` are rejected, not modelled.** Safe, and it
   costs real routes in a module whose only spare gadget is one of those.
+- **A memory read that also writes memory is not a transition.** `effectOf` refuses any gadget that stores
+  through an address the search cannot pin, so `xchg dword [ecx], eax` is unusable as a deref although the
+  dword it clobbers is the one the chain just read and never needs again. Measured on T08 with the replay
+  lever at `e596453`: it is that module's only memory read, `[4/7]` picks it for the read job, and
+  `load_virtualalloc` is still a hole. The method layer and the value search disagree about one gadget.
+- **The captured ESP can land in a register nothing moves out of.** `[4/7]` judges the capture on its own
+  and the move out of it is the build's business, so a module whose only capture is `mov ebp, esp` and
+  which has no `mov <reg>, ebp`, `xchg ebp, <reg>`, `push ebp ; pop <reg>` or `add <reg>, ebp` reaches
+  `[7/7]` and leaves every stack-address slot a hole. T08 again. The hole names the cause, which is one
+  layer better than a refusal, and a job that tested the move would have said it at the method layer.
 
 ### What an adversarial review of the search found, and what it cost
 

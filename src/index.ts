@@ -3841,6 +3841,9 @@ function bindApi(): OsedApi {
         out.echo("code_caves", [modules[0], out.hex(4 * slots), 25, badText, "STAGING"]);
         out.info(`The frame is laid at ${dwordHex(staging)}: ${4 * slots} writable bytes in ${modulesLabel}, not in the payload.`);
         out.info(`Every one of its ${slots} field addresses is free of the bad bytes, so the chain pops them as they are.`);
+        // The one thing this style can fail on that the other two cannot, and it is not a gadget: the
+        // frame sits in the program's own memory between the write and the call.
+        out.warn("A run of zero, int3 or nop bytes in a writable section. Nothing here proves the program never writes there.");
       } else if (style === "staged") for (const line of solved?.unavailable ?? []) out.warn(line);
       out[landing.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing.how}.`);
       out[landing.measured ? "info" : "warn"](!landing.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP."
