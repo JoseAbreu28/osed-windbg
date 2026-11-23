@@ -12323,10 +12323,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-23T11:41:52.274Z" : globalThis[key2];
+        value = true ? "2026-11-23T12:54:22.146Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "879216e6aa33" : globalThis[key2];
+        value = true ? "b80bc17a2e0e" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15640,6 +15640,9 @@ var osed_bundle = (() => {
     var _a2;
     return Math.min(WPM_COPY, (_a2 = facts.caveBytes) != null ? _a2 : WPM_COPY);
   };
+  function clearOfCopy(at, size, copy) {
+    return copy === void 0 || at + size <= copy.at || at >= copy.at + copy.size;
+  }
   var stackSlot = (api) => FRAMES[api].findIndex((slot) => slot.source.kind === "shellcode");
   function stagedPops(api, writeOffset, pivotPops) {
     return [...FRAMES[api].map((_, i) => 4 * i - writeOffset), 0 - 4 * pivotPops, 4 * stackSlot(api)];
@@ -20961,7 +20964,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     const caps = [];
     if (r && w && x)
       caps.push("RWX");
-    if (x && !(r && w && x))
+    if (x)
       caps.push("EXEC");
     if (w) {
       caps.push("STAGING");
@@ -28244,13 +28247,17 @@ ${INDENT}`)]);
       var _a2, _b;
       const bad = parseHexByteList(badText) || [];
       let stagingBelow;
+      let copied;
+      const clearOf = (at, size) => clearOfCopy(at, size, copied);
       const pickCave = (minSize, capability2) => {
         const shifted = (cave2) => cave2.addrSafe !== false ? 0 : 1;
+        const readOnly = (cave2) => cave2.writable === true ? 0 : 1;
+        const addressOf = (cave2) => Number(cave2.addrSafe === false && cave2.safeVa !== null ? cave2.safeVa : cave2.address);
         for (const module of modules) {
           const { caves } = findCodeCaves(module, minSize, 25, badText, capability2);
-          const found = caves.filter((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null).sort((left, right) => shifted(left) - shifted(right) || right.size - left.size)[0];
+          const found = caves.filter((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null).filter((candidate) => clearOf(addressOf(candidate), minSize)).sort((left, right) => shifted(left) - shifted(right) || readOnly(left) - readOnly(right) || right.size - left.size)[0];
           if (found)
-            return { address: Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address), size: found.size };
+            return { address: addressOf(found), size: found.size, writable: found.writable };
         }
         return void 0;
       };
@@ -28262,7 +28269,7 @@ ${INDENT}`)]);
           for (const cave2 of caves) {
             const run = { at: Number(cave2.address), size: cave2.size };
             const base = stagingBase(run, span, pops, bad);
-            if (base !== void 0)
+            if (base !== void 0 && clearOf(base, span))
               found.push({ base, room: stagingRoom(run, base) });
           }
         }
@@ -28270,10 +28277,13 @@ ${INDENT}`)]);
         return (_b2 = found.sort((left, right) => right.room - left.room)[0]) == null ? void 0 : _b2.base;
       };
       const cave = depApi === "WriteProcessMemory" && !moduleFailed ? (_a2 = quietly(() => pickCave(WPM_COPY, "EXEC"))) != null ? _a2 : quietly(() => pickCave(WPM_MIN_COPY, "EXEC")) : void 0;
+      if (cave)
+        copied = { at: cave.address, size: copyBytes({ caveBytes: cave.size }) };
       return {
         writable: depApi === "VirtualAlloc" || moduleFailed ? void 0 : (_b = quietly(() => pickCave(4, "STAGING"))) == null ? void 0 : _b.address,
         cave: cave == null ? void 0 : cave.address,
         caveBytes: cave == null ? void 0 : cave.size,
+        caveWritable: cave == null ? void 0 : cave.writable,
         stagingFor: (span, offsets) => moduleFailed ? void 0 : quietly(() => pickStaging(span, offsets)),
         roomBelow: () => stagingBelow
       };
@@ -28706,7 +28716,7 @@ ${INDENT}`)]);
       });
       const scanned = scan.value;
       const iatSlot = route == null ? void 0 : route.slot;
-      const { writable, cave, caveBytes, stagingFor, roomBelow } = frameAddresses(modules, badText, depApi, moduleFailed);
+      const { writable, cave, caveBytes, caveWritable, stagingFor, roomBelow } = frameAddresses(modules, badText, depApi, moduleFailed);
       const frameFacts = { iatSlot, slotWritable: slotWritable(iatSlot), delta: (_c = route == null ? void 0 : route.delta) == null ? void 0 : _c.value, writable, cave, caveBytes };
       const solved = moduleFailed || !buildsChain ? void 0 : solveStyles(scanned, modules, badchars, exclude, depApi, frameFacts, stagingFor);
       const staging = solved == null ? void 0 : solved.staging;
@@ -28797,7 +28807,9 @@ ${INDENT}`)]);
       }
       printBlock(HELPER_BLOCK);
       const unusable = chosen.find((entry) => entry.why !== void 0);
-      if (chosen.length === 0) {
+      if (candidates2.length === 0) {
+        stop("module", `This session lists no loaded module for the process, so nothing was searched and no conclusion about the target follows. That is what a debugger shows when the attach caught the process before its loader ran, or after it died. Check with dx @$osed().modules() and attach again.`);
+      } else if (chosen.length === 0) {
         const fixedOut = candidates2.filter((entry) => entry.info.aslr !== "enabled");
         stop("module", `no loaded module can give gadgets: ${fixedOut.length > 0 ? fixedOut.map((entry) => `${entry.label} (${entry.why})`).join(", ") : "every one has ASLR"}${fixedOut.length > 0 ? ", and the rest have ASLR" : ""}.`, ...candidates2.some((entry) => entry.info.aslr === "enabled") ? leakNext() : []);
       } else if ((unusable == null ? void 0 : unusable.info.aslr) === "enabled") {
@@ -28925,6 +28937,10 @@ ${INDENT}`)]);
           warn(`Code cave: none of 0x${WPM_MIN_COPY.toString(16)} bytes or more with a clean address in ${modulesLabel}. Try dx @$osed().code_caves("", 0x${WPM_MIN_COPY.toString(16)}, 25, "${badText}", "EXEC").`);
         else
           info(`Code cave (return address and lpBaseAddress) = ${hex325(cave)}, executable (code_caves EXEC), 0x${(caveBytes != null ? caveBytes : 0).toString(16)} bytes.`);
+        if (cave !== void 0 && caveWritable !== true) {
+          warn(`That cave is executable but not writable, so a shellcode that decodes itself in place faults on its own first write, a few bytes into its stub. A plain shellcode runs there unchanged.`);
+          warn(`What an encoded one would need is writable executable bytes: dx @$osed().code_caves("", 0x${WPM_COPY.toString(16)}, 25, "${badText}", "RWX")`);
+        }
         if (cave !== void 0 && copy < WPM_COPY) {
           const also = style === "staged" ? ", the six bytes of [7/7]'s ESP restore" : "";
           warn(`nSize = 0x${copy.toString(16)}, not the usual 0x${WPM_COPY.toString(16)}: that is all this cave holds. Your shellcode${also} and its NOP sled must fit in 0x${copy.toString(16)} bytes, or the copy runs past the cave.`);
