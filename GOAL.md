@@ -464,6 +464,57 @@ tweak. The holdout that measures the honest class B exit is still held back, so 
 No `--ref` pass was made at this commit. Figures: the staged style's own two figures on the WriteProcessMemory page are
 the only published ones this change alters, step 8 and the editor shot, and only those were recaptured.
 
+## Corpus run, 2026-11-23, measured at `ca2b7db`
+
+`dist/osed-legacy.js` sha256 `82d8412e1d047107f601f55f3a73cc5993b444b4433eb8fd2267a0ed860fdfbe`, the file the corpus ran
+against on the lab clone and the file committed in `dist/`. One sha256 for the measured, committed and shipped file: no
+tool source changed this run, so the bundle was not rebuilt. What changed was the manifest and its adapters, both outside
+this repo: one new target and its one send line. The run directory is `harness/runs/corpus-ca2b7db`, and its `results.json`
+carries commit `ca2b7db` and the same sha256. The one holdout left was not run, opened, read or grepped. Every class A
+target was given only its bad chars and stage 1.
+
+**Fourteen of fifteen pass, from thirteen of fourteen.** T18 is the one that moved, and it moved the denominator: a target
+the corpus had never measured, added to the manifest for this run, and it passed on the first measured run. Nothing
+regressed. Every one of the other sixteen targets the manifest runs reproduced its previous status, API, module and style,
+and the screenshot rule found no violation in any section of any target. The whole run took 1667 seconds, 626 of them Sync
+Breeze's service restarts and second fire.
+
+| Result | Targets |
+|---|---|
+| marker landed | T01, T02, T03, T04, T05, T06, T07, T09, T10, T11, T12, T18, and the spent holdouts T16, T17 |
+| refused correctly, leak named | T13, T15 |
+| still failing | T08 |
+
+**On the denominator.** T18 is the binary named in the first row of the corpus shape table above, `vuln_dep.exe` with
+`libbkup`, the canonical skeleton shape the tool was first built against. It had been in the tree the whole time and was
+never in the manifest, so fourteen targets were measured all along and the one shape the table opens with was not among
+them. Adding it makes the denominator fifteen. The denominator is what the manifest runs minus the three holdouts, the two
+spent and the one still held, which are reported on their own line. So thirteen of fourteen before and fourteen of fifteen
+after, comparable as they stand.
+
+| # | Target | Then | Now |
+|---|---|---|---|
+| 1 | T18 | never measured: the manifest held fourteen targets and this shape, the table's own first row, was not one of them | a VirtualAlloc chain from `libbkup.dll` in the skeleton style, delivered to a saved return address, with one hole, the shellcode. The exe is based at `0x00400000`, so `00` rules out every gadget in it and the fixed DLL at `0x6A410000` is the only source. The payload is 1363 bytes and carries no bad char. VirtualAlloc was reached from the chain and the marker landed. The empty loader and the `virtualalloc_value` hole seen on a hand run the day before are gone, measured, not present |
+
+**What did not move.** T08 is the only class A failure, measured again at this commit and refusing as before. The STOP reads
+"<the exe> is 1 job(s) short of the staged style, the closest of the 3: read a pointer", and `[4/7]` names the one gadget
+that would read the slot, `0x63101ED5  mov eax, dword [eax] ; mov esp, ebp ; ret 0x12`, the one the reference uses. It is
+listed as the hit "the ranking never saw, because the job's own instruction is not the whole gadget there": it reads the
+slot and in the same step pivots ESP out of EBP and returns `0x12` past its values. The reference takes it as the chain's
+last gadget, landing on a frame whose first dword pushes the just-read register into the call. No existing style models a
+read that is also the pivot, nor a frame whose entry pushes a register, so the refusal is right that no chain the tool can
+express exists. Its shape is written under "Known gaps" and none of it is a search tweak.
+
+**A premise disproved.** The brief for this run held that the refusal is wrong because the reference exploits the target, so
+a chain must exist that the tool refused to build. The measurement separates the two. The reference exploits it in a shape
+the tool does not model, which is not a chain the tool declined to emit. Widening `effectOf` to allow the `fs:[0]` store,
+which the brief called the obvious move, would not flip it either: "read a pointer" refuses at the method layer before the
+captured-ESP-stuck-in-EBP problem the `fs:[0]` gadget addresses is ever reached, so the one move would be both risky to the
+fourteen passes and insufficient. No tool change was made for T08, by that reasoning.
+
+No `--ref` pass was made at this commit. The tool is byte for byte the bundle the eighth run measured, so no guide or
+Workflows page is affected.
+
 ## Target or tool: T07 and T14, 2026-11-23
 
 Asked to separate, not to fix. Both answers are measured.
