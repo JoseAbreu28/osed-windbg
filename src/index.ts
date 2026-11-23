@@ -49,7 +49,7 @@ import { badcharAddressFilter } from "./logic/pointer_filter_logic";
 import { COPY_SEPARATOR, CORPUS_BLOCK, HELPER_BLOCK, buildExploit, measureLanding, popsAfterPivot, slotBlock, type Block, type Delta } from "./commands/dep_build";
 import { GROUPS as PALETTE_GROUPS, SHAPES as PALETTE_SHAPES, extrasOf as paletteExtras, paletteLines, pickShape, shapeEncodings } from "./commands/palette";
 import { constantsFor, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planWrites, settledLines, SHOWN_ABOVE, type DepPlanStyle, type Hit, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
-import { copyBytes, FRAMES, stagedPops, stagingBase, stagingRoom, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
+import { copyBytes, FRAMES, stackSlot, stagedPops, stagingBase, stagingRoom, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { handlerCandidates, landingPivots, measureTail, type Delivery } from "./commands/dep_delivery";
 import { measureHandlerEsp, readByte, sehAtCrash, type SehCrash } from "./commands/dep_delivery_live";
@@ -4006,7 +4006,10 @@ function bindApi(): OsedApi {
       // The copy size is not the design's: it is what this cave holds. A chain that copied more would
       // write past the end of it, so the shellcode has to fit, and that is a constraint on him.
       if (cave !== undefined && copy < WPM_COPY) {
-        out.warn(`nSize = 0x${copy.toString(16)}, not the usual 0x${WPM_COPY.toString(16)}: that is all this cave holds. Your shellcode and its NOP sled must fit in 0x${copy.toString(16)} bytes, or the copy runs past the cave.`);
+        // The staged style's sled starts with the six bytes that put ESP back on the stack, and the copy
+        // carries them into the cave like any other byte of it, so they come out of the same budget.
+        const also = style === "staged" ? ", the six bytes of [7/7]'s ESP restore" : "";
+        out.warn(`nSize = 0x${copy.toString(16)}, not the usual 0x${WPM_COPY.toString(16)}: that is all this cave holds. Your shellcode${also} and its NOP sled must fit in 0x${copy.toString(16)} bytes, or the copy runs past the cave.`);
       }
     }
     // One line per loader before the loaders themselves: which gadgets the search chose, in order, and
@@ -4034,7 +4037,9 @@ function bindApi(): OsedApi {
         out.info(`The frame is laid at ${dwordHex(staging)}: ${4 * slots} writable bytes in ${modulesLabel}, not in the payload. Every one of its ${slots} field addresses is free of the bad bytes, so the chain pops them as they are.`);
         // The pivot puts ESP here, so the call runs on the writable bytes under the frame. That is the
         // one number that says whether it can return at all, and it is not a gadget.
-        out.info(`${dwordHex(roomBelow() ?? 0)} bytes of that run sit below the frame, and that is the stack ${depApi} gets: it pushes down from here. The frame is laid as high in the run as its own field addresses allow, for exactly this reason.`);
+        out.info(`${dwordHex(roomBelow() ?? 0)} bytes of that run sit below the frame, and that is the stack ${depApi} itself runs on: it pushes down from here. The frame is laid as high in the run as its own field addresses allow, for exactly this reason.`);
+        // Measured on T11: 0x150 bytes for the call, 0x2210 for the shellcode's one WinExec.
+        out.info(`The call's ret leaves ESP on the frame, so the sled in [7/${n}] starts by loading it back out of ${dwordHex((staging + 4 * stackSlot(depApi)) >>> 0)}, the field holding the sled's own stack address. An API returns on a few hundred bytes of this run; a shellcode does not.`);
         // The one thing this style can fail on that the other two cannot, and it is not a gadget: the
         // frame sits in the program's own memory between the write and the call.
         out.warn("A run of zero, int3 or nop bytes in a writable section. Nothing here proves the program never writes there.");

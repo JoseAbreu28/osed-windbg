@@ -98,13 +98,22 @@ export type FrameFacts = { iatSlot?: number; slotWritable?: boolean; delta?: num
 /** How many bytes the copy moves, given what the module's cave holds. */
 export const copyBytes = (facts: FrameFacts): number => Math.min(WPM_COPY, facts.caveBytes ?? WPM_COPY);
 
+/** Which field of a frame holds the sled's address on the thread's own stack. Every API has one: the two
+ * that make the stack executable point their own first argument at it, and WriteProcessMemory copies from
+ * it. A staged chain reads ESP back out of that field, so the field matters beyond its own call. */
+export const stackSlot = (api: DepApi): number => FRAMES[api].findIndex((slot) => slot.source.kind === "shellcode");
+
 /** The dwords a staged chain pops off the frame's base, as offsets from it. One per field, shifted back
  * by the write gadget's own displacement, because a gadget that stores to `[reg+4]` is handed the field's
  * address minus four; and the pivot's, shifted back by the dwords the pivot takes off the new stack
  * before its ret, so that ret lands on field 1. Which gadgets those are is the run's answer, so where a
- * staged frame can go is not a property of the frame alone. */
+ * staged frame can go is not a property of the frame alone.
+ *
+ * The last is not popped by the chain at all: it is the address of the field holding the sled, which the
+ * sled's own first instruction loads ESP from, so it is sent as four bytes of the payload instead. Same
+ * requirement either way, and it belongs here so one function decides where a frame may go. */
 export function stagedPops(api: DepApi, writeOffset: number, pivotPops: number): number[] {
-  return [...FRAMES[api].map((_, i) => 4 * i - writeOffset), 0 - 4 * pivotPops];
+  return [...FRAMES[api].map((_, i) => 4 * i - writeOffset), 0 - 4 * pivotPops, 4 * stackSlot(api)];
 }
 
 /** Where a staged frame can be laid inside one run of writable bytes, or undefined when nowhere in it

