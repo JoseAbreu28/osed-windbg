@@ -266,13 +266,17 @@ export const sehShape = (() => {
     bytes.fill(0x43, RECORD - STACK + 4, RECORD - STACK + 8 + TAIL);
     return { eip: 0x00401010, esp: FAULT_ESP, stack: { base: STACK, bytes }, seh: { teb: TEB, record: RECORD, handlerEsp: HANDLER_ESP } };
   }
-  return { OFFSET, STACK, BUFFER, RECORD, HANDLER_ESP, FAULT_ESP, TEB, TAIL, MODULES, sehCrash };
+  /** The same modules with some pivot RVAs taken out, for the crash that looks like an SEH delivery and
+   * cannot be one. 0x1401 is the only pivot whose ret lands inside the buffer. */
+  const modulesWithout = (...rvas: number[]): Module[] => MODULES.map((module) => module.name === "vuln.exe" ? module
+    : { ...module, code: (module.code ?? []).filter(([rva]) => rvas.indexOf(rva) < 0) });
+  return { OFFSET, STACK, BUFFER, RECORD, HANDLER_ESP, FAULT_ESP, TEB, TAIL, MODULES, sehCrash, modulesWithout };
 })();
 
 /** The SEH shape's dep_plan transcript. The delivery is not a style, so every style runs on the same
  * crash: what changes is only where in the buffer the chain starts and what the handler has to clear. */
-export function sehRun(style = "pushad"): string {
-  load(sehShape.MODULES, { policy: 2, registry: "", crash: sehShape.sehCrash() });
+export function sehRun(style = "pushad", modules: Module[] = sehShape.MODULES): string {
+  load(modules, { policy: 2, registry: "", crash: sehShape.sehCrash() });
   (globalThis as unknown as { osed: Api }).osed.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", style);
   return text();
 }

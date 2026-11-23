@@ -106,6 +106,26 @@ describe("dep_plan, delivered through an SEH handler", () => {
   });
 });
 
+// Looking like an SEH crash is not being delivered through one. Any overflow that faults inside the
+// program while reaching a record up the stack looks the same: EIP in a module, the first handler holding
+// the padding byte. T01 is that shape and its route is the saved EIP. The delivery is taken only where it
+// can be completed, and the measurement that decides it is whether a handler lands in the buffer.
+describe("a crash that looks like an SEH delivery and cannot be one", () => {
+  test("with no handler that lands in the buffer the chain goes on the saved EIP, and [6/7] says the record was overwritten too", () => {
+    const output = sehRun("pushad", sehShape.modulesWithout(0x1401));
+    const frame = section(prose(), "=== [6/7]");
+    expect(frame).toContain("The overflow reached an SEH record as well: EIP 0x00401010 is in vuln.exe");
+    expect(frame).toContain("No handler lands between the faulting ESP 0x0019E3F4 and the record, so the chain goes on the saved EIP instead.");
+    expect(frame).toContain("one gadget that adds between 0x4F4 and 0xD00 to ESP and returns");
+    expect(frame).toContain("ESP after the crashing ret");
+    expect(section(prose(), "=== Verdict")).not.toContain("delivered through the SEH handler");
+    // No SEH_ESP, no seh_record, and no hole for a pivot that was never going to be used.
+    expect(section(output, "=== [6/7]")).not.toContain("SEH_ESP");
+    expect(section(output, "=== [6/7]")).toContain("CHAIN_AT = OFFSET");
+    expect(output).toContain("1 hole(s) to fill");
+  });
+});
+
 describe("which module the dispatcher calls a handler in", () => {
   const module = (over: Partial<{ safeseh: "enabled" | "disabled" | "unknown"; aslr: "enabled" | "disabled" | "unknown"; dllCharacteristics: number }> = {}) =>
     ({ safeseh: "disabled" as const, aslr: "disabled" as const, dllCharacteristics: 0, ...over });
