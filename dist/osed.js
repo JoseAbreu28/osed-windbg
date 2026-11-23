@@ -11842,10 +11842,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-23T06:05:12.805Z" : globalThis[key2];
+        value = true ? "2026-11-23T06:41:15.817Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "ea11851c61a9" : globalThis[key2];
+        value = true ? "636a034771b0" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15054,7 +15054,7 @@ var osed_bundle = (() => {
       capabilities: ["MOVE_REGISTER", "EXCHANGE_REGISTER"],
       flow: { reads: { source: "pointer" }, sets: { role: "field", port: "dest" } }
     },
-    { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], flow: { sets: { role: "value", port: "dest" } } },
+    { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], routed: true, flow: { sets: { role: "value", port: "dest" } } },
     { key: "write", title: "write a field", capabilities: ["MEMORY_WRITE"], repeats: true, flow: { reads: { address: "field", source: "value" } } },
     {
       key: "advance",
@@ -15074,13 +15074,14 @@ var osed_bundle = (() => {
       capabilities: ["REGISTER_ADD", "REGISTER_SUB"],
       flow: { reads: { dest: "pointer" }, sets: { role: "pointer", port: "dest" } }
     },
-    { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], flow: { sets: { role: "value", port: "dest" } } },
+    { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], routed: true, flow: { sets: { role: "value", port: "dest" } } },
     { key: "negate", title: "negate", capabilities: ["REGISTER_NEGATE"], repeats: true, flow: { sets: { role: "value", port: "dest" } } },
     {
       key: "field",
       title: "load a field address",
       capabilities: ["LOAD_REGISTER"],
       repeats: true,
+      routed: true,
       flow: { sets: { role: "field", port: "dest" } }
     },
     { key: "write", title: "write a field", capabilities: ["MEMORY_WRITE"], repeats: true, flow: { reads: { address: "field", source: "value" } } },
@@ -15100,12 +15101,13 @@ var osed_bundle = (() => {
       return [
         // The API's address is a dword in the import table, so it is read, not popped. Only a frame that
         // has no API slot could skip this, and none does.
-        ...PUSHAD_FRAMES[api].some((slot) => slot.source.kind === "api") ? [{ key: "read", title: "read a pointer (the IAT slot)", capabilities: ["MEMORY_READ"], flow: {} }] : [],
+        ...PUSHAD_FRAMES[api].some((slot) => slot.source.kind === "api") ? [{ key: "read", title: "read a pointer (the IAT slot)", capabilities: ["MEMORY_READ"], routed: true, flow: {} }] : [],
         ...registers.map((register2) => ({
           key: `pop_${register2}`,
           title: `pop ${register2}`,
           capabilities: ["LOAD_REGISTER"],
           register: register2,
+          routed: true,
           flow: { sets: { role: register2, port: "dest" } }
         })),
         {
@@ -15500,7 +15502,7 @@ var osed_bundle = (() => {
   }
   var pathText = (path) => `no single gadget does it, a sequence does: ${path.from} into ${path.to} by ${path.gadgets.map(sequence).join(", then ")}`;
   var SHOWN_ABOVE = 3;
-  function planLines(plan, shown = SHOWN_ABOVE) {
+  function planLines(plan, shown = SHOWN_ABOVE, called) {
     var _a2;
     const { job, live, verdicts, pick: pick2 } = plan;
     if (verdicts.length === 0 && plan.path) {
@@ -15524,6 +15526,11 @@ var osed_bundle = (() => {
     const hidden = Math.max(0, above.length - shown);
     const lines = [`  ${job.title}${keep}:${hidden > 0 ? `   ${hidden} more ranked above the pick` : ""}`];
     for (const verdict of above.slice(0, shown)) lines.push(...rejected(verdict));
+    const unused = pick2 !== void 0 && called !== void 0 && !called.has(gadgetAddress(pick2.gadget));
+    if (pick2 && unused) {
+      lines.push(...row(pick2, " "), `      NOT IN THE CHAIN: the module can do this job, and ${job.routed ? "[5/7] says how the chain loads the value instead" : "[7/7] says how the chain does it instead"}`);
+      return lines;
+    }
     if (pick2) lines.push(...line(pick2, ">", "PICK"));
     if (pick2 && pick2.uncontrolled.length > 0) {
       lines.push(`      !! every candidate for this job reads through ${pick2.uncontrolled.join(", ")}. Point ${pick2.uncontrolled.join(" and ")} at readable memory before this gadget runs, or the chain dies here.`);
@@ -16181,7 +16188,7 @@ is ESP plus a few hundred bytes, so this needs an add or a sub of a register the
       const holesBefore = holes.length;
       for (const op5 of load(slot2, register2, keep)) loaders.push("call" in op5 ? op5 : { line: op5.line });
       if (said.indexOf(fn) < 0) {
-        const why = holes.length > holesBefore ? holes[holesBefore].slice(holes[holesBefore].indexOf(": ") + 2) : "built from the frame, not searched for";
+        const why = holes.length > holesBefore ? holes[holesBefore].slice(holes[holesBefore].indexOf(": ") + 2) : "built from the frame";
         say(register2, slot2.name, "no value to search for", `not searched: ${why}`, `not searched: ${why}`);
       }
       return fn;
@@ -16379,8 +16386,10 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
       holes.push(`${name}: holds a bad byte, and no route here builds it`);
       return `hole(${JSON.stringify(name + " holds a bad byte")})`;
     };
+    const called = /* @__PURE__ */ new Set();
     const render = (ops, indent) => ops.map((op5) => {
       if ("line" in op5) return op5.line === "" ? "" : `${indent}${resolve(op5.line)}`;
+      called.add(op5.call.address);
       const call = `c.rop(${[op5.call.name, ...op5.values.map(dword2)].join(", ")})`;
       const line = `${indent}${op5.times && op5.times > 1 ? `for _ in range(${op5.times}): ${call}` : call}`;
       return op5.note ? `${line}${" ".repeat(Math.max(2, 44 - line.length))}# ${resolve(op5.note)}` : line;
@@ -16409,6 +16418,7 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
       stages,
       holes: [...slot.hole ? [slot.hole] : [], ...holes, ...sehHoles(delivery)],
       routes: routes.map(resolve),
+      called: [...called],
       blocks: {
         1: HELPER_BLOCK,
         2: slot.block,
@@ -21202,7 +21212,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       summary: "Walk the SEH chain: each Next and Handler",
       what: "Walks the structured exception handler chain of the current thread and shows each record's Next pointer and Handler address.",
       how: "Reads the thread's TEB, whose first field points to the newest SEH record, then follows each Next pointer until 0xFFFFFFFF. On WOW64 it uses the 32-bit TEB and checks its self pointer. It is the same walk that !exchain does, without needing symbols.",
-      when: "SEH overwrite: after the first-chance exception, to see whether Next and Handler hold your pattern, and later to check your PPR address in the Handler.",
+      when: "SEH overwrite: after the first-chance exception, to see whether Next and Handler hold your pattern, and later to check the handler address you wrote.",
       args: [],
       example: "dx @$osed().seh.visualize()",
       output: "One row per record with its address, Next and Handler. A Handler with pattern bytes gives the offset through pattern_offset; nSEH sits 4 bytes before it.",
@@ -21210,14 +21220,14 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     },
     {
       name: "seh_ppr",
-      summary: "Rank pop pop ret gadgets for an SEH overwrite",
-      what: "Finds and ranks pop r32 ; pop r32 ; ret gadgets, the instruction sequence that returns into the overwritten nSEH field.",
-      how: "Scans the executable sections of <module> for the pop-pop-ret byte patterns, drops addresses that contain a byte from <badchars>, and ranks the rest by module protections. When the handler runs, two pops remove two stack values and ret jumps to the address the exception code left there, which points to nSEH.",
-      when: "SEH overwrite, after the offset: the gadget address goes in the Handler field. Take it from a module without SafeSEH and without ASLR.",
+      summary: "Rank pop pop ret gadgets for an SEH overwrite without DEP",
+      what: "Finds and ranks pop r32 ; pop r32 ; ret gadgets, the instruction sequence that returns into the overwritten nSEH field. That is the handler for a target without DEP. With DEP on it is not: the record it returns into is on the stack, which does not execute.",
+      how: "Scans the executable sections of <module> for the pop-pop-ret byte patterns, drops addresses that contain a byte from <badchars>, and ranks the rest by module protections. When the handler runs, two pops remove two stack values and ret jumps to the address the exception code left there, which points to nSEH. Without DEP, nSEH holds a short jump into the buffer. With DEP on, that ret lands on the stack and faults, so the handler has to be a gadget that adds to ESP and returns into the chain, which dep_plan measures and picks.",
+      when: "SEH overwrite without DEP, after the offset: the gadget address goes in the Handler field. Take it from a module without SafeSEH and without ASLR. With DEP on, run dep_plan instead.",
       args: [MODULE("Module to search; all modules when left out."), BADCHARS(), MAX_RESULTS, EXEC_ONLY, SCAN_MODE],
       example: 'dx @$osed().seh_ppr("libspp.dll", "00 0A 0D")',
-      output: "The SEH PPR Candidates table: address, the instructions, the module and its SafeSEH and ASLR state.",
-      report: "Selected a pop-pop-ret gadget from <module> with seh_ppr, excluding <badchars>, to overwrite the SEH handler."
+      output: "The SEH PPR Candidates table: address, the instructions, the module and its SafeSEH and ASLR state. A line under it counts each verdict, and the last says a pop-pop-ret is not the delivery with DEP on.",
+      report: "Ranked the pop-pop-ret gadgets in <module> with seh_ppr, excluding <badchars>, as SEH handler candidates for a target without DEP, where the handler returns into nSEH."
     },
     // Quick gadget scans and ROP skeletons
     {
@@ -21321,14 +21331,14 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       name: "dep_plan",
       summary: "Whole DEP bypass discovery in seven sections",
       what: "Decides from what the debugger can see whether a DEP chain is needed, which modules can give gadgets, which API to call and how to reach its address, and which style the gadgets support, then prints each step under its own [n/7] header. Given only <badchars> it chooses all of that itself.",
-      how: "First it reads the system DEP policy at 0x7FFE02D5, the executable's NX_COMPAT flag and its Exploit Protection setting; the stack's page protection cannot say, because the stack is PAGE_READWRITE with DEP on or off. With DEP off it hands over a clean jmp esp and stops. Then it keeps every module without ASLR whose fixed high bytes are clean, takes the API's IAT slot from a module that does not move, or else the slot of another kernel32 export plus the distance to the API, measured now, and scans the modules to the end. A job no scan filled is searched for in every byte of the modules before anything is called absent. Both styles are solved, and the run ends on a chain or on one line naming the layer that failed: module, API or method.",
+      how: "First it reads the system DEP policy at 0x7FFE02D5, the executable's NX_COMPAT flag and its Exploit Protection setting; the stack's page protection cannot say, because the stack is PAGE_READWRITE with DEP on or off. With DEP off it hands over a clean jmp esp and stops. Then it keeps every module without ASLR whose fixed high bytes are clean, takes the API's IAT slot from a module that does not move, or else the slot of another kernel32 export plus the distance to the API, measured now, and scans the modules to the end. A job no scan filled is searched for in every byte of the modules before anything is called absent. Every style is solved. When the crash is an SEH overwrite, it measures ESP when the handler runs and makes the handler a gadget that adds to ESP and returns into the chain, because a pop pop ret would return into the record on the stack. The run ends on a chain or on one line naming the layer that failed: module, API or method.",
       when: "Later labs and the exam, once you know the method by hand and want every piece on one screen. Verify the draft field by field before you trust it.",
       positional: depPlanArgs,
       args: [
         { name: "api", meaning: 'DEP bypass API, or "" to let the tool choose.', optional: true, values: { VirtualAlloc: "commits the stack page again as executable.", VirtualProtect: "makes the stack executable.", WriteProcessMemory: "copies the shellcode into a code cave." } },
         { name: "module", meaning: 'Modules without ASLR that supply the gadgets, comma separated, or "" for every one that can.', optional: true },
         BADCHARS('Bytes the target corrupts or cuts, as one hex string such as "00 0A 0D". Every address and constant is checked against them. Passed alone, it is the whole call.', "none"),
-        { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "registers loaded, then one PUSHAD writes the frame.", auto: "the style the gadgets support, the skeleton first." } },
+        { name: "style", meaning: "How the chain builds the call frame.", optional: true, default: "skeleton", values: { skeleton: "dummy frame in the buffer, each field patched, then a pivot.", pushad: "registers loaded, then one PUSHAD writes the frame.", staged: "frame written at a fixed writable address in the module, each field address popped as a constant.", auto: "the style the gadgets support, the skeleton first." } },
         { name: "firstStage", meaning: "The number of the next free payloadN() in your file.", optional: true, default: "1", kind: "number" },
         { name: "exclude", meaning: "Gadget addresses the chain must not use, in hex.", optional: true },
         { name: "anyway", meaning: "Build the chain even when DEP is off, as an exercise.", optional: true, default: "false" }
@@ -27399,13 +27409,23 @@ ${INDENT}`)]);
       const blocking = missing.filter((plan) => !neededBy(plan.job, otherStyle(solved, style), "VirtualAlloc"));
       return 1 + 2 + 2 + (style === "skeleton" && solved.tried.length > 1 ? 3 : 0) + (style === "pushad" ? 6 : 0) + (missing.length > 0 ? 2 : 0) + (blocking.length > 0 ? 4 : 0);
     };
-    const printDepCandidates = (solved, modules, badSet, style, api2, exclude = []) => {
-      var _a2, _b;
-      info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
+    const espSearches = (modules, badSet) => [["jmp esp", "FF E4"], ["call esp", "FF D4"]].map(([label, bytes]) => {
+      var _a2;
+      const hits = [];
+      for (const module of modules) {
+        quietly(() => invoke("find_bytes", [module, bytes, 20]));
+        hits.push(...((_a2 = lastResult == null ? void 0 : lastResult.findings) != null ? _a2 : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0));
+      }
+      return { label, bytes, hits };
+    });
+    const firstEsp = (searches) => searches.flatMap((search) => search.hits)[0];
+    const printDepCandidates = (solved, modules, modulesArg, badText, style, api2, exclude, called, searches) => {
+      var _a2;
+      info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs, and the chain calls it.");
       const plans = solved.plans[style];
       const rows = (shown2) => plans.flatMap((plan, at) => {
         const settled = solved.settled[plan.job.key];
-        const lines = planLines(plan, shown2[at]);
+        const lines = planLines(plan, shown2[at], called);
         if (settled && plan.verdicts.length === 0 && !plan.path) lines[0] = `  ${plan.job.title}: none in ${settled.modules}`;
         return lines.concat(settled ? settledLines(plan, settled, exclude).flatMap((line) => wrapped("", line)) : []);
       });
@@ -27418,25 +27438,16 @@ ${INDENT}`)]);
         }
       }
       for (const line of rows(shown)) print(line);
-      const cut = plans.filter((plan, at) => shown[at] < SHOWN_ABOVE && planLines(plan, SHOWN_ABOVE).length > planLines(plan, shown[at]).length).length;
+      const cut = plans.filter((plan, at) => shown[at] < SHOWN_ABOVE && planLines(plan, SHOWN_ABOVE, called).length > planLines(plan, shown[at], called).length).length;
       if (cut > 0) {
-        info(`${cut} job(s) show fewer rejected candidates than usual, so this section fits one screen. For all of them: dx @$osed().dep_candidates("${modules.join(",")}", "${byteList3([...badSet])}", "${style}", "${api2}")`);
+        info(`${cut} job(s) show fewer rejected candidates than usual, so this section fits one screen. For all of them: ${dxCall("dep_candidates", [modulesArg, badText, style, api2])}`);
       }
-      let jmpEsp;
-      if (style === "pushad") {
-        for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
-          const hits = [];
-          for (const module of modules) {
-            echo("find_bytes", [module, bytes, 20]);
-            quietly(() => invoke("find_bytes", [module, bytes, 20]));
-            hits.push(...((_a2 = lastResult == null ? void 0 : lastResult.findings) != null ? _a2 : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0));
-          }
-          print(`  ${label}: ${hits.length > 0 ? hits.slice(0, 3).map(hex325).join("  ") : "none without bad bytes"}`);
-          jmpEsp = jmpEsp != null ? jmpEsp : hits[0];
-        }
+      for (const search of searches) {
+        for (const module of modules) echo("find_bytes", [module, search.bytes, 20]);
+        print(`  ${search.label}: ${search.hits.length > 0 ? search.hits.slice(0, 3).map(hex325).join("  ") : "none without bad bytes"}`);
       }
       if (style === "skeleton" && solved.tried.length > 1) {
-        const chosen = (_b = plans.filter((plan) => plan.job.key === "write")[0]) == null ? void 0 : _b.pick;
+        const chosen = (_a2 = plans.filter((plan) => plan.job.key === "write")[0]) == null ? void 0 : _a2.pick;
         const at = chosen ? gadgetAddress(chosen.gadget) : 0;
         info(`Weighed against the frame: ${solved.tried.map((trial) => `${hex325(trial.address)} ${trial.value}/${trial.field || "-"} ${trial.filled} of ${trial.of}${trial.unmet > 0 ? ` and ${trial.unmet} open` : ""}${trial.address === at ? " PICKED" : ""}`).join(", ")}. Each is the register the value goes into over the one holding the field address, then the frame values reachable that way.`);
       }
@@ -27444,8 +27455,8 @@ ${INDENT}`)]);
       const where = modules.map(moduleLabel2).join(", ");
       if (missing.length > 0) {
         const anyHit = missing.some((plan) => {
-          var _a3, _b2;
-          return ((_b2 = (_a3 = solved.settled[plan.job.key]) == null ? void 0 : _a3.clean.length) != null ? _b2 : 0) > 0;
+          var _a3, _b;
+          return ((_b = (_a3 = solved.settled[plan.job.key]) == null ? void 0 : _a3.clean.length) != null ? _b : 0) > 0;
         });
         warn(`No gadget in ${where} for: ${titles(missing)}. Each was searched for in every byte of it, ${anyHit ? "and where a hit is listed above, the module has one the chain cannot use, not none." : "so this is the module, not the scan."}`);
       }
@@ -27457,10 +27468,10 @@ ${INDENT}`)]);
           var _a3;
           return (_a3 = WHY_NOT_NEEDED[plan.job.key]) != null ? _a3 : "";
         }).join("")}.`);
-        warn(otherMissing.length === 0 ? `In ${where} the ${other} style has a gadget for every job: dx @$osed().dep_candidates("${modules.join(",")}", "${byteList3([...badSet])}", "${other}", "${api2}")` : `In ${where} the ${other} style lacks ${titles(otherMissing)}, so it is blocked too.`);
+        warn(otherMissing.length === 0 ? `In ${where} the ${other} style has a gadget for every job: ${dxCall("dep_candidates", [modulesArg, badText, other, api2])}` : `In ${where} the ${other} style lacks ${titles(otherMissing)}, so it is blocked too.`);
         for (const line of solved.unavailable) warn(line);
       }
-      return { plans, jmpEsp, missing: missing.map((plan) => plan.job.title) };
+      return { plans, missing: missing.map((plan) => plan.job.title) };
     };
     const loadedCorpusCovers = (modules, badchars) => {
       const loaded = corpusModules.map((entry) => entry.name);
@@ -27504,7 +27515,27 @@ ${INDENT}`)]);
       );
       if (styleText === "staged" && solved.styles.indexOf("staged") < 0) for (const line of solved.unavailable) warn(line);
       const style = styleText === "auto" ? chooseStyle(solved) : styleText;
-      const { plans, missing } = printDepCandidates(solved, modules, new Set(badchars), style, depApi);
+      const badSet = new Set(badchars);
+      const searches = style === "pushad" ? espSearches(modules, badSet) : [];
+      const build = buildExploit({
+        api: depApi,
+        style,
+        module: modules.map(moduleLabel2).join(", "),
+        badchars,
+        index: solved.corpus,
+        plans: solved.plans[style],
+        iatSlot: route == null ? void 0 : route.slot,
+        slotWritable: slotWritable(route == null ? void 0 : route.slot),
+        delta: route == null ? void 0 : route.delta,
+        writable: addresses.writable,
+        cave: addresses.cave,
+        caveBytes: addresses.caveBytes,
+        staging: solved.staging,
+        jmpEsp: firstEsp(searches),
+        stage: 1,
+        exclude: []
+      });
+      const { plans, missing } = printDepCandidates(solved, modules, typeof moduleArg === "string" ? moduleArg : "", badText, style, depApi, [], new Set(build.called), searches);
       const rows = plans.map((plan) => ({
         Job: plan.job.title,
         Pick: plan.pick ? hex325(gadgetAddress(plan.pick.gadget)) : "none",
@@ -27823,14 +27854,14 @@ ${INDENT}`)]);
       const nearestBlocked = solved ? otherStyles(solved, style).filter((name) => unmet(solved, name) > 0)[0] : void 0;
       const otherBlocked = solved && nearestBlocked ? titles(solved.plans[nearestBlocked].filter((plan) => !met(plan))) : "";
       section(`[4/${n}] The gadget picked per job (${style} style${styleText === "auto" && otherBlocked ? `: the ${nearestBlocked} style lacks ${otherBlocked}` : ""})`);
-      let plans = [];
-      let jmpEsp;
+      const plans = solved ? solved.plans[style] : [];
       let missing = [];
       if (solved) {
         echo("dep_candidates", [modulesArg, badText, style, depApi]);
         if (exclude.length > 0) info(`Excluding ${exclude.length} gadget(s) by request: ${exclude.map(hex325).join(", ")}. The chain is solved again without them, so other jobs may pick differently.`);
-        ({ plans, jmpEsp, missing } = printDepCandidates(solved, modules, badSet, style, depApi, exclude));
-      } else error("Skipped: there is no corpus. See the STOP above.");
+      }
+      const searches = solved && style === "pushad" ? espSearches(modules, badSet) : [];
+      const jmpEsp = firstEsp(searches);
       const regs = readRegisters(4);
       const landing2 = measureLanding(regs.ip === void 0 ? void 0 : Number(regs.ip) >>> 0, regs.sp === void 0 ? void 0 : Number(regs.sp) >>> 0, (address) => {
         const bytes = tryReadMemory(BigInt(address), 4);
@@ -27858,7 +27889,10 @@ ${INDENT}`)]);
         landing: landing2,
         delivery
       });
-      if (solved) printBlock(build.blocks[4]);
+      if (solved) {
+        ({ missing } = printDepCandidates(solved, modules, modulesArg, badText, style, depApi, exclude, new Set(build.called), searches));
+        printBlock(build.blocks[4]);
+      } else error("Skipped: there is no corpus. See the STOP above.");
       summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
       section(`[5/${n}] The constants the call needs, and the route to each`);
       if (blocker) error(`Skipped: these are the arguments of a ${depApi} call this chain cannot make. See the STOP above.`);
