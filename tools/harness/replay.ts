@@ -127,7 +127,10 @@ function main(): void {
   const bad = flag("bad", "00 0a 0d");
   const style = flag("style", "auto");
   const command = flag("cmd", "dep_plan");
-  if (command === "palette") {
+  if (command === "code_caves") {
+    const size = flag("size", "528");
+    osed.code_caves(flag("module", modules[0].name), parseInt(size, size.indexOf("0x") === 0 ? 16 : 10), 25, bad, flag("cap", "EXEC"));
+  } else if (command === "palette") {
     osed.palette(flag("module", modules[0].name), bad);
   } else if (command === "dep_candidates") {
     osed.dep_candidates(flag("module", modules[0].name), bad, style, flag("api", "VirtualAlloc"));
