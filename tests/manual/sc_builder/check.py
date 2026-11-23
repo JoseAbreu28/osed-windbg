@@ -32,8 +32,9 @@ Case = collections.namedtuple("Case", "config expect absent distinct")
 Case.__new__.__defaults__ = ((), {})
 
 BAD_A = r'b"\x00\x0a\x0d\x20\x2f"'
-BAD_LAB = r'b"\x00\x0a\x0d\x2e\x3a\x5c"'  # the OSED Lab14 and Lab15 transport: '.', ':' and '\' are bad
+BAD_LAB = r'b"\x00\x0a\x0d\x2e\x3a\x5c"'  # the T05 and T07 transport: '.', ':' and '\' are bad
 BAD_EBP = r'b"\x00\x0a\x0d\x45"'  # 45 is the ModRM of every [ebp-disp8] store, so the body needs the encoder
+BAD_POP = r'b"\x00\x20\x2b\x5e"'  # T10's bad chars: 5e is the one-byte pop esi opcode
 FILE_C = r"C:\\Users\\Public\\sc_builder_c.txt"
 CASES = {
     "a": Case(rf'''BADCHARS = {BAD_A}
@@ -95,6 +96,15 @@ XOR_ENCODER = False
 k32.WinExec(s("cmd.exe /c echo ok> C:\\Users\\Public\\sc_builder_lab.txt"), SW_HIDE)
 k32.Sleep(2000)
 ''', ["PEB walk and resolver registers:", "(xor key"], ["base ebx,"]),
+    "pop_badchar": Case(rf'''BADCHARS = {BAD_POP}
+MAX_SIZE = None
+EXIT = "terminate"
+XOR_ENCODER = False
+
+k32.WinExec(s("cmd.exe /c echo ok> C:\\Users\\Public\\sc_builder_pop.txt"), SW_HIDE)
+k32.Sleep(2000)
+''', ["pop esi, whose 0x5e opcode is a bad char"], ["bad byte 0x5e"],
+        {r"this is pop (\w+), whose": 1}),
     "buffers": Case(rf'''BADCHARS = b"\x00\x0a\x0d\x20"
 MAX_SIZE = None
 EXIT = "ret"

