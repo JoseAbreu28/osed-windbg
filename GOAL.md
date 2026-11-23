@@ -491,6 +491,107 @@ shape the corpus holds most of, so it is the easiest of the three. The two held 
 class A, where only a DLL is at a fixed base, and a class B, where nothing is fixed and the right
 answer is a refusal that names the leak.
 
+## Second holdout, spent 2026-11-23
+
+**T17 passed cold. The marker landed.**
+
+The second of the three held-back targets, spent on the build shipped at `c31e21b`,
+`dist/osed-legacy.js` sha256 `4c40bfeb5bfb1beb55bd815cf7f5abd8e9f5d1d37a4cceb52231e36fae65b33a`,
+the same build T16 was measured on. The sha256 of the file on the clone was checked before the run
+and matched. **One holdout remains, not two.**
+
+Run once. Nothing was adjusted, retried or re-fired. The run took 67 seconds.
+
+**Why this one is harder than T16.** T17 is class A, but the executable is relocated and only its
+DLL sits at a fixed base, so the module choice is forced and the gadgets have to come from the
+smaller image. The manifest already recorded that shape, so it was not a secret. T16 was the easy
+shape: gadgets in the main image, which is what most of the corpus holds.
+
+**What it was given.** The offset and the bad chars, both out of scope by this document. The tool
+itself was given neither: it got the bad chars and the stage number. No module, no API, no style,
+no hint.
+
+**The call, as cdb received it:**
+
+```
+dx @$osed().dep_plan("00 09 0a 0d 20", 1)
+```
+
+That is the short form, and the first `dep_plan` line in the raw log. The long form is the tool
+echoing back the choices it made, and it appears twice later in the same log, as the first section
+title and again under `=== Verdict ===`. The module name is redacted here and nowhere else, because
+this file is public and the fourth argument is the lab's own DLL:
+
+```
+dx @$osed().dep_plan("VirtualProtect", "<the dll>", "00 09 0a 0d 20", "skeleton", 1)
+```
+
+**What it worked out on its own:**
+
+| Decision | What it chose |
+|---|---|
+| DEP | on, by system policy OptIn and the program's own NX_COMPAT |
+| module | the DLL, the only image not relocated; eight others rejected for ASLR, counted not listed |
+| API | VirtualProtect |
+| the API address | the DLL's own import slot for it, read with `mov eax, [eax]` |
+| style | skeleton, because the module holds no `pushad ; ret` |
+| delivery | a saved return address, after the SEH route was measured and ruled out |
+| holes left | one, the shellcode |
+
+**The module choice was a discrimination, not a default.** `[2/7]` listed five import slots for
+VirtualProtect, two of them in the lab's own images. It took the one in the fixed DLL and left the
+one in the relocated executable, whose address changes on every start. Nothing told it which image
+was relocated except its own `[1/7]` scan.
+
+**The delivery was decided from a crash that is not a clean EIP overwrite.** The crash input faults
+inside the executable on `mov dword ptr [edi],edx`, a store through a pointer the overflow replaced,
+before the function ever returns. `[6/7]` read that correctly: it found the SEH record the same
+overflow reached, measured the ESP the dispatcher would call a handler with by writing a candidate
+handler over the record, breaking on it and putting the state back, then said no handler lands
+between the faulting ESP and the record and sent the chain to the saved EIP instead. It also printed
+the single missing piece for the SEH route, a gadget adding between 0xBF4 and 0x1088 to ESP, as a
+conditional, not a claim. The saved-EIP route is the one that landed the marker.
+
+**At the API breakpoint the frame was exactly what `[5/7]` and `[6/7]` promised**: lpAddress and the
+return address equal, dwSize 0x201, flNewProtect 0x40, lpflOldProtect the writable cave `[5/7]`
+named. The payload carried no bad char. Every value the chain patches at run time arrived right.
+
+**The screenshot rule found no violation in any section.** The budget is 40 rows and 130 columns.
+The tightest section is `[4/7]` at 35 rows, five short of the limit, and six sections touch 129 or
+130 columns without passing them. The row counts are 2, 11, 12, 15, 35, 13, 14, 2 and 8.
+
+**One defect, and it is the wrong kind.** Nothing the chain does not support is claimed about the
+chain. But `[6/7]` prints two lines about the crash that the crash contradicts:
+
+```
+[!] ESP after the crashing ret: not measured, EIP 0x009448E9 is not on the stack below ESP: assumed 0, a plain ret.
+[!] Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP.
+```
+
+There was no crashing ret. The process faulted on a store, which the same section says two lines
+above. And the advice tells the reader to run `dep_plan` at the crash and to read the EIP dword off
+the stack, when `dep_plan` was running at the crash and the line directly above it says that dword
+is not on the stack. `src/index.ts:4045` prints that string whenever the landing is unmeasured, with
+no test for whether the session is already at a live crash or for why the measurement failed. The
+first half is unreachable advice and the second half asks for something the tool just reported
+absent. It cost nothing here: `RET_GAP = 0` was right, which the marker proves. It is recorded, not
+fixed, because this run was a measurement.
+
+**An exposure in the measurement, not in the tool.** The manifest's `api` field for this target
+already held the reference exploit's two APIs, written on 2026-11-22 when the manifest was built
+from every lab's reference, before the holdout rule existed. The agent spending the holdout saw it
+while moving the entry out of the `holdout` list, so that agent knew one plausible API before the
+run. The tool did not: `run_corpus.py` passes only the bad chars and the stage to `dep_plan` and
+records the field as `ground_truth_api` in the result afterwards. The field was left in place rather
+than deleted, so the next reader can weigh it. T16's was cleared because it was never read.
+
+**What this does and does not settle.** Two holdouts have now been exploited cold, on two different
+shapes, one invocation each, nothing adjusted. The second needed the forced module, the import slot
+in the fixed image and a crash that gives no clean saved-EIP overwrite, and it got all three right
+with no help. The one still held back is the class B shape, where nothing is fixed and the correct
+answer is a refusal that names the leak. That one measures the honest exit rather than the chain, so
+no pass on a class A target can stand in for it.
+
 ## Known gaps, newest first
 
 - ~~**A DEP chain delivered through an overwritten SEH handler is a shape `dep_plan` does not model.**~~
