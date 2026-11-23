@@ -3772,8 +3772,8 @@ function bindApi(): OsedApi {
       : [];
 
     out.section(`[1/${n}] Module protections for ${modulesLabel}`);
-    out.echo("modules", named.length === 1 ? [named[0]] : []);
-    invoke("modules", named.length === 1 ? [named[0]] : []);
+    out.echo("modules", named.length === 1 ? [named[0]] : ["", true]);
+    invoke("modules", named.length === 1 ? [named[0]] : ["", true]);
     const moduleWarnings: string[] = [];
     for (const entry of chosen) {
       const info = entry.info;
@@ -4323,7 +4323,7 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
     case "findmsp":
       return { patternLength: args[0], stackBytes: args[1], probeBytes: args[2] };
     case "modules":
-      return { filter: args[0] };
+      return { filter: args[0], fixed: args[1] };
     case "code_caves":
       return { module: args[0], minSize: args[1], maxResults: args[2], badChars: args[3], capability: args[4] };
     case "math":

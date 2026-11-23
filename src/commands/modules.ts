@@ -214,14 +214,19 @@ export function createModulesCommand(): Command {
   return {
     name: "modules",
     description: "Enumerate modules and mitigation states.",
-    usage: "dx @$osed().modules(filter?)",
-    examples: ["dx @$osed().modules()", 'dx @$osed().modules("kernel32")'],
+    usage: "dx @$osed().modules(filter?, fixed?)",
+    examples: ["dx @$osed().modules()", 'dx @$osed().modules("kernel32")', 'dx @$osed().modules("", true)'],
     schema: {
       filter: { type: "string" },
+      fixed: { type: "boolean" },
     },
     execute(options: Record<string, unknown>): CommandResult {
       const modules = listModulesWithMitigations(options.filter as string | undefined);
       const pointerSize = getPointerSize();
+      // A module with ASLR moves on every run, so for a chain its row says only that it is out. With
+      // `fixed` the table holds the modules a chain can come from and the rest are a count.
+      const moving = options.fixed === true ? modules.filter((module) => module.aslr === "enabled") : [];
+      const shown = modules.filter((module) => moving.indexOf(module) < 0);
 
       out.section("Modules");
       out.table(
@@ -234,8 +239,8 @@ export function createModulesCommand(): Command {
           { key: "safeseh", header: "SafeSEH", width: 8 },
           { key: "system", header: "System", width: 8 },
         ],
-        modules.map((module) => ({
-          name: module.name,
+        shown.map((module) => ({
+          name: module.name.split("\\").pop() ?? module.name,
           base: out.formatAddress(module.base, pointerSize),
           size: `0x${module.size.toString(16).toUpperCase()}`,
           aslr: module.aslr,
@@ -245,6 +250,7 @@ export function createModulesCommand(): Command {
         })),
       );
 
+      if (moving.length > 0) out.info(`${moving.length} more with ASLR, not listed: dx @$osed().modules()`);
       out.whyItMatters("Mitigation triage identifies practical modules for reliable exploitation paths.");
 
       return {

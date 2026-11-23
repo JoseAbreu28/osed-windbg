@@ -22,6 +22,18 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   // Exploit Protection while the executable says NX_COMPAT disabled.
   const { BAD, FORCED, K32, kernel32, odbc32, shape } = syncBreeze;
 
+  // T12's [1/7] was the process's whole module list, 60 rows and 51 of them past 130 columns, on the one
+  // target with dozens of system DLLs. The choice rests on the modules without ASLR, so those are the rows.
+  test("[1/7] lists the modules a chain can come from and counts the ones with ASLR", () => {
+    const api = load(shape(), { policy: 2, registry: FORCED });
+    api.dep_plan(BAD);
+    const modules = section(prose(), "=== [1/7]");
+    expect(modules).toContain('dx @$osed().modules("", true)');
+    expect(modules).toContain("libspp.dll");
+    expect(modules).not.toMatch(/^kernel32\.dll\s/im);
+    expect(modules).toMatch(/\d+ more with ASLR, not listed: dx @\$osed\(\)\.modules\(\)/);
+  });
+
   test("one call with only the bad chars reaches the route, the module and the style", () => {
     const api = load(shape(), { policy: 2, registry: FORCED });
     api.dep_plan(BAD);
