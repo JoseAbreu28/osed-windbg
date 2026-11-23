@@ -473,7 +473,12 @@ export function planSkeleton(
   const base = planJobs(index, "skeleton", exclude, api);
   const goals = FRAMES[api].map((slot) => frameGoal(slot, facts)).filter((goal): goal is Val => goal !== undefined);
   const write = base.filter((plan) => plan.job.key === "write")[0];
-  if (!index || !write || goals.length === 0) return { plans: base, tried: [] };
+  // The capture is the first job and nothing is bound when it is picked, so no choice of write register
+  // can change its answer. A module that cannot put ESP in a register has no frame address to carry, so
+  // there is nothing here to weigh and the searches below would be spent for nothing: a real corpus is
+  // thousands of gadgets and each trial re-plans the whole list.
+  const capture = base.filter((plan) => plan.job.key === "capture")[0];
+  if (!index || !write || goals.length === 0 || (capture && !met(capture))) return { plans: base, tried: [] };
 
   // The register pair is all that distinguishes one candidate from another here: two gadgets that write
   // the same value register through the same address register leave every loader the same question, so
