@@ -538,18 +538,20 @@ export function encodingsFor(job: Job): number[][] {
 /** What searching every byte of the modules for a job's encodings showed. */
 export type Settled = { modules: string; encodings: number; clean: number[]; dirty: number };
 
-// Only a job the scan left without a pick is searched, so this is the line that replaces "none".
+// Only a job the scan left without a pick is searched, so this is what replaces "none". Two lines: what
+// the search settled, then what was searched to settle it. As one sentence it named the module twice and
+// ran to 136 columns on a real one, and they are two facts anyway.
 export function settledLines(plan: JobPlan, settled: Settled, exclude: number[]): string[] {
-  const searched = `every byte of ${settled.modules} searched for the ${settled.encodings} plain encodings of this job`;
+  const searched = `      searched: all ${settled.encodings} plain encodings of this job, in every byte of ${settled.modules}`;
   if (plan.pick) {
     return settled.clean.indexOf(gadgetAddress(plan.pick.gadget)) >= 0
-      ? [`      the scan had missed it: ${searched} found it`]
+      ? ["      the scan had missed it, and this search found it", searched]
       : [];
   }
   const usable = settled.clean.filter((address) => exclude.indexOf(address) < 0);
-  if (settled.clean.length > 0 && usable.length === 0) return [`      absent but for what you excluded: ${searched}, and each hit is one of them`];
-  if (settled.clean.length > 0) return [`      ${searched}: ${settled.clean.length} at a clean address, and none of them fits either`];
-  return [`      absent from ${settled.modules}: ${searched}, ${settled.dirty > 0 ? `${settled.dirty} hit(s), every one at an address holding a bad byte` : "no hit at all"}`];
+  if (settled.clean.length > 0 && usable.length === 0) return ["      absent but for what you excluded: every hit is one of them", searched];
+  if (settled.clean.length > 0) return [`      ${settled.clean.length} hit(s) at a clean address, and none of them fits either`, searched];
+  return [`      absent: ${settled.dirty > 0 ? `${settled.dirty} hit(s), every one at an address holding a bad byte` : "no hit at all"}`, searched];
 }
 
 /** KUSER_SHARED_DATA.NXSupportPolicy, the two low bits of the byte at 0x7FFE02D5: the system DEP

@@ -158,7 +158,7 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
     api.dep_plan("VirtualAlloc", "libspp", BAD, "skeleton");
     const output = prose();
     const picks = section(output, "=== [4/7]");
-    expect(picks).toContain("  capture ESP: none in libspp.dll\n      absent from libspp.dll: every byte of libspp.dll searched for the 42 plain encodings of this job, no hit at all");
+    expect(picks).toContain("  capture ESP: none in libspp.dll\n      absent: no hit at all\n      searched: all 42 plain encodings of this job, in every byte of libspp.dll");
     expect(picks).toContain("capture ESP blocks the skeleton style, and the pushad style needs no such gadget: pushad pushes ESP itself.");
     expect(picks).toContain(`In libspp.dll the pushad style has a gadget for every job: dx @$osed().dep_candidates("libspp", "${BAD}", "pushad")`);
     expect(output).toContain(`No complete VirtualAlloc chain in the skeleton style: libspp.dll has no gadget for capture ESP, so [7/7] holds a hole for each. The pushad style has a gadget for every job: dx @$osed().dep_plan("VirtualAlloc", "libspp", "${BAD}", "pushad", 1)`);
@@ -250,7 +250,7 @@ describe("dep_plan never reports an absence the scan did not settle", () => {
   test("a gadget only at an address holding a bad byte is absent, and the count says why", () => {
     const api = load(module([...without(0x1111), [0x100a, [0x54, 0x5e, 0xc3]]]));
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", "skeleton");
-    expect(text()).toContain("      absent from libbkup.dll: every byte of libbkup.dll searched for the 42 plain encodings of this job, 1 hit(s), every one at an address holding a bad byte");
+    expect(text()).toContain("      absent: 1 hit(s), every one at an address holding a bad byte\n      searched: all 42 plain encodings of this job, in every byte of libbkup.dll");
   });
 
   test("a gadget the scan never reached is found by searching the module, and used", () => {
@@ -263,7 +263,7 @@ describe("dep_plan never reports an absence the scan did not settle", () => {
     api.dep_plan("VirtualAlloc", "libbkup", bad, "pushad");
     const job = section(text(), "=== [4/7]");
     expect(job).toMatch(/pop edx[^\n]*:\n {2}> 0x22222051 {2}pop edx ; ret/);
-    expect(job).toContain("      the scan had missed it: every byte of libbkup.dll searched for the 2 plain encodings of this job found it");
+    expect(job).toContain("      the scan had missed it, and this search found it\n      searched: all 2 plain encodings of this job, in every byte of libbkup.dll");
   });
 
   test("a complete scan he already ran is used, not thrown away and redone", () => {

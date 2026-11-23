@@ -90,34 +90,46 @@ export function echo(path: string, args: unknown[]): void {
  * that does not fit moves whole onto the next line instead. Its arguments never contain a `)`. */
 const DX_CALL = /dx @\$osed\(\)\.[\w.]+\([^)]*\)/g;
 
-/** The message split on spaces, with each dx call kept whole. */
-function words(message: string): string[] {
+/** The message in chunks, each the run of spaces before a word and the word itself, so concatenating
+ * them restores the message exactly and a padded column keeps the width it was aligned to. Each dx call
+ * is one chunk. */
+function chunks(message: string): string[] {
   const found: string[] = [];
+  const split = (text: string): void => {
+    const word = / *[^ ]+| +/g;
+    for (let piece = word.exec(text); piece !== null; piece = word.exec(text)) found.push(piece[0]);
+  };
   let at = 0;
   DX_CALL.lastIndex = 0;
   for (let call = DX_CALL.exec(message); call !== null; call = DX_CALL.exec(message)) {
-    found.push(...message.slice(at, call.index).split(" "), call[0]);
+    // The spaces before the call belong to its chunk, like every other word's do. Left on the chunk
+    // before it they would stay behind as a trailing space when the call moves to the next line.
+    const before = message.slice(at, call.index);
+    const spaces = /( *)$/.exec(before)?.[1] ?? "";
+    split(before.slice(0, before.length - spaces.length));
+    found.push(`${spaces}${call[0]}`);
     at = call.index + call[0].length;
   }
-  found.push(...message.slice(at).split(" "));
-  return found.filter((word) => word !== "");
+  split(message.slice(at));
+  return found;
 }
 
 /** `message` under `prefix`, broken at spaces so no line passes the screen's width. The prefix repeats
  * on every line, because the screenshot rule reads it as evidence rather than as something to paste,
- * and the continuations are indented so a wrapped line reads as one. A word longer than the room left
- * overflows: cutting it would lose an address, and a guide's renderer would cut it anyway. */
+ * and the continuations are indented so a wrapped line reads as one. Spacing inside the message is kept,
+ * so the aligned columns of the [4/7] ranking survive. A word longer than the room left overflows:
+ * cutting it would lose an address, and a guide's renderer would cut it anyway. */
 export function wrapped(prefix: string, message: string, width = SCREEN.columns): string[] {
   const indent = /^\s*/.exec(message)?.[0] ?? "";
   const rest = `${prefix}${indent}    `;
   const lines: string[] = [];
   let line: string | undefined;
-  for (const word of words(message)) {
-    if (line === undefined) line = `${prefix}${indent}${word}`;
-    else if (`${line} ${word}`.length <= width) line = `${line} ${word}`;
+  for (const chunk of chunks(message)) {
+    if (line === undefined) line = `${prefix}${chunk}`;
+    else if (line.length + chunk.length <= width) line += chunk;
     else {
       lines.push(line);
-      line = `${rest}${word}`;
+      line = `${rest}${chunk.replace(/^ +/, "")}`;
     }
   }
   return line === undefined ? [`${prefix}${indent}`] : lines.concat(line);
@@ -129,17 +141,64 @@ export function wrapped(prefix: string, message: string, width = SCREEN.columns)
  * `unwrap` over a transcript that holds one. */
 const CONTINUATION = /^(\[[+!-]\]) {5,}(\S.*)$/;
 
-/** A transcript with the lines `wrapped` broke rejoined. A reader sees sentences, so a check on what a
- * section says reads this instead of pinning where a break happened to fall. */
+/** A continuation `fitted` made: a `#` at the line's own indent and four spaces, which no comment a
+ * copy block writes starts with. It carries on the comment of the line above, whether that line was a
+ * comment of its own or code with a comment after it. */
+const COMMENT_ON = /^(\s*)# {4,}(\S.*)$/;
+
+/** A transcript with the lines `wrapped` and `fitted` broke rejoined. A reader sees sentences, so a
+ * check on what a section says reads this instead of pinning where a break happened to fall. */
 export function unwrap(transcript: string): string {
   const lines: string[] = [];
+  const join = (text: string): void => { lines[lines.length - 1] = `${lines[lines.length - 1]} ${text}`; };
   for (const line of transcript.split("\n")) {
-    const more = CONTINUATION.exec(line);
-    const previous = lines[lines.length - 1];
-    if (more && previous !== undefined && previous.indexOf(more[1]) === 0) lines[lines.length - 1] = `${previous} ${more[2]}`;
+    const previous: string | undefined = lines[lines.length - 1];
+    const tagged = CONTINUATION.exec(line);
+    const comment = COMMENT_ON.exec(line);
+    if (tagged && previous !== undefined && previous.indexOf(tagged[1]) === 0) join(tagged[2]);
+    else if (comment && previous !== undefined && previous.indexOf(comment[1]) === 0 && previous.indexOf("#") >= 0) join(comment[2]);
     else lines.push(line);
   }
   return lines.join("\n");
+}
+
+/** Where a Python comment starts, or -1. A `#` inside a string is not one. */
+function commentAt(line: string): number {
+  let quote: string | undefined;
+  for (let i = 0; i < line.length; i += 1) {
+    const character = line[i];
+    if (quote !== undefined) {
+      if (character === "\\") i += 1;
+      else if (character === quote) quote = undefined;
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === "#") return i;
+  }
+  return -1;
+}
+
+/** A line of a copy block broken to fit the screen. The rule counts these too, because the editor
+ * figures in a guide photograph them at the same font. A Python comment runs to the end of its line, so
+ * the break goes in the comment: the rest carries on under its own `#` at the line's indent, which
+ * leaves the file valid however often it wraps, and the code keeps the column it was aligned to. Code
+ * with no comment to give up is printed as it is, because only its author knows where it may break. */
+export function fitted(line: string, width = SCREEN.columns): string[] {
+  if (line.length <= width) return [line];
+  const at = commentAt(line);
+  const head = line.slice(0, at + 1);
+  if (at < 0 || head.length + 8 > width) return [line];
+  // Four spaces after the `#`, which no comment in a copy block starts with, so `unwrap` can tell a
+  // continuation from the next comment of a block.
+  const rest = `${/^\s*/.exec(line)?.[0] ?? ""}#   `;
+  const lines: string[] = [];
+  let current = head;
+  for (const chunk of chunks(line.slice(at + 1))) {
+    if (current.length + chunk.length <= width) current += chunk;
+    else {
+      lines.push(current);
+      current = `${rest}${chunk}`;
+    }
+  }
+  return lines.concat(current);
 }
 
 function tagged(tag: string, message: string): void {

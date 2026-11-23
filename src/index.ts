@@ -3301,7 +3301,10 @@ function bindApi(): OsedApi {
       const lines = planLines(plan);
       if (settled && plan.verdicts.length === 0 && !plan.path) lines[0] = `  ${plan.job.title}: none in ${settled.modules}`;
       for (const line of lines) out.print(line);
-      if (settled) for (const line of settledLines(plan, settled, exclude)) out.print(line);
+      // What the byte search settled is prose, and its length follows the module list, so it is wrapped.
+      // The candidate rows above are not: they are aligned in columns, and a continuation of one would
+      // be indistinguishable from the PICK line under it.
+      if (settled) for (const line of settledLines(plan, settled, exclude)) for (const fit of out.wrapped("", line)) out.print(fit);
     }
     let jmpEsp: number | undefined;
     if (style === "pushad") {
@@ -3430,7 +3433,7 @@ function bindApi(): OsedApi {
     }
     out.print("");
     out.print(COPY_SEPARATOR);
-    for (const line of paletteLines(entries, paletteExtras(gadgets), label)) out.print(line);
+    for (const line of paletteLines(entries, paletteExtras(gadgets), label)) for (const fit of out.fitted(line)) out.print(fit);
     const rows = entries.filter((entry) => entry.pick).map((entry) => ({ Name: entry.shape.name, Address: dwordHex(depPlanAddress(entry.pick!.gadget)), Gadget: gadgetSequence(entry.pick!.gadget) }));
     setResult({
       command: "palette",
@@ -3544,7 +3547,7 @@ function bindApi(): OsedApi {
         return;
       }
       out.print(SEPARATOR);
-      for (const line of block.lines) out.print(line);
+      for (const line of block.lines) for (const fit of out.fitted(line)) out.print(fit);
     };
 
     // Whether a chain is needed at all comes first: without DEP the stack runs the shellcode as it is.

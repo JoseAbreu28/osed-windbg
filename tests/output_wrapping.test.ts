@@ -36,6 +36,14 @@ describe("a tagged line is broken to fit the screen", () => {
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(SCREEN.columns);
   });
 
+  // [4/7] aligns its ranking in columns with padEnd. Collapsing the runs of spaces that make those
+  // columns would scramble the table on every line, wrapped or not.
+  test("spacing inside the message is kept, so an aligned column keeps its width", () => {
+    const row = "  > 0x6E2C1590  push esp ; pop esi ; mov eax, esi ; ret   writes esi eax, esp +0x4";
+    expect(wrapped("", row)).toEqual([row]);
+    expect(wrapped("", `${row}   ${sentence(20)}`)[0]).toBe(`${row}   word0 word1 word2 word3 word4 word5 word6`);
+  });
+
   // A word with no room anywhere still has to be printed: cutting it would lose an address.
   test("a single word longer than the screen is printed rather than cut", () => {
     const long = "x".repeat(SCREEN.columns + 20);

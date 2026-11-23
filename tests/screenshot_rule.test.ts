@@ -47,21 +47,21 @@ describe("the screenshot rule, one check per clause of GOAL.md", () => {
   });
 });
 
-// The baseline: every violation dep_plan prints today on the reproduced Sync Breeze shape, in both
-// styles. It is a ratchet. A new violation turns this red, and so does fixing one, until the fix also
-// takes it off this list. Nothing here is accepted; it is the next iteration's work, written down.
-describe("dep_plan's output against the screenshot rule, as measured on 2026-11-22", () => {
+// dep_plan's whole output against every clause of the rule, on the reproduced Sync Breeze shape, in
+// both styles. This was a ratchet over the violations of 2026-11-22, down to none on 2026-11-23. It
+// stays an exact list rather than a count, so a new violation names itself instead of appearing as a
+// number, and nothing may be added to it without the output being fixed first.
+describe("dep_plan's output against the screenshot rule", () => {
   const { BAD, FORCED, shape } = syncBreeze;
-  const COMMON = ["[2/7] width", "[4/7] width"];
 
   test("pushad, from the short call with only the bad chars", () => {
     load(shape(), { policy: 2, registry: FORCED }).dep_plan(BAD);
-    expect(rules(text()).sort()).toEqual([...COMMON, "[5/7] width"].sort());
+    expect(rules(text())).toEqual([]);
   });
 
   test("skeleton, named in the long call", () => {
     load(shape({ code: GADGETS }), { policy: 2, registry: FORCED }).dep_plan("VirtualAlloc", "libspp.dll", BAD, "skeleton", 1);
-    expect(rules(text()).sort()).toEqual([...COMMON].sort());
+    expect(rules(text())).toEqual([]);
   });
 
   // A run that never reached a corpus chose no style, so it keeps "auto" rather than writing out the
