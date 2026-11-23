@@ -111,3 +111,16 @@ describe("the cost table the emitted chain pads from", () => {
     expect(costOf(blockLines(build)).find(([name]) => name === two!.name)?.[1]).toBe(2);
   });
 });
+
+// A slot built from the frame rather than searched for still gets its line in [5/7], and the line says
+// so once: the shellcode's address here is the field address in EDX plus a distance the script patches.
+test("a slot built from the frame says it was not searched, once", () => {
+  const index = corpus(...LINES, "mov ecx, edx ; ret", "sub ecx, esi ; ret", "pop esi ; ret");
+  const { plans } = planWrites(index, [], "VirtualProtect", FACTS, BAD);
+  const build = buildExploit({ api: "VirtualProtect", style: "skeleton", module: "t.dll", badchars: BAD, index, plans, exclude: [], stage: 1, ...FACTS });
+  const framed = build.routes.filter((route) => route.startsWith("ecx = return") || route.startsWith("ecx = lpAddress"));
+  expect(framed).toEqual([
+    "ecx = return (no value to search for): not searched: built from the frame",
+    "ecx = lpAddress (no value to search for): not searched: built from the frame",
+  ]);
+});

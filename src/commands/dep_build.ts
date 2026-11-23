@@ -92,8 +92,10 @@ export type Delta = { dll: string; anchor: string; value: number };
 export type Block = { lines: string[] } | { none: string };
 
 /** `routes` is one line per register the loaders fill: the gadgets the search chose, in order, and why it
- * chose them. It is evidence, so it prints above the separator, and the code it describes is in [5/7]. */
-export type Build = { table: Entry[]; blocks: Record<number, Block>; holes: string[]; stages: number[]; routes: string[] };
+ * chose them. It is evidence, so it prints above the separator, and the code it describes is in [5/7].
+ * `called` is every gadget address a rendered `c.rop` line calls. `table` is wider: it also names gadgets
+ * a route tried and dropped, so only `called` can say what the chain does. */
+export type Build = { table: Entry[]; blocks: Record<number, Block>; holes: string[]; stages: number[]; routes: string[]; called: number[] };
 
 const JUNK = /^(junk|padding)/;
 const REGISTERS = ["eax", "ecx", "edx", "ebx", "esi", "edi", "ebp"];
@@ -744,7 +746,7 @@ export function buildExploit(input: BuildInput): Build {
     // A load that never reached the search has no route of its own: the value it wanted was missing before
     // any gadget mattered. Saying that is what keeps the list even with the register map.
     if (said.indexOf(fn) < 0) {
-      const why = holes.length > holesBefore ? holes[holesBefore].slice(holes[holesBefore].indexOf(": ") + 2) : "built from the frame, not searched for";
+      const why = holes.length > holesBefore ? holes[holesBefore].slice(holes[holesBefore].indexOf(": ") + 2) : "built from the frame";
       say(register, slot.name, "no value to search for", `not searched: ${why}`, `not searched: ${why}`);
     }
     return fn;
@@ -971,8 +973,10 @@ export function buildExploit(input: BuildInput): Build {
     holes.push(`${name}: holds a bad byte, and no route here builds it`);
     return `hole(${JSON.stringify(name + " holds a bad byte")})`;
   };
+  const called = new Set<number>();
   const render = (ops: Op[], indent: string): string[] => ops.map((op) => {
     if ("line" in op) return op.line === "" ? "" : `${indent}${resolve(op.line)}`;
+    called.add(op.call.address);
     const call = `c.rop(${[op.call.name, ...op.values.map(dword)].join(", ")})`;
     const line = `${indent}${op.times && op.times > 1 ? `for _ in range(${op.times}): ${call}` : call}`;
     return op.note ? `${line}${" ".repeat(Math.max(2, 44 - line.length))}# ${resolve(op.note)}` : line;
@@ -1004,6 +1008,7 @@ export function buildExploit(input: BuildInput): Build {
     stages,
     holes: [...(slot.hole ? [slot.hole] : []), ...holes, ...sehHoles(delivery)],
     routes: routes.map(resolve),
+    called: [...called],
     blocks: {
       1: HELPER_BLOCK,
       2: slot.block,

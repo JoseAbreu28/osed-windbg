@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { buildExploit } from "../src/commands/dep_build";
 import { stagedPops, stagingBase } from "../src/commands/dep_frames";
-import { jobsFor, met, planJobs, planLines, planWrites, sequence } from "../src/commands/dep_plan";
+import { gadgetAddress, jobsFor, met, planJobs, planLines, planWrites, sequence } from "../src/commands/dep_plan";
 import { SCREEN } from "../src/core/screenshot_rule";
 import { buildCapabilityIndexFromRpPlusText } from "../src/rop";
 
@@ -177,6 +177,20 @@ describe("a frame staged at a fixed address, where the two older styles are refu
     // xchg ecx, esp takes no dword off the new stack, so its ret lands on field 1 from the base itself.
     expect(chain).toContain("c.rop(XCHG_ECX_ESP)");
     expect((made.blocks[6] as { lines: string[] }).lines[0]).toContain("STAGING = 0x11221408");
+  });
+
+  // `called` must be what the pasted file calls, and [4/7] puts a > on a pick only when it is in there.
+  test("called is exactly the gadgets the pasted chain calls, and only those picks are marked", () => {
+    const made = build(0x11221408);
+    const lines = [5, 7].flatMap((at) => (made.blocks[at] as { lines: string[] }).lines).join("\n");
+    const names = new Set([...lines.matchAll(/c\.rop\((\w+)/g)].map((match) => match[1]));
+    expect(made.called.slice().sort()).toEqual(made.table.filter((entry) => names.has(entry.name)).map((entry) => entry.address).sort());
+    const { plans } = planWrites(corpus(...NO_COPY), [], "WriteProcessMemory", facts, BAD, "staged");
+    const called = new Set(made.called);
+    for (const plan of plans.filter((entry) => entry.pick)) {
+      const text = planLines(plan, 3, called).join("\n");
+      expect(text.includes("\n  > "), plan.job.title).toBe(called.has(gadgetAddress(plan.pick!.gadget)));
+    }
   });
 
   test("with no base for the frame the style says so instead of writing a chain", () => {

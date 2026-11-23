@@ -3431,9 +3431,31 @@ function bindApi(): OsedApi {
       + (blocking.length > 0 ? 4 : 0);
   };
 
+  // The PUSHAD style's two byte searches. They run before the build, which needs the jmp esp, and print
+  // inside [4/7]; find_bytes runs quietly, so only the echo and the line below it reach the screen.
+  type ByteSearch = { label: string; bytes: string; hits: number[] };
+  const espSearches = (modules: string[], badSet: Set<number>): ByteSearch[] =>
+    [["jmp esp", "FF E4"], ["call esp", "FF D4"]].map(([label, bytes]) => {
+      const hits: number[] = [];
+      for (const module of modules) {
+        // Quietly: find_bytes prints its own section, a two-column table whose Address and Python
+        // columns hold the same value, and a line about what it does not search. Six rows per byte
+        // pattern to carry one address. The line [4/7] prints is the fact, and the echo reproduces the rest.
+        out.quietly(() => invoke("find_bytes", [module, bytes, 20]));
+        hits.push(...((lastResult?.findings ?? []) as unknown[])
+          .map((hit) => Number(hit))
+          .filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0));
+      }
+      return { label, bytes, hits };
+    });
+  const firstEsp = (searches: ByteSearch[]): number | undefined => searches.flatMap((search) => search.hits)[0];
+
   // The body of dep_plan's [4/7] and all of dep_candidates, so pasting the echoed line repeats the section.
-  const printDepCandidates = (solved: Solved, modules: string[], badSet: Set<number>, style: DepPlanStyle, api: DepApi, exclude: number[] = []) => {
-    out.info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
+  // `called` is what the built chain calls, so a > is never put on a gadget the chain does without.
+  // `modulesArg` and `badText` are the arguments as the echo above the section wrote them, so a command
+  // this section repeats spells them the same way and a screenshot matches the line that reproduces it.
+  const printDepCandidates = (solved: Solved, modules: string[], modulesArg: string, badText: string, style: DepPlanStyle, api: DepApi, exclude: number[], called: ReadonlySet<number>, searches: ByteSearch[]) => {
+    out.info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs, and the chain calls it.");
     const plans = solved.plans[style];
     // Every job's header and pick always print. The candidates the ranking put above a pick are the
     // evidence it was not taken blind, and they are what the section can afford: nine jobs with three
@@ -3443,7 +3465,7 @@ function bindApi(): OsedApi {
     // single number cut from every job would have thrown away.
     const rows = (shown: number[]): string[] => plans.flatMap((plan, at) => {
       const settled = solved.settled[plan.job.key];
-      const lines = planLines(plan, shown[at]);
+      const lines = planLines(plan, shown[at], called);
       if (settled && plan.verdicts.length === 0 && !plan.path) lines[0] = `  ${plan.job.title}: none in ${settled.modules}`;
       return lines.concat(settled ? settledLines(plan, settled, exclude).flatMap((line) => out.wrapped("", line)) : []);
     });
@@ -3457,27 +3479,13 @@ function bindApi(): OsedApi {
       }
     }
     for (const line of rows(shown)) out.print(line);
-    const cut = plans.filter((plan, at) => shown[at] < SHOWN_ABOVE && planLines(plan, SHOWN_ABOVE).length > planLines(plan, shown[at]).length).length;
+    const cut = plans.filter((plan, at) => shown[at] < SHOWN_ABOVE && planLines(plan, SHOWN_ABOVE, called).length > planLines(plan, shown[at], called).length).length;
     if (cut > 0) {
-      out.info(`${cut} job(s) show fewer rejected candidates than usual, so this section fits one screen. For all of them: dx @$osed().dep_candidates("${modules.join(",")}", "${byteList([...badSet])}", "${style}", "${api}")`);
+      out.info(`${cut} job(s) show fewer rejected candidates than usual, so this section fits one screen. For all of them: ${out.dxCall("dep_candidates", [modulesArg, badText, style, api])}`);
     }
-    let jmpEsp: number | undefined;
-    if (style === "pushad") {
-      for (const [label, bytes] of [["jmp esp", "FF E4"], ["call esp", "FF D4"]]) {
-        const hits: number[] = [];
-        for (const module of modules) {
-          out.echo("find_bytes", [module, bytes, 20]);
-          // Quietly: find_bytes prints its own section, a two-column table whose Address and Python
-          // columns hold the same value, and a line about what it does not search. Six rows per byte
-          // pattern to carry one address. The line below is the fact, and the echo reproduces the rest.
-          out.quietly(() => invoke("find_bytes", [module, bytes, 20]));
-          hits.push(...((lastResult?.findings ?? []) as unknown[])
-            .map((hit) => Number(hit))
-            .filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0));
-        }
-        out.print(`  ${label}: ${hits.length > 0 ? hits.slice(0, 3).map(dwordHex).join("  ") : "none without bad bytes"}`);
-        jmpEsp = jmpEsp ?? hits[0];
-      }
+    for (const search of searches) {
+      for (const module of modules) out.echo("find_bytes", [module, search.bytes, 20]);
+      out.print(`  ${search.label}: ${search.hits.length > 0 ? search.hits.slice(0, 3).map(dwordHex).join("  ") : "none without bad bytes"}`);
     }
     // The write gadget decides which register holds the field address and which the value, so the pick
     // above is the ranking's only when the frame agrees. Each candidate's address and disassembly are in
@@ -3506,11 +3514,11 @@ function bindApi(): OsedApi {
       const otherMissing = solved.plans[other].filter((plan) => !met(plan));
       out.warn(`${titles(blocking)} block${blocking.length === 1 ? "s" : ""} the ${style} style, and the ${other} style needs no such gadget${blocking.map((plan) => WHY_NOT_NEEDED[plan.job.key] ?? "").join("")}.`);
       out.warn(otherMissing.length === 0
-        ? `In ${where} the ${other} style has a gadget for every job: dx @$osed().dep_candidates("${modules.join(",")}", "${byteList([...badSet])}", "${other}", "${api}")`
+        ? `In ${where} the ${other} style has a gadget for every job: ${out.dxCall("dep_candidates", [modulesArg, badText, other, api])}`
         : `In ${where} the ${other} style lacks ${titles(otherMissing)}, so it is blocked too.`);
       for (const line of solved.unavailable) out.warn(line);
     }
-    return { plans, jmpEsp, missing: missing.map((plan) => plan.job.title) };
+    return { plans, missing: missing.map((plan) => plan.job.title) };
   };
 
   // A corpus already in memory serves when it was a complete live scan of these modules for these bad
@@ -3555,7 +3563,16 @@ function bindApi(): OsedApi {
       { iatSlot: route?.slot, slotWritable: slotWritable(route?.slot), delta: route?.delta?.value, writable: addresses.writable, cave: addresses.cave }, addresses.stagingFor);
     if (styleText === "staged" && solved.styles.indexOf("staged") < 0) for (const line of solved.unavailable) out.warn(line);
     const style = styleText === "auto" ? chooseStyle(solved) : styleText as DepPlanStyle;
-    const { plans, missing } = printDepCandidates(solved, modules, new Set(badchars as number[]), style, depApi);
+    const badSet = new Set(badchars as number[]);
+    const searches = style === "pushad" ? espSearches(modules, badSet) : [];
+    // The same build dep_plan makes, so the > marks agree with the section this command reproduces. The
+    // landing and the delivery only place the chain in the payload; which gadgets it calls does not need them.
+    const build = buildExploit({
+      api: depApi, style, module: modules.map(moduleLabel).join(", "), badchars: badchars as number[], index: solved.corpus, plans: solved.plans[style],
+      iatSlot: route?.slot, slotWritable: slotWritable(route?.slot), delta: route?.delta, writable: addresses.writable, cave: addresses.cave,
+      caveBytes: addresses.caveBytes, staging: solved.staging, jmpEsp: firstEsp(searches), stage: 1, exclude: [],
+    });
+    const { plans, missing } = printDepCandidates(solved, modules, typeof moduleArg === "string" ? moduleArg : "", badText, style, depApi, [], new Set(build.called), searches);
     const rows = plans.map((plan) => ({
       Job: plan.job.title,
       Pick: plan.pick ? dwordHex(depPlanAddress(plan.pick.gadget)) : "none",
@@ -3921,14 +3938,16 @@ function bindApi(): OsedApi {
     const nearestBlocked = solved ? otherStyles(solved, style).filter((name) => unmet(solved, name) > 0)[0] : undefined;
     const otherBlocked = solved && nearestBlocked ? titles(solved.plans[nearestBlocked].filter((plan) => !met(plan))) : "";
     out.section(`[4/${n}] The gadget picked per job (${style} style${styleText === "auto" && otherBlocked ? `: the ${nearestBlocked} style lacks ${otherBlocked}` : ""})`);
-    let plans: JobPlan[] = [];
-    let jmpEsp: number | undefined;
+    const plans: JobPlan[] = solved ? solved.plans[style] : [];
     let missing: string[] = [];
     if (solved) {
       out.echo("dep_candidates", [modulesArg, badText, style, depApi]);
       if (exclude.length > 0) out.info(`Excluding ${exclude.length} gadget(s) by request: ${exclude.map(dwordHex).join(", ")}. The chain is solved again without them, so other jobs may pick differently.`);
-      ({ plans, jmpEsp, missing } = printDepCandidates(solved, modules, badSet, style, depApi, exclude));
-    } else out.error("Skipped: there is no corpus. See the STOP above.");
+    }
+    // The chain is built before the ranking prints, because a > in the ranking says the chain calls
+    // that gadget and only the build knows. Nothing from here to the ranking prints.
+    const searches = solved && style === "pushad" ? espSearches(modules, badSet) : [];
+    const jmpEsp = firstEsp(searches);
     // Where ESP landed after the crashing ret, read off the stack now, while it is the crash: a `ret 4`
     // puts the chain's second dword one further on, and nothing in the crash input says so but this.
     const regs = readRegisters(4);
@@ -3952,7 +3971,10 @@ function bindApi(): OsedApi {
       api: depApi, style, module: modulesLabel, badchars: badchars as number[], index: corpus, plans,
       iatSlot, slotWritable: frameFacts.slotWritable, delta: route?.delta, writable, cave, caveBytes, staging, jmpEsp, stage, exclude, landing, delivery,
     });
-    if (solved) printBlock(build.blocks[4]);
+    if (solved) {
+      ({ missing } = printDepCandidates(solved, modules, modulesArg, badText, style, depApi, exclude, new Set(build.called), searches));
+      printBlock(build.blocks[4]);
+    } else out.error("Skipped: there is no corpus. See the STOP above.");
     summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
 
     out.section(`[5/${n}] The constants the call needs, and the route to each`);

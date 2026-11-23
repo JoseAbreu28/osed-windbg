@@ -177,6 +177,18 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
     expect(api.last_result().success).toBe(false);
   });
 
+  // The echoed first line exists so a screenshot can be held against the command that reproduces it, so
+  // every command the section repeats spells the bad chars as that line does.
+  test("a command [4/7] repeats spells the bad chars as the echoed line does", () => {
+    const lower = BAD.toLowerCase();
+    const api = load(shape(), { policy: 2, registry: FORCED });
+    api.dep_plan("VirtualAlloc", "libspp", lower, "skeleton");
+    const picks = section(prose(), "=== [4/7]");
+    const spelled = [...picks.matchAll(/dep_candidates\("[^"]*", "([^"]*)"/g)].map((match) => match[1]);
+    expect(spelled.length).toBeGreaterThan(1);
+    expect(new Set(spelled)).toEqual(new Set([lower]));
+  });
+
   test("nothing fixed imports from kernel32: the API layer fails, in one line, with its reason", () => {
     const api = load(shape({ imports: [{ dll: "MSVCRT.dll", symbol: "memcpy", target: 0x10111121 }] }), { policy: 2, registry: FORCED });
     api.dep_plan(BAD);
@@ -287,7 +299,7 @@ describe("dep_plan never reports an absence the scan did not settle", () => {
     expect(prose()).toContain("and where a hit is listed above, the module has one the chain cannot use, not none.");
   });
 
-  test("a gadget the scan never reached is found by searching the module, and used", () => {
+  test("a gadget the scan never reached is found by searching the module, and named", () => {
     // 2048 copies of pop edx ; ret at addresses holding a bad byte: the pattern scan stops after 1500 of
     // them, and the one clean copy sits beyond. Before the search this job read "none in the corpus".
     const fill: number[] = [];
@@ -296,7 +308,9 @@ describe("dep_plan never reports an absence the scan did not settle", () => {
     const api = load(module([...GADGETS, [0x1000, fill], [0x2051, [0x5a, 0xc3]]]));
     api.dep_plan("VirtualAlloc", "libbkup", bad, "pushad");
     const job = section(text(), "=== [4/7]");
-    expect(job).toMatch(/pop edx[^\n]*:\n {2}> 0x22222051 {2}pop edx ; ret/);
+    // Found and named, but not marked: EDX has to hold 0x1000 and no pop can send it, so the chain has a
+    // hole there and calls no pop edx at all.
+    expect(job).toMatch(/pop edx[^\n]*:\n {4}0x22222051 {2}pop edx ; ret[^\n]*\n {6}NOT IN THE CHAIN: /);
     expect(job).toContain("      the scan had missed it, and this search found it\n      searched: all 10 encodings of this job, up to 4 bytes before the ret, in every byte of libbkup.dll");
   });
 

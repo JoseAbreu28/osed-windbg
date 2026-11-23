@@ -70,6 +70,9 @@ export type Job = {
    * carry it. The chain pops the distance, a sub consumes the opposite sign of an add, and a few hundred
    * bytes is 0x000001xx one way round, which no target with 00 among its bad chars can send. */
   backwards?: boolean;
+  /** The build loads this job's value by a route search, so its pick proves only that the module can do
+   * the job: the chain takes whichever gadgets the route in [5/7] finds. */
+  routed?: boolean;
   flow: Flow;
 };
 
@@ -79,7 +82,7 @@ const SKELETON_JOBS: Job[] = [
     flow: { reads: { dest: "pointer" }, sets: { role: "pointer", port: "dest" } } },
   { key: "copy", title: "copy a register", capabilities: ["MOVE_REGISTER", "EXCHANGE_REGISTER"],
     flow: { reads: { source: "pointer" }, sets: { role: "field", port: "dest" } } },
-  { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], flow: { sets: { role: "value", port: "dest" } } },
+  { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], routed: true, flow: { sets: { role: "value", port: "dest" } } },
   { key: "write", title: "write a field", capabilities: ["MEMORY_WRITE"], repeats: true, flow: { reads: { address: "field", source: "value" } } },
   { key: "advance", title: "advance the pointer (inc reg)", capabilities: ["REGISTER_INCREMENT"], repeats: true,
     flow: { reads: { dest: "field" }, sets: { role: "field", port: "dest" } } },
@@ -102,9 +105,9 @@ const STAGED_JOBS: Job[] = [
   { key: "capture", title: "capture ESP", capabilities: ["STACK_POINTER_CAPTURE"], flow: { sets: { role: "pointer", port: "dest" } } },
   { key: "add", title: "add the distance to the shellcode", capabilities: ["REGISTER_ADD", "REGISTER_SUB"],
     flow: { reads: { dest: "pointer" }, sets: { role: "pointer", port: "dest" } } },
-  { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], flow: { sets: { role: "value", port: "dest" } } },
+  { key: "read", title: "read a pointer", capabilities: ["MEMORY_READ"], routed: true, flow: { sets: { role: "value", port: "dest" } } },
   { key: "negate", title: "negate", capabilities: ["REGISTER_NEGATE"], repeats: true, flow: { sets: { role: "value", port: "dest" } } },
-  { key: "field", title: "load a field address", capabilities: ["LOAD_REGISTER"], repeats: true,
+  { key: "field", title: "load a field address", capabilities: ["LOAD_REGISTER"], repeats: true, routed: true,
     flow: { sets: { role: "field", port: "dest" } } },
   { key: "write", title: "write a field", capabilities: ["MEMORY_WRITE"], repeats: true, flow: { reads: { address: "field", source: "value" } } },
   { key: "pivot", title: "pivot ESP onto the frame", capabilities: ["STACK_PIVOT"], flow: {} },
@@ -140,9 +143,9 @@ export function jobsFor(style: DepPlanStyle, api: DepApi = "VirtualAlloc"): Job[
       // The API's address is a dword in the import table, so it is read, not popped. Only a frame that
       // has no API slot could skip this, and none does.
       ...(PUSHAD_FRAMES[api].some((slot) => slot.source.kind === "api")
-        ? [{ key: "read", title: "read a pointer (the IAT slot)", capabilities: ["MEMORY_READ"] as CapabilityKind[], flow: {} }] : []),
+        ? [{ key: "read", title: "read a pointer (the IAT slot)", capabilities: ["MEMORY_READ"] as CapabilityKind[], routed: true, flow: {} }] : []),
       ...registers.map((register): Job => ({
-        key: `pop_${register}`, title: `pop ${register}`, capabilities: ["LOAD_REGISTER"], register, flow: { sets: { role: register, port: "dest" } },
+        key: `pop_${register}`, title: `pop ${register}`, capabilities: ["LOAD_REGISTER"], register, routed: true, flow: { sets: { role: register, port: "dest" } },
       })),
       { key: "pushad", title: "pushad ; ret", capabilities: ["DISPATCH_PUSHAD"],
         flow: { reads: registers.reduce((reads, register) => ({ ...reads, [register]: register }), {}) } },
@@ -705,7 +708,9 @@ export const SHOWN_ABOVE = 3;
 // already a commented drop-in swap in the [4/7] copy block, under the name the chain uses and with this
 // same reason, which is where someone swapping one in would edit. Printed in both places they cost four
 // rows a job and put the section past the one-screen budget.
-export function planLines(plan: JobPlan, shown = SHOWN_ABOVE): string[] {
+/** `called` is the set of gadgets the built chain calls. A pick outside it gets no `>`, because the `>` is
+ * a claim about the chain. Without a build there is nothing to check against and every pick is marked. */
+export function planLines(plan: JobPlan, shown = SHOWN_ABOVE, called?: ReadonlySet<number>): string[] {
   const { job, live, verdicts, pick } = plan;
   if (verdicts.length === 0 && plan.path) {
     return [`  ${job.title}: ${pathText(plan.path)}`];
@@ -730,6 +735,12 @@ export function planLines(plan: JobPlan, shown = SHOWN_ABOVE): string[] {
   const hidden = Math.max(0, above.length - shown);
   const lines = [`  ${job.title}${keep}:${hidden > 0 ? `   ${hidden} more ranked above the pick` : ""}`];
   for (const verdict of above.slice(0, shown)) lines.push(...rejected(verdict));
+  const unused = pick !== undefined && called !== undefined && !called.has(gadgetAddress(pick.gadget));
+  if (pick && unused) {
+    lines.push(...row(pick, " "), `      NOT IN THE CHAIN: the module can do this job, and ${job.routed
+      ? "[5/7] says how the chain loads the value instead" : "[7/7] says how the chain does it instead"}`);
+    return lines;
+  }
   if (pick) lines.push(...line(pick, ">", "PICK"));
   if (pick && pick.uncontrolled.length > 0) {
     lines.push(`      !! every candidate for this job reads through ${pick.uncontrolled.join(", ")}. Point ${pick.uncontrolled.join(" and ")} at readable memory before this gadget runs, or the chain dies here.`);

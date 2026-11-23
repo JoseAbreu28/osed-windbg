@@ -388,7 +388,11 @@ describe("dep_plan", () => {
   test("pushad style lists a pop for each register, pushad and jmp esp, then the register map", () => {
     api.dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad");
     const output = text();
-    for (const register of ["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"]) expect(output).toMatch(new RegExp(`pop ${register}[^\\n]*:\\n  > 0x1111`));
+    // Every register has its job and a pop that does it. Only the pops the chain calls carry the >: the
+    // other registers are loaded by the route [5/7] prints, or are holes.
+    for (const register of ["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"]) expect(output).toMatch(new RegExp(`pop ${register}[^\\n]*:\\n  [> ] 0x1111\\w+  pop ${register} ; ret`));
+    for (const register of ["ebp", "edi", "eax"]) expect(output).toMatch(new RegExp(`pop ${register}[^\\n]*:\\n  > 0x1111`));
+    for (const register of ["esi", "ebx", "edx", "ecx"]) expect(output).toMatch(new RegExp(`pop ${register}[^\\n]*:\\n    0x1111[^\\n]*\\n      NOT IN THE CHAIN: `));
     expect(output).toMatch(/pushad ; ret[^\n]*:\n  > 0x11111281/);
     expect(output).toContain("jmp esp: 0x11111291");
     expect(output).toContain("=== [6/7] PUSHAD register map for VirtualProtect ===");
@@ -522,6 +526,27 @@ describe("dep_plan", () => {
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
     expect(blocksOf(text())[5][0]).toBe("def payload1():");
   });
+
+  // The > is a claim about the chain, so it is checked against the chain: the names [4/7]'s block gives
+  // each address, and the c.rop calls of the pasted file.
+  test.each(["skeleton", "pushad"].flatMap((style) => ["VirtualAlloc", "VirtualProtect", "WriteProcessMemory"].map((name) => [style, name])))(
+    "every > in [4/7] is a gadget the %s %s chain calls, and every pick without one is not", (style, depApi) => {
+      api.dep_plan(depApi, "libbkup", "00 0A 0D", style);
+      const output = text();
+      const four = output.slice(output.indexOf("=== [4/7]"), output.indexOf("\n=== [5/7]"));
+      const ranking = four.slice(0, four.indexOf(SEPARATOR));
+      const names: Record<string, string[]> = {};
+      for (const [, name, address] of four.matchAll(/^(\w+)\s*= (0x[0-9A-F]{8})\s/gm)) (names[address] ??= []).push(name);
+      const pasted = output.slice(output.indexOf("=== [5/7]"));
+      const calls = new Set([...pasted.matchAll(/c\.rop\((\w+)/g)].map((match) => match[1]));
+      const called = (address: string): boolean => (names[address] ?? []).some((name) => calls.has(name));
+      const marked = [...ranking.matchAll(/^ {2}> (0x[0-9A-F]{8}) /gm)].map((match) => match[1]);
+      const unmarked = [...ranking.matchAll(/^ {4}(0x[0-9A-F]{8}) [^\n]*\n {6}NOT IN THE CHAIN: /gm)].map((match) => match[1]);
+      expect(marked.length).toBeGreaterThan(0);
+      expect(output, "a [5/7] route line says the same thing twice").not.toMatch(/not searched: [^\n]*not searched/);
+      for (const address of marked) expect(called(address), `${address} has a > and the chain never calls it`).toBe(true);
+      for (const address of unmarked) expect(called(address), `${address} says NOT IN THE CHAIN and the chain calls it`).toBe(false);
+    });
 
   test.each(["skeleton", "pushad"])("dep_candidates in a fresh session prints the whole [4/7] %s section and loads no corpus", (style) => {
     api.dep_plan("VirtualProtect", "libbkup", "00 0A 0D", style);
