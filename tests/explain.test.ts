@@ -62,6 +62,18 @@ describe("explain catalog", () => {
     }
   });
 
+  // The report line goes into an exam report verbatim. With DEP on a pop pop ret returns into the SEH
+  // record on the stack and faults there, so a field that offers one as the handler must say for which
+  // targets it holds, in the same sentence a reader copies.
+  test("no field offers a pop pop ret as the SEH handler without saying where DEP leaves it", () => {
+    for (const entry of EXPLANATIONS) {
+      for (const field of [...TEXT_FIELDS, "summary"] as const) {
+        if (!/pop[- ]pop[- ]ret|\bPPR\b/i.test(entry[field])) continue;
+        expect(entry[field], `${entry.name}.${field}`).toMatch(/\bDEP\b/);
+      }
+    }
+  });
+
   test("explain() lists every command", () => {
     expect((call(api, "explain") as { success: boolean }).success).toBe(true);
     const text = stripDml(logs.join(""));
