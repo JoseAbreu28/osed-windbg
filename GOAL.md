@@ -372,10 +372,51 @@ What changed on the screen, measured on the transcripts of both runs:
 
 Two things found and not done:
 
-- `[4/7]`'s copy block still names gadgets the chain never calls. On the skeleton targets it is 9 to 11 of 25 to 30
-  names: routes the search tried and dropped leave their entry in the build's table. They are constants nothing uses, so
-  the file runs, but they are noise in a block he photographs. `Build.called` is the set to filter the table by.
+- ~~`[4/7]`'s copy block still names gadgets the chain never calls.~~ Fixed at `132fb13`: see that corpus run.
 - No `--ref` pass was made at this commit, as at the last one.
+
+## Corpus run, 2026-11-23, measured at `132fb13`
+
+`dist/osed-legacy.js` sha256 `a469f1bef699504a40b2f7dedb2fb5bd695909fb0f7ec2c9a33ecbf08f8e522e`, the file the corpus ran
+against on the lab clone and the file committed in `dist/` after it. The one holdout left was not run, opened or read. Every
+class A target was given only its bad chars and stage 1.
+
+**Twelve of fourteen pass, as before, and both spent holdouts pass again.** Nothing moved and nothing regressed: all
+sixteen targets the manifest now runs, T16 and T17 included, kept the status and the full echoed call they had on their
+last run, and the screenshot rule found no violation in any section of any target. This change was about the evidence,
+not reach: two defects in what the run prints, both found by the second holdout's agent and left unfixed there.
+
+| Result | Targets |
+|---|---|
+| marker landed | T01, T02, T03, T04, T05, T06, T07, T09, T10, T12, and the spent holdouts T16, T17 |
+| refused correctly, leak named | T13, T15 |
+| still failing | T08 |
+| not attempted, the target's fault | T11 |
+
+| # | Where | Then | Now |
+|---|---|---|---|
+| 1 | `[6/7]` | on every crash with EIP inside a module, six targets (T01, T03, T05, T06, T16, T17), it described a crashing ret, then told the reader to run `dep_plan` at the crash it was at and to find an EIP dword it had just reported absent | `No return gap to read: EIP … faulted inside <module>, so no ret ran`, and the one line that still applies: a `ret N` in the function means `RET_GAP = N`. The `RET_GAP` comment in the block says the same. Each other unmeasured case carries its own advice |
+| 2 | `[4/7]` copy block | 9 to 11 names per skeleton target, 1 on T10 and 3 on T17, that no line of the file calls or sends, and their `COST` entries | none on any target: the block and `COST` hold what the chain calls or sends |
+
+**Why the fault is checked before the stack.** EIP inside a module means the crash is the program faulting, not a ret
+through the overflow. Checking the stack first would be wrong in a quiet way: a `call` just before the faulting
+instruction leaves its return address, which is that same EIP, below ESP, and the search would read it as the dword the
+ret popped and print a gap measured from a ret that never ran.
+
+**Why the uncalled gadgets were deleted and not relabelled.** He wants alternatives where swapping one in is moving a
+comment marker. A gadget from a route the search dropped is not that: using it means writing another loader, so a
+commented line for it would promise a swap the file cannot make. The swaps that are real stay, as `#` lines beside the
+gadget they replace with their cost in `COST`. The dropped ones stay in the ranking above the separator, without the
+`>`, with the `dep_candidates` command that lists them all. `Build.called` alone was not the filter: the pushad tail
+sends `RET` and `JMP_ESP` as values and never calls them, so the block keeps what the chain calls or sends.
+
+**T17 crashed differently on this run.** The same crash input that faulted on `mov dword ptr [edi], edx` inside the
+executable on the holdout run returned into `0x42424242` here, and `[6/7]` measured a plain ret. The store goes through a
+pointer the overflow replaced, and whether that pointer is mapped differs from one start to the next of a relocated image
+(an inference, not measured). The chain landed both times, and both crash shapes now print a true line.
+
+Figures: only step 8 on the three DEP Workflows pages showed the old line, and only those were recaptured, from this run.
+No `--ref` pass was made at this commit.
 
 ## Target or tool: T07 and T14, 2026-11-23
 
@@ -576,6 +617,9 @@ no test for whether the session is already at a live crash or for why the measur
 first half is unreachable advice and the second half asks for something the tool just reported
 absent. It cost nothing here: `RET_GAP = 0` was right, which the marker proves. It is recorded, not
 fixed, because this run was a measurement.
+
+Fixed at `132fb13`, and it was not one target: six print it, every one whose crash faults inside a
+module. See that corpus run.
 
 **An exposure in the measurement, not in the tool.** The manifest's `api` field for this target
 already held the reference exploit's two APIs, written on 2026-11-22 when the manifest was built
