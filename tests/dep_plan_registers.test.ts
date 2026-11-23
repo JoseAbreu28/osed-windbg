@@ -190,6 +190,7 @@ describe("where a staged frame can be laid", () => {
   const plain = stagedPops("WriteProcessMemory", 0, 0);
 
   test("the base is dword-aligned and the whole frame fits the writable run", () => {
+    // The highest base the run allows, because everything below the frame is the stack the call runs on.
     expect(stagingBase({ at: 0x11221412, size: 0x20 }, span, plain, BAD)).toBe(0x11221414);
     expect(stagingBase({ at: 0x11221410, size: 0x10 }, span, plain, BAD)).toBeUndefined();
   });
@@ -198,16 +199,18 @@ describe("where a staged frame can be laid", () => {
   // still no good, because the chain pops each field's address and cannot send one of them.
   test("a run long enough for the frame is refused when a field address carries a bad char", () => {
     expect(stagingBase({ at: 0x11220a10, size: 0x20 }, span, plain, BAD)).toBeUndefined();
-    expect(stagingBase({ at: 0x11221410, size: 0x20 }, span, plain, BAD)).toBe(0x11221410);
+    expect(stagingBase({ at: 0x11221410, size: 0x20 }, span, plain, BAD)).toBe(0x11221414);
   });
 
   // A write gadget that stores to [reg+4] is handed each field's address minus four, so the dword below
   // the frame is popped too and a base whose predecessor is dirty is no use. Measured on T06, where the
   // base one dword lower put 0xE0 in the first address the chain sends.
   test("the write gadget's displacement moves the base, because it shifts every popped dword", () => {
-    const run = { at: 0x11221404, size: 0x24 };
-    expect(stagingBase(run, span, plain, BAD)).toBe(0x11221404);
-    expect(stagingBase(run, span, stagedPops("WriteProcessMemory", 4, 0), BAD)).toBe(0x11221408);
+    const run = { at: 0x112210e0, size: 0x40 };
+    expect(stagingBase(run, span, plain, BAD)).toBe(0x11221104);
+    // 0x11221100 holds a 00 and is the dword below that base, so the frame drops to where none of its
+    // seven popped addresses touches it.
+    expect(stagingBase(run, span, stagedPops("WriteProcessMemory", 4, 0), BAD)).toBe(0x112210e8);
   });
 
   test("the pivot's own pops are popped off the base as well", () => {

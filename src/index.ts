@@ -49,7 +49,7 @@ import { badcharAddressFilter } from "./logic/pointer_filter_logic";
 import { COPY_SEPARATOR, CORPUS_BLOCK, HELPER_BLOCK, buildExploit, measureLanding, popsAfterPivot, slotBlock, type Block, type Delta } from "./commands/dep_build";
 import { GROUPS as PALETTE_GROUPS, SHAPES as PALETTE_SHAPES, extrasOf as paletteExtras, paletteLines, pickShape, shapeEncodings } from "./commands/palette";
 import { constantsFor, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planWrites, settledLines, SHOWN_ABOVE, type DepPlanStyle, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
-import { copyBytes, FRAMES, stagedPops, stagingBase, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
+import { copyBytes, FRAMES, stagedPops, stagingBase, stagingRoom, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { SCREEN } from "./core/screenshot_rule";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
@@ -3236,8 +3236,9 @@ function bindApi(): OsedApi {
   // whole call frame fits in. dep_plan and dep_candidates both weigh their write gadget against the
   // frame, so both have to see the same ones, or the command [4/7] prints as the one that reproduces it
   // would reproduce something else.
-  const frameAddresses = (modules: string[], badText: string, depApi: DepApi, moduleFailed = false): { writable?: number; cave?: number; caveBytes?: number; stagingFor: StagingFor } => {
+  const frameAddresses = (modules: string[], badText: string, depApi: DepApi, moduleFailed = false): { writable?: number; cave?: number; caveBytes?: number; stagingFor: StagingFor; roomBelow: () => number | undefined } => {
     const bad = (parseHexByteList(badText) || []) as number[];
+    let stagingBelow: number | undefined;
     // Clean address first, then the largest. A cave whose own address holds a bad char is usable only from
     // some dword inside it, and what made the run look like a cave need not hold that far in: on T06 the
     // largest was a 0x1000 byte padding run whose shifted address took the chain into the module's first
@@ -3255,14 +3256,17 @@ function bindApi(): OsedApi {
     };
     // Which writable runs there are is the module's answer; which base inside one will do is stagingBase.
     const pickStaging = (span: number, pops: number[]): number | undefined => {
+      const found: Array<{ base: number; room: number }> = [];
       for (const module of modules) {
         const { caves } = findCodeCaves(module, span, 25, badText, "STAGING");
         for (const cave of caves) {
-          const base = stagingBase({ at: Number(cave.address), size: cave.size }, span, pops, bad);
-          if (base !== undefined) return base;
+          const run = { at: Number(cave.address), size: cave.size };
+          const base = stagingBase(run, span, pops, bad);
+          if (base !== undefined) found.push({ base, room: stagingRoom(run, base) });
         }
       }
-      return undefined;
+      stagingBelow = found.sort((left, right) => right.room - left.room)[0]?.room;
+      return found.sort((left, right) => right.room - left.room)[0]?.base;
     };
     // WriteProcessMemory copies into the cave, so a module with nothing WPM_COPY bytes wide is not out of
     // the game: it copies as much as its largest cave holds, and WPM_MIN_COPY is where that stops being
@@ -3274,6 +3278,7 @@ function bindApi(): OsedApi {
       cave: cave?.address,
       caveBytes: cave?.size,
       stagingFor: (span, offsets) => (moduleFailed ? undefined : out.quietly(() => pickStaging(span, offsets))),
+      roomBelow: () => stagingBelow,
     };
   };
 
@@ -3687,7 +3692,7 @@ function bindApi(): OsedApi {
     // gadget against the frame, and two of the frame's slots are those addresses; [5/7] prints what this
     // found and [4/7]'s block names them.
     const iatSlot = route?.slot;
-    const { writable, cave, caveBytes, stagingFor } = frameAddresses(modules, badText, depApi, moduleFailed);
+    const { writable, cave, caveBytes, stagingFor, roomBelow } = frameAddresses(modules, badText, depApi, moduleFailed);
     const frameFacts: FrameFacts = { iatSlot, delta: route?.delta?.value, writable, cave, caveBytes };
     // Where a staged frame can go depends on the write and pivot gadgets, so solveStyles settles it while
     // it solves and hands the base back.
@@ -3926,6 +3931,9 @@ function bindApi(): OsedApi {
         const slots = FRAMES[depApi].length;
         out.echo("code_caves", [modules[0], out.hex(4 * slots), 25, badText, "STAGING"]);
         out.info(`The frame is laid at ${dwordHex(staging)}: ${4 * slots} writable bytes in ${modulesLabel}, not in the payload. Every one of its ${slots} field addresses is free of the bad bytes, so the chain pops them as they are.`);
+        // The pivot puts ESP here, so the call runs on the writable bytes under the frame. That is the
+        // one number that says whether it can return at all, and it is not a gadget.
+        out.info(`${dwordHex(roomBelow() ?? 0)} bytes of that run sit below the frame, and that is the stack ${depApi} gets: it pushes down from here. The frame is laid as high in the run as its own field addresses allow, for exactly this reason.`);
         // The one thing this style can fail on that the other two cannot, and it is not a gadget: the
         // frame sits in the program's own memory between the write and the call.
         out.warn("A run of zero, int3 or nop bytes in a writable section. Nothing here proves the program never writes there.");

