@@ -127,7 +127,9 @@ function main(): void {
   const bad = flag("bad", "00 0a 0d");
   const style = flag("style", "auto");
   const command = flag("cmd", "dep_plan");
-  if (command === "dep_candidates") {
+  if (command === "palette") {
+    osed.palette(flag("module", modules[0].name), bad);
+  } else if (command === "dep_candidates") {
     osed.dep_candidates(flag("module", modules[0].name), bad, style, flag("api", "VirtualAlloc"));
   } else if (flag("api")) {
     osed.dep_plan(flag("api"), flag("module", modules[0].name), bad, style, 1, flag("exclude"));

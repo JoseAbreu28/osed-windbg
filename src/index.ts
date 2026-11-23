@@ -48,7 +48,8 @@ import { findEncodings } from "./core/backward_scanner";
 import { badcharAddressFilter } from "./logic/pointer_filter_logic";
 import { COPY_SEPARATOR, CORPUS_BLOCK, HELPER_BLOCK, buildExploit, measureLanding, slotBlock, type Block, type Delta } from "./commands/dep_build";
 import { GROUPS as PALETTE_GROUPS, SHAPES as PALETTE_SHAPES, extrasOf as paletteExtras, paletteLines, pickShape, shapeEncodings } from "./commands/palette";
-import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, settledLines, type DepPlanStyle, type Job, type JobPlan, type Settled } from "./commands/dep_plan";
+import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planSkeleton, settledLines, type DepPlanStyle, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
+import { type FrameFacts } from "./commands/dep_frames";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./commands/code_caves";
@@ -3229,6 +3230,25 @@ function bindApi(): OsedApi {
     return undefined;
   };
 
+  // The two addresses a frame needs that only the module can give: a writable dword for an out-parameter
+  // and an executable cave for WriteProcessMemory's copy. dep_plan and dep_candidates both weigh their
+  // write gadget against the frame, so both have to see the same two, or the command [4/7] prints as the
+  // one that reproduces it would reproduce something else.
+  const frameAddresses = (modules: string[], badText: string, depApi: DepApi, moduleFailed = false): { writable?: number; cave?: number } => {
+    const pickCave = (minSize: number, capability: string): number | undefined => {
+      for (const module of modules) {
+        const { caves } = findCodeCaves(module, minSize, 25, badText, capability);
+        const found = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
+        if (found) return Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address);
+      }
+      return undefined;
+    };
+    return {
+      writable: depApi === "VirtualAlloc" || moduleFailed ? undefined : out.quietly(() => pickCave(4, "STAGING")),
+      cave: depApi === "WriteProcessMemory" && !moduleFailed ? out.quietly(() => pickCave(0x210, "EXEC")) : undefined,
+    };
+  };
+
   // Searching a module for a set of encodings reads every byte once, so a job or a shape no scan filled
   // is settled here before anything says it is absent. Each group is the encodings of one job or shape;
   // its result is the clean addresses that hold one and how many hits sat at an address holding a bad
@@ -3262,26 +3282,33 @@ function bindApi(): OsedApi {
     };
   };
 
-  type Solved = { corpus: CapabilityIndex | undefined; plans: Record<DepPlanStyle, JobPlan[]>; settled: Record<string, Settled> };
-  const solveStyles = (scanned: CapabilityIndex | undefined, modules: string[], badchars: number[], exclude: number[], depApi?: DepApi): Solved => {
-    const planBoth = (index: CapabilityIndex | undefined) => ({ skeleton: planJobs(index, "skeleton", exclude, depApi), pushad: planJobs(index, "pushad", exclude, depApi) });
-    let plans = planBoth(scanned);
+  type Solved = { corpus: CapabilityIndex | undefined; plans: Record<DepPlanStyle, JobPlan[]>; settled: Record<string, Settled>; tried: WriteTrial[] };
+  const solveStyles = (scanned: CapabilityIndex | undefined, modules: string[], badchars: number[], exclude: number[], depApi?: DepApi, facts: FrameFacts = {}): Solved => {
+    const api = depApi ?? "VirtualAlloc";
+    // The skeleton's write gadget fixes which register every value is loaded into and which is held, so
+    // it is weighed against the frame it has to fill rather than taken from the ranking alone.
+    const planBoth = (index: CapabilityIndex | undefined) => {
+      const skeleton = planSkeleton(index, exclude, api, facts, badchars);
+      return { plans: { skeleton: skeleton.plans, pushad: planJobs(index, "pushad", exclude, depApi) }, tried: skeleton.tried };
+    };
+    let both = planBoth(scanned);
     const open: Job[] = [];
-    for (const plan of [...plans.skeleton, ...plans.pushad]) if (!plan.pick && open.every((job) => job.key !== plan.job.key)) open.push(plan.job);
-    if (open.length === 0 || modules.length === 0) return { corpus: scanned, plans, settled: {} };
+    for (const plan of [...both.plans.skeleton, ...both.plans.pushad]) if (!plan.pick && open.every((job) => job.key !== plan.job.key)) open.push(plan.job);
+    if (open.length === 0 || modules.length === 0) return { corpus: scanned, ...both, settled: {} };
     const groups = open.map((job) => encodingsFor(job));
     const search = searchEncodings(scanned, modules, groups, badchars);
-    if (search.corpus !== scanned) plans = planBoth(search.corpus);
+    if (search.corpus !== scanned) both = planBoth(search.corpus);
     const settled: Record<string, Settled> = {};
     open.forEach((job, i) => {
       settled[job.key] = { modules: modules.map(moduleLabel).join(", "), encodings: groups[i].length, ...search.groups[i] };
     });
-    return { corpus: search.corpus, plans, settled };
+    return { corpus: search.corpus, ...both, settled };
   };
 
   const otherStyle = (style: DepPlanStyle): DepPlanStyle => (style === "pushad" ? "skeleton" : "pushad");
   // A job the other style has no counterpart for: no job of it asks for the same capability and register.
-  const neededBy = (job: Job, style: DepPlanStyle): boolean => jobsFor(style).some((other) =>
+  // The API decides which jobs a style has at all, so it decides this too.
+  const neededBy = (job: Job, style: DepPlanStyle, api: DepApi): boolean => jobsFor(style, api).some((other) =>
     other.capabilities.some((kind) => job.capabilities.indexOf(kind) >= 0) && (other.register === undefined || other.register === job.register));
   const WHY_NOT_NEEDED: Record<string, string> = { capture: ": pushad pushes ESP itself" };
   const titles = (plans: JobPlan[]): string => plans.map((plan) => plan.job.title).join(", ");
@@ -3293,7 +3320,7 @@ function bindApi(): OsedApi {
   };
 
   // The body of dep_plan's [4/7] and all of dep_candidates, so pasting the echoed line repeats the section.
-  const printDepCandidates = (solved: Solved, modules: string[], badSet: Set<number>, style: DepPlanStyle, exclude: number[] = []) => {
+  const printDepCandidates = (solved: Solved, modules: string[], badSet: Set<number>, style: DepPlanStyle, api: DepApi, exclude: number[] = []) => {
     out.info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
     const plans = solved.plans[style];
     for (const plan of plans) {
@@ -3318,17 +3345,24 @@ function bindApi(): OsedApi {
         jmpEsp = jmpEsp ?? hits[0];
       }
     }
+    // Which write gadget was weighed and what the frame could be filled with through each: the pick above
+    // is the ranking's only when the frame agrees, so the frame's answer is shown beside it.
+    if (style === "skeleton" && solved.tried.length > 1) {
+      for (const trial of solved.tried) {
+        out.print(`  ${dwordHex(trial.address)}  ${trial.sequence.padEnd(34)}  value in ${trial.value}, field in ${trial.field || "nowhere"}: ${trial.filled} of ${trial.of} frame values reachable${trial.unmet > 0 ? `, ${trial.unmet} job(s) left open` : ""}`);
+      }
+    }
     const missing = plans.filter((plan) => !met(plan));
     const where = modules.map(moduleLabel).join(", ");
     if (missing.length > 0) out.warn(`No gadget in ${where} for: ${titles(missing)}. Each was searched for in every byte of it, so this is the module, not the scan.`);
     // The method can be the only thing wrong: name the style that needs none of what is missing here.
     const other = otherStyle(style);
-    const blocking = missing.filter((plan) => !neededBy(plan.job, other));
+    const blocking = missing.filter((plan) => !neededBy(plan.job, other, api));
     if (blocking.length > 0) {
       const otherMissing = solved.plans[other].filter((plan) => !met(plan));
       out.warn(`${titles(blocking)} block${blocking.length === 1 ? "s" : ""} the ${style} style, and the ${other} style needs no such gadget${blocking.map((plan) => WHY_NOT_NEEDED[plan.job.key] ?? "").join("")}.`);
       out.warn(otherMissing.length === 0
-        ? `In ${where} the ${other} style has a gadget for every job: dx @$osed().dep_candidates("${modules.join(",")}", "${byteList([...badSet])}", "${other}")`
+        ? `In ${where} the ${other} style has a gadget for every job: dx @$osed().dep_candidates("${modules.join(",")}", "${byteList([...badSet])}", "${other}", "${api}")`
         : `In ${where} the ${other} style lacks ${titles(otherMissing)}, so it is blocked too.`);
     }
     return { plans, jmpEsp, missing: missing.map((plan) => plan.job.title) };
@@ -3370,9 +3404,11 @@ function bindApi(): OsedApi {
     const scanned = loadedCorpusCovers(modules, badchars as number[])
       ? currentRopCorpus
       : mergeCapabilityIndexes(discoverLiveIndexes(modules, { badchars }).indexes);
-    const solved = solveStyles(scanned, modules, badchars as number[], [], depApi);
+    const route = routeFor(depApi, modules, badchars as number[], gadgetModules(new Set(badchars as number[])).filter((entry) => entry.info.aslr === "disabled").map((entry) => entry.label));
+    const solved = solveStyles(scanned, modules, badchars as number[], [], depApi,
+      { iatSlot: route?.slot, delta: route?.delta?.value, ...frameAddresses(modules, badText, depApi) });
     const style = styleText === "auto" ? chooseStyle(solved) : styleText as DepPlanStyle;
-    const { plans, missing } = printDepCandidates(solved, modules, new Set(badchars as number[]), style);
+    const { plans, missing } = printDepCandidates(solved, modules, new Set(badchars as number[]), style, depApi);
     const rows = plans.map((plan) => ({
       Job: plan.job.title,
       Pick: plan.pick ? dwordHex(depPlanAddress(plan.pick.gadget)) : "none",
@@ -3653,18 +3689,10 @@ function bindApi(): OsedApi {
     summary.push({ Section: `[3/${n}] corpus`, Result: moduleFailed ? "skipped" : `${gadgetCount} gadgets` });
 
     // The caves are found here so the [4/7] block can name them; [5/7] prints what this found.
-    const pickCave = (minSize: number, capability: string): number | undefined => {
-      for (const module of modules) {
-        const { caves } = findCodeCaves(module, minSize, 25, badText, capability);
-        const found = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
-        if (found) return Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address);
-      }
-      return undefined;
-    };
-    const writable = depApi === "VirtualAlloc" || moduleFailed ? undefined : out.quietly(() => pickCave(4, "STAGING"));
-    const cave = depApi === "WriteProcessMemory" && !moduleFailed ? out.quietly(() => pickCave(0x210, "EXEC")) : undefined;
+    const { writable, cave } = frameAddresses(modules, badText, depApi, moduleFailed);
 
-    const solved = moduleFailed ? undefined : solveStyles(scanned, modules, badchars as number[], exclude, depApi);
+    const solved = moduleFailed ? undefined
+      : solveStyles(scanned, modules, badchars as number[], exclude, depApi, { iatSlot, delta: route?.delta?.value, writable, cave });
     const style: DepPlanStyle = styleText === "auto" ? (solved ? chooseStyle(solved) : "skeleton") : styleText as DepPlanStyle;
     const corpus = solved?.corpus;
     const otherBlocked = solved ? titles(solved.plans[otherStyle(style)].filter((plan) => !met(plan))) : "";
@@ -3675,7 +3703,7 @@ function bindApi(): OsedApi {
     if (solved) {
       out.echo("dep_candidates", [modulesArg, badText, style, depApi]);
       if (exclude.length > 0) out.info(`Excluding ${exclude.length} gadget(s) by request: ${exclude.map(dwordHex).join(", ")}. The chain is solved again without them, so other jobs may pick differently.`);
-      ({ plans, jmpEsp, missing } = printDepCandidates(solved, modules, badSet, style, exclude));
+      ({ plans, jmpEsp, missing } = printDepCandidates(solved, modules, badSet, style, depApi, exclude));
     } else out.error("Skipped: there is no corpus. See the STOP above.");
     // Where ESP landed after the crashing ret, read off the stack now, while it is the crash: a `ret 4`
     // puts the chain's second dword one further on, and nothing in the crash input says so but this.

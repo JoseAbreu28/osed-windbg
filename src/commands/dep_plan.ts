@@ -1,10 +1,13 @@
 import { CapabilityIndex, spoilsOwnInput } from "../rop/capabilities";
 import { rankCandidates } from "../rop/emitter";
-import { ReachIndex, Reg, REGS as REACH_REGS } from "../rop/reach";
+import { isPath, ReachIndex, Reg, REGS as REACH_REGS, Val } from "../rop/reach";
 import { CapabilityKind, RopGadget } from "../rop/types";
+import { FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, Slot } from "./dep_frames";
 import { DepApi } from "./rop_template";
 
 export type DepPlanStyle = "skeleton" | "pushad";
+
+type Source = Slot["source"];
 
 export const DEP_PLAN_APIS: DepApi[] = ["VirtualAlloc", "VirtualProtect", "WriteProcessMemory"];
 export const DEP_PLAN_STYLES: DepPlanStyle[] = ["skeleton", "pushad"];
@@ -71,23 +74,49 @@ const SKELETON_JOBS: Job[] = [
   { key: "pivot", title: "pivot ESP onto the frame", capabilities: ["STACK_PIVOT"], flow: { reads: { source: "field" } } },
 ];
 
-// The order the draft loads them in: ESI first (the API, read from the slot), then the rest.
-const PUSHAD_REGISTERS: Role[] = ["esi", "ebp", "ebx", "edx", "ecx", "edi", "eax"];
+/** The registers the PUSHAD draft loads, in the order it loads them, read off the API's own frame. ESI
+ * first for VirtualAlloc and VirtualProtect (the API, read from the slot), EBX first for
+ * WriteProcessMemory, whose five arguments do not fit the four spare registers so two of them never get
+ * loaded at all. */
+const pushadRegisters = (api: DepApi): Role[] =>
+  PUSHAD_FRAMES[api].filter((slot) => slot.register !== undefined).map((slot) => slot.register as Role);
 
-const PUSHAD_JOBS: Job[] = [
-  { key: "read", title: "read a pointer (the IAT slot)", capabilities: ["MEMORY_READ"], flow: {} },
-  ...PUSHAD_REGISTERS.map((register): Job => ({
-    key: `pop_${register}`, title: `pop ${register}`, capabilities: ["LOAD_REGISTER"], register, flow: { sets: { role: register, port: "dest" } },
-  })),
-  { key: "pushad", title: "pushad ; ret", capabilities: ["DISPATCH_PUSHAD"],
-    flow: { reads: PUSHAD_REGISTERS.reduce((reads, register) => ({ ...reads, [register]: register }), {}) } },
-];
-
-// The skeleton negates only to send dwSize, which only VirtualAlloc's frame computes at run time: the
-// other two APIs take every constant from the search. A style is never refused for a job its API skips.
+/** The jobs a style needs for one API, derived from the frame that API's call takes rather than listed.
+ *
+ * Both halves of this used to be a constant. The skeleton's was one list for every API, so a target was
+ * refused for having no `neg` when the API in hand takes every constant from the search; the PUSHAD half
+ * was seven pops for every API, so a WriteProcessMemory target was refused for having no `pop esi` when
+ * its frame leaves ESI alone. Both now come off `FRAMES` and `PUSHAD_FRAMES`, so a job can only be
+ * required by a slot that exists. */
 export function jobsFor(style: DepPlanStyle, api: DepApi = "VirtualAlloc"): Job[] {
-  if (style === "pushad") return PUSHAD_JOBS;
-  return api === "VirtualAlloc" ? SKELETON_JOBS : SKELETON_JOBS.filter((job) => job.key !== "negate");
+  if (style === "pushad") {
+    const registers = pushadRegisters(api);
+    return [
+      // The API's address is a dword in the import table, so it is read, not popped. Only a frame that
+      // has no API slot could skip this, and none does.
+      ...(PUSHAD_FRAMES[api].some((slot) => slot.source.kind === "api")
+        ? [{ key: "read", title: "read a pointer (the IAT slot)", capabilities: ["MEMORY_READ"] as CapabilityKind[], flow: {} }] : []),
+      ...registers.map((register): Job => ({
+        key: `pop_${register}`, title: `pop ${register}`, capabilities: ["LOAD_REGISTER"], register, flow: { sets: { role: register, port: "dest" } },
+      })),
+      { key: "pushad", title: "pushad ; ret", capabilities: ["DISPATCH_PUSHAD"],
+        flow: { reads: registers.reduce((reads, register) => ({ ...reads, [register]: register }), {}) } },
+    ];
+  }
+  const frame = FRAMES[api];
+  const needs = (kind: Source["kind"]): boolean => frame.some((slot) => slot.source.kind === kind);
+  return SKELETON_JOBS.filter((job) => {
+    // The negate exists to send the size, and the size is the one value the emitted script chooses at
+    // run time. Only VirtualAlloc's frame computes one.
+    if (job.key === "negate") return needs("size");
+    // The capture turns ESP into the address of the frame in the buffer, and that address is what the
+    // shellcode slot is measured from.
+    if (job.key === "capture") return needs("shellcode");
+    // The pointer walks from one field to the next, so it is wanted only when more than one field is
+    // written by the chain rather than carried as a literal dword in the payload.
+    if (job.key === "advance") return frame.filter((slot) => slot.source.kind !== "const").length > 1;
+    return true;
+  });
 }
 
 function readsOf(job: Job): Role[] {
@@ -327,7 +356,7 @@ function moves(job: Job, at: Ports, bound: Partial<Record<Role, string>>): strin
 // Walk the jobs in chain order. Each pick binds the role it sets to its register; later jobs must keep
 // that register and read their inputs from it. The pick is the first candidate in the old ranking that
 // does both, else the first that keeps every live register and only needs a move first.
-export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle, exclude: number[] = [], api: DepApi = "VirtualAlloc", copiedTo?: string): JobPlan[] {
+export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle, exclude: number[] = [], api: DepApi = "VirtualAlloc", copiedTo?: string, preferred: Record<string, number> = {}): JobPlan[] {
   const jobs = jobsFor(style, api);
   const bound: Partial<Record<Role, string>> = {};
   const plans = jobs.map((job, position) => {
@@ -370,7 +399,10 @@ export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle
       () => true,
     ];
     const usable = verdicts.filter((verdict) => verdict.usable);
-    const pick = tiers.map((tier) => usable.filter(tier)[0]).filter((verdict) => verdict !== undefined)[0];
+    // A caller that has already judged this job by something the ranking cannot see names its gadget, and
+    // it wins over the ranking. Only a usable candidate can be named, so this cannot force a trap in.
+    const named = usable.filter((verdict) => gadgetAddress(verdict.gadget) === preferred[job.key])[0];
+    const pick = named ?? tiers.map((tier) => usable.filter(tier)[0]).filter((verdict) => verdict !== undefined)[0];
     const sets = job.flow.sets;
     // A copy no single gadget does still leaves the field address somewhere: where the path put it.
     if (!pick && sets && job.key === "copy" && copiedTo) bound[sets.role] = copiedTo;
@@ -380,29 +412,131 @@ export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle
     }
     return { job, live, verdicts, pick };
   });
+  // The copy exists to put the field address where the write reads it from. Its own ranking cannot know
+  // that, because the write comes after it and nothing has bound the field yet, so a module with several
+  // copies takes the cheapest and the chain then pays a move on every field, or lands the field in the
+  // register the values have to be loaded into. Once the write's pick is known the copy is picked again
+  // to land there, once, and only then does the path search get asked for one.
+  const writeAt = plans.filter((plan) => plan.job.key === "write")[0]?.pick?.at.address;
+  const copyPick = plans.filter((plan) => plan.job.key === "copy")[0];
+  if (writeAt && preferred.copy === undefined && copyPick?.pick && copyPick.pick.at.dest !== writeAt) {
+    const better = copyPick.verdicts.filter((verdict) => verdict.usable && verdict.at.dest === writeAt)[0];
+    if (better) return planJobs(index, style, exclude, api, copiedTo, { ...preferred, copy: gadgetAddress(better.gadget) });
+  }
   const done = withPaths(plans, index, exclude);
   const copied = done.filter((plan) => plan.job.key === "copy")[0]?.path?.to;
   // The jobs after the copy were picked not knowing where the field address is. Now that the path says,
   // they are picked again keeping it, once.
-  return copied && copied !== copiedTo ? withPaths(planJobs(index, style, exclude, api, copied), index, exclude) : done;
+  return copied && copied !== copiedTo ? withPaths(planJobs(index, style, exclude, api, copied, preferred), index, exclude) : done;
+}
+
+/** One write candidate weighed against the frame: where it takes its two operands, and how many of the
+ * frame's values the corpus can then load into the one it reads the value from. */
+export type WriteTrial = { address: number; sequence: string; value: string; field: string; filled: number; of: number; unmet: number };
+
+/** The skeleton style's plans, with the write gadget chosen by the frame it has to fill.
+ *
+ * A skeleton chain carries two things from gadget to gadget: the address of the field it is writing and
+ * the value going into it. Which register holds which is decided entirely by the write gadget's two
+ * operands, and every loader after it must then produce its value in one register while keeping the
+ * other. The old ranking picks that gadget for its side effects alone, so a module whose cheapest write
+ * is `mov [eax+4], ecx` forces every value into ECX with EAX held, and a value the corpus can only reach
+ * in EAX is then reported out of reach when a lower-ranked write would have taken it.
+ *
+ * So which write to use is a question about the values the frame carries, not about the gadget on its
+ * own. Each usable candidate is tried, the whole job list re-planned around it, and the one whose frame
+ * the corpus can actually fill is kept. The PUSHAD style already settles its register order this way
+ * before a single loader is written; this asks the same question for the skeleton.
+ *
+ * `tried` is the evidence for the choice and is printed, because a decision the tool cannot show is
+ * worse than one it does not make.
+ */
+export function planSkeleton(
+  index: CapabilityIndex | undefined,
+  exclude: number[],
+  api: DepApi,
+  facts: FrameFacts,
+  badchars: number[],
+): { plans: JobPlan[]; tried: WriteTrial[] } {
+  const base = planJobs(index, "skeleton", exclude, api);
+  const goals = FRAMES[api].map((slot) => frameGoal(slot, facts)).filter((goal): goal is Val => goal !== undefined);
+  const write = base.filter((plan) => plan.job.key === "write")[0];
+  if (!index || !write || goals.length === 0) return { plans: base, tried: [] };
+
+  // The register pair is all that distinguishes one candidate from another here: two gadgets that write
+  // the same value register through the same address register leave every loader the same question, so
+  // only the first of them is tried.
+  const pairs: Verdict[] = [];
+  const ordered = write.pick ? [write.pick, ...write.verdicts.filter((verdict) => verdict !== write.pick)] : write.verdicts;
+  for (const verdict of ordered.filter((candidate) => candidate.usable && candidate.uncontrolled.length === 0 && !candidate.far)) {
+    const key = (at: Ports): string => `${at.source}|${at.address}|${at.offset ?? 0}`;
+    if (!pairs.some((kept) => key(kept.at) === key(verdict.at))) pairs.push(verdict);
+    if (pairs.length >= 4) break;
+  }
+  if (pairs.length <= 1) return { plans: base, tried: [] };
+
+  // One index and one answer cache for every candidate: the corpus and the bad chars do not change
+  // between them, only which register is asked for and which is kept. The scratch dword is the one the
+  // build will use, so the question asked here is the question the loaders will ask.
+  const search = new ReachIndex(index.gadgets.filter((gadget) => exclude.indexOf(gadgetAddress(gadget)) < 0 && !movesEsp(gadget)));
+  const clean = (value: number): boolean => [0, 8, 16, 24].every((shift) => badchars.indexOf((value >>> shift) & 0xff) < 0);
+  const scratch = facts.writable !== undefined && clean(facts.writable) ? { at: facts.writable, text: "WRITABLE" } : undefined;
+  const answers: Record<string, boolean> = {};
+  const reaches = (register: string, goal: Val, keep: string[]): boolean => {
+    const key = `${register}|${goal.mem?.at ?? ""}|${goal.k}|${keep.join(",")}`;
+    if (answers[key] === undefined) {
+      answers[key] = (REACH_REGS as string[]).indexOf(register) >= 0
+        && isPath(search.reach(register as Reg, goal, { bad: badchars, keep, scratch }));
+    }
+    return answers[key];
+  };
+
+  const tried: WriteTrial[] = pairs.map((candidate) => {
+    const address = gadgetAddress(candidate.gadget);
+    const plans = candidate === write.pick ? base : planJobs(index, "skeleton", exclude, api, undefined, { write: address });
+    const chosen = plans.filter((plan) => plan.job.key === "write")[0]?.pick;
+    const copy = plans.filter((plan) => plan.job.key === "copy")[0];
+    const field = copy?.pick?.at.dest ?? copy?.path?.to ?? "";
+    const value = chosen?.at.source ?? "";
+    return {
+      address, sequence: sequence(candidate.gadget), value, field,
+      filled: goals.filter((goal) => reaches(value, goal, field ? [field] : [])).length,
+      of: goals.length,
+      unmet: plans.filter((plan) => !met(plan)).length,
+    };
+  });
+
+  // Fewest jobs left open first, then the most of the frame filled, then the old ranking's order. A
+  // candidate that fills no more of the frame than the ranking's own pick never displaces it.
+  const best = tried.slice().sort((a, b) => a.unmet - b.unmet || b.filled - a.filled || tried.indexOf(a) - tried.indexOf(b))[0];
+  const plans = best.address === gadgetAddress(write.pick?.gadget ?? pairs[0].gadget)
+    ? base : planJobs(index, "skeleton", exclude, api, undefined, { write: best.address });
+  return { plans, tried };
 }
 
 // The jobs a sequence can do when no single gadget does. Searched over what each gadget does to the
 // registers, so `push eax ; pop ecx ; ret` is a copy and `pop eax` then `xchg eax, esi` is a load of ESI.
 function withPaths(plans: JobPlan[], index: CapabilityIndex | undefined, exclude: number[]): JobPlan[] {
-  if (!index || plans.every((plan) => plan.pick)) return plans;
+  const copyPlan = plans.filter((plan) => plan.job.key === "copy")[0];
+  const writeAddress = plans.filter((plan) => plan.job.key === "write")[0]?.pick?.at.address;
+  // A copy whose single gadget lands the field address somewhere other than the register the write reads
+  // it from leaves every field paying a move there and a move back, and when that register is also the
+  // one the values are loaded into the chain has nowhere to put them at all. So a misplaced copy is a
+  // copy to search a path for, exactly as an absent one is.
+  const misplaced = copyPlan?.pick !== undefined && writeAddress !== undefined && copyPlan.pick.at.dest !== writeAddress;
+  if (!index || (!misplaced && plans.every((plan) => plan.pick))) return plans;
   const search = new ReachIndex(index.gadgets.filter((gadget) => exclude.indexOf(gadgetAddress(gadget)) < 0 && !movesEsp(gadget)));
   const picked = (key: string): Verdict | undefined => plans.filter((plan) => plan.job.key === key)[0]?.pick;
   const isReg = (register: string | undefined): register is Reg => register !== undefined && (REACH_REGS as string[]).indexOf(register) >= 0;
   return plans.map((plan): JobPlan => {
-    if (plan.pick) return plan;
-    if (plan.job.key === "copy") {
+    if (plan.job.key === "copy" && (!plan.pick || misplaced)) {
       // The copy carries the captured ESP into the register the write takes its address from.
       const from = picked("capture")?.at.dest;
-      const to = picked("write")?.at.address;
+      const to = writeAddress;
       const gadgets = isReg(from) && isReg(to) ? search.copy(from, to, [])?.map((effect) => effect.gadget) : undefined;
-      return gadgets ? { ...plan, path: { from: from as string, to: to as string, gadgets } } : plan;
+      return gadgets ? { ...plan, pick: undefined, path: { from: from as string, to: to as string, gadgets } } : plan;
     }
+    if (plan.pick) return plan;
     if (plan.job.key.indexOf("pop_") === 0 && isReg(plan.job.register)) {
       const gadgets = load(plan.job.register, []);
       if (gadgets) return { ...plan, path: { from: "the chain", to: plan.job.register, gadgets } };

