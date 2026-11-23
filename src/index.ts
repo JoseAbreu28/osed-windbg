@@ -4045,8 +4045,15 @@ function bindApi(): OsedApi {
     // The method layer is judged last and on every style the run could have chosen, because only the
     // whole corpus can rule it out.
     if (!blocker && solved && missing.length > 0 && solved.styles.every((name) => solved.plans[name].some((plan) => !met(plan)))) {
-      const lacks = (name: DepPlanStyle): string => `the ${name} style lacks ${titles(solved.plans[name].filter((plan) => !met(plan)))}`;
-      blocker = { layer: "method", what: `no style has a gadget for every job in ${modulesLabel}: ${solved.styles.map(lacks).join("; ")}. Each was searched for in every byte of it.`, next: solved.unavailable };
+      // Lead with the style that is closest and what it is short of, because that is the one missing
+      // piece GOAL.md asks a refusal to name, and the number of jobs it is short is the size of the hole.
+      // The other styles follow, and [4/7] holds what the search found for each job, gadget by gadget.
+      const unmet = (name: DepPlanStyle): JobPlan[] => solved.plans[name].filter((plan) => !met(plan));
+      const lacks = (name: DepPlanStyle): string => `the ${name} style lacks ${titles(unmet(name))}`;
+      const ordered = [...solved.styles].sort((a, b) => unmet(a).length - unmet(b).length);
+      const rest = ordered.slice(1).map(lacks);
+      blocker = { layer: "method", what: `${modulesLabel} is ${unmet(ordered[0]).length} job(s) short of the ${ordered[0]} style, the closest of the ${ordered.length}: ${
+        titles(unmet(ordered[0]))}${rest.length > 0 ? `. Behind it, ${rest.join("; ")}` : ""}. Each was searched for in every byte of it, and [4/7] names every hit the search found for each.`, next: solved.unavailable };
     }
     // Again at the end: the first one is 300 lines up by now.
     const ending = blocker as { layer: Layer; what: string; next: string[] } | undefined;
