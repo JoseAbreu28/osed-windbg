@@ -584,6 +584,35 @@ export class ReachIndex {
     return this.cache[key];
   }
 
+  /** The shortest sequence of gadgets that leaves the run-time value of `from` in `to`, without writing
+   * `keep`: `mov`, `xchg`, `push from ; pop to`, or a chain of them through registers nobody needs. A
+   * pointer the chain captured has no value to search for, so this is the search for where it can go. */
+  copy(from: Reg, to: Reg, keep: string[]): Effect[] | undefined {
+    if (from === to) return [];
+    const moves = this.effects.filter((effect) => effect.stores.length === 0 && effect.reads.length === 0 && effect.slots <= 2
+      && Object.keys(effect.writes).every((r) => keep.indexOf(r) < 0));
+    const cost = (effect: Effect): number => Object.keys(effect.writes).length * 10 + stackCost(effect, 0) + effect.retn + effect.gadget.instructions.length;
+    let frontier: Array<{ at: Reg; path: Effect[]; cost: number }> = [{ at: from, path: [], cost: 0 }];
+    for (let hop = 0; hop < 3 && frontier.length > 0; hop += 1) {
+      const next: typeof frontier = [];
+      for (const state of frontier) {
+        for (const effect of moves) {
+          for (const r of REGS) {
+            const e = effect.writes[r];
+            if (!e || e.op !== "reg" || e.r !== state.at || r === state.at) continue;
+            next.push({ at: r, path: [...state.path, effect], cost: state.cost + cost(effect) });
+          }
+        }
+      }
+      const done = next.filter((state) => state.at === to).sort((a, b) => a.cost - b.cost)[0];
+      if (done) return done.path;
+      const cheapest: Partial<Record<Reg, { at: Reg; path: Effect[]; cost: number }>> = {};
+      for (const state of next) if (!cheapest[state.at] || state.cost < cheapest[state.at]!.cost) cheapest[state.at] = state;
+      frontier = REGS.map((r) => cheapest[r]).filter((state): state is { at: Reg; path: Effect[]; cost: number } => state !== undefined && state.at !== from);
+    }
+    return undefined;
+  }
+
   /** The shortest sequence of gadgets that leaves `goal` in `target`, without writing `opts.keep`. */
   reach(target: Reg, goal: Val, opts: ReachOptions): Path | Unreached {
     const maxHops = opts.maxHops ?? MAX_HOPS;

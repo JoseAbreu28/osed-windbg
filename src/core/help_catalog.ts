@@ -211,7 +211,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     name: "dep_candidates",
     summary: "The gadget picked for each DEP chain job, and why",
     description: "Prints what step [4/7] of dep_plan prints: for each job of the skeleton or pushad chain, the gadget it picks, the higher-ranked ones it rejected and why, and up to two usable alternatives. The pick keeps every register the chain still needs at that job and takes its input from the register that holds it. The pushad style also lists jmp esp and call esp addresses. It scans the module itself and leaves the loaded corpus as it was.",
-    usage: 'dx @$osed().dep_candidates(module, badchars, style?)',
+    usage: 'dx @$osed().dep_candidates(module, badchars, style?, api?)',
     examples: [
       'dx @$osed().dep_candidates("libbkup", "00 09 0A 0B 0C 0D 20", "skeleton")',
       'dx @$osed().dep_candidates("libbkup", "00 0A 0D", "pushad")',

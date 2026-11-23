@@ -1,5 +1,6 @@
 import { CapabilityIndex, spoilsOwnInput } from "../rop/capabilities";
 import { rankCandidates } from "../rop/emitter";
+import { ReachIndex, Reg, REGS as REACH_REGS } from "../rop/reach";
 import { CapabilityKind, RopGadget } from "../rop/types";
 import { DepApi } from "./rop_template";
 
@@ -82,8 +83,11 @@ const PUSHAD_JOBS: Job[] = [
     flow: { reads: PUSHAD_REGISTERS.reduce((reads, register) => ({ ...reads, [register]: register }), {}) } },
 ];
 
-export function jobsFor(style: DepPlanStyle): Job[] {
-  return style === "pushad" ? PUSHAD_JOBS : SKELETON_JOBS;
+// The skeleton negates only to send dwSize, which only VirtualAlloc's frame computes at run time: the
+// other two APIs take every constant from the search. A style is never refused for a job its API skips.
+export function jobsFor(style: DepPlanStyle, api: DepApi = "VirtualAlloc"): Job[] {
+  if (style === "pushad") return PUSHAD_JOBS;
+  return api === "VirtualAlloc" ? SKELETON_JOBS : SKELETON_JOBS.filter((job) => job.key !== "negate");
 }
 
 function readsOf(job: Job): Role[] {
@@ -94,8 +98,12 @@ function readsOf(job: Job): Role[] {
 // A role is live after a job when a later job reads it before any job sets it again. The fill jobs
 // (write, advance, negate) repeat once per field, so for them the list wraps: the next field's write
 // reads the field address again. The role the job itself sets is its output, not something to keep.
+// Each pass of the loop starts with the next field's loader, which sets the value afresh, so the value
+// written to one field is never live across the advance to the next.
+const NEXT_FIELD: Job = { key: "load", title: "load the next field's value", capabilities: [], flow: { sets: { role: "value", port: "dest" } } };
+
 export function liveAfter(jobs: Job[], index: number, withOwn = false): Role[] {
-  const loop = jobs.filter((job) => ["write", "advance", "negate"].indexOf(job.key) >= 0);
+  const loop = [NEXT_FIELD, ...jobs.filter((job) => ["write", "advance", "negate"].indexOf(job.key) >= 0)];
   const later = jobs.slice(index + 1).concat(loop.indexOf(jobs[index]) >= 0 ? loop : []);
   const own = withOwn ? undefined : jobs[index].flow.sets?.role;
   const live: Role[] = [];
@@ -242,7 +250,12 @@ export type JobPlan = {
   live: Array<{ role: Role; register: string }>;
   verdicts: Verdict[];
   pick?: Verdict;
+  /** No single gadget does the job, and a sequence does: what it moves where, and its gadgets in order. */
+  path?: { from: string; to: string; gadgets: RopGadget[] };
 };
+
+/** A job is done when one gadget does it or a sequence of them does. */
+export const met = (plan: JobPlan): boolean => plan.pick !== undefined || plan.path !== undefined;
 
 // Rejections no register move can fix: the gadget destroys a value the chain still needs, or it cannot do the job.
 function rejection(gadget: RopGadget, job: Job, at: Ports, live: Array<{ role: Role; register: string }>, bound: Partial<Record<Role, string>>): string | undefined {
@@ -250,6 +263,7 @@ function rejection(gadget: RopGadget, job: Job, at: Ports, live: Array<{ role: R
   if (job.key === "add") {
     if (capability?.kind === "REGISTER_SUB") return "subtracts: the distance to field 1 is negative, so pop it and add";
     if (!REGISTER.test(at.source ?? "")) return `adds a fixed ${at.source}, not the distance you pop`;
+    if (at.source === at.dest) return `adds ${at.dest} to itself, which doubles it and adds no distance`;
   }
   if (job.key === "copy" && at.dest && at.source && !holds(gadget, at.dest, at.source)) return `${at.dest} does not keep the copy`;
   if (job.key === "copy" && bound.pointer !== undefined && at.source !== bound.pointer) return `copies ${at.source}, but the captured ESP is in ${bound.pointer}`;
@@ -313,10 +327,10 @@ function moves(job: Job, at: Ports, bound: Partial<Record<Role, string>>): strin
 // Walk the jobs in chain order. Each pick binds the role it sets to its register; later jobs must keep
 // that register and read their inputs from it. The pick is the first candidate in the old ranking that
 // does both, else the first that keeps every live register and only needs a move first.
-export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle, exclude: number[] = []): JobPlan[] {
-  const jobs = jobsFor(style);
+export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle, exclude: number[] = [], api: DepApi = "VirtualAlloc", copiedTo?: string): JobPlan[] {
+  const jobs = jobsFor(style, api);
   const bound: Partial<Record<Role, string>> = {};
-  return jobs.map((job, position) => {
+  const plans = jobs.map((job, position) => {
     const later = liveAfter(jobs, position, true);
     const live = liveAfter(jobs, position)
       .filter((role) => bound[role] !== undefined)
@@ -358,12 +372,68 @@ export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle
     const usable = verdicts.filter((verdict) => verdict.usable);
     const pick = tiers.map((tier) => usable.filter(tier)[0]).filter((verdict) => verdict !== undefined)[0];
     const sets = job.flow.sets;
+    // A copy no single gadget does still leaves the field address somewhere: where the path put it.
+    if (!pick && sets && job.key === "copy" && copiedTo) bound[sets.role] = copiedTo;
     if (pick && sets) {
       const register = ports(pick.gadget, job)[sets.port];
       if (register && (bound[sets.role] === undefined || !pick.move)) bound[sets.role] = register;
     }
     return { job, live, verdicts, pick };
   });
+  const done = withPaths(plans, index, exclude);
+  const copied = done.filter((plan) => plan.job.key === "copy")[0]?.path?.to;
+  // The jobs after the copy were picked not knowing where the field address is. Now that the path says,
+  // they are picked again keeping it, once.
+  return copied && copied !== copiedTo ? withPaths(planJobs(index, style, exclude, api, copied), index, exclude) : done;
+}
+
+// The jobs a sequence can do when no single gadget does. Searched over what each gadget does to the
+// registers, so `push eax ; pop ecx ; ret` is a copy and `pop eax` then `xchg eax, esi` is a load of ESI.
+function withPaths(plans: JobPlan[], index: CapabilityIndex | undefined, exclude: number[]): JobPlan[] {
+  if (!index || plans.every((plan) => plan.pick)) return plans;
+  const search = new ReachIndex(index.gadgets.filter((gadget) => exclude.indexOf(gadgetAddress(gadget)) < 0 && !movesEsp(gadget)));
+  const picked = (key: string): Verdict | undefined => plans.filter((plan) => plan.job.key === key)[0]?.pick;
+  const isReg = (register: string | undefined): register is Reg => register !== undefined && (REACH_REGS as string[]).indexOf(register) >= 0;
+  return plans.map((plan): JobPlan => {
+    if (plan.pick) return plan;
+    if (plan.job.key === "copy") {
+      // The copy carries the captured ESP into the register the write takes its address from.
+      const from = picked("capture")?.at.dest;
+      const to = picked("write")?.at.address;
+      const gadgets = isReg(from) && isReg(to) ? search.copy(from, to, [])?.map((effect) => effect.gadget) : undefined;
+      return gadgets ? { ...plan, path: { from: from as string, to: to as string, gadgets } } : plan;
+    }
+    if (plan.job.key.indexOf("pop_") === 0 && isReg(plan.job.register)) {
+      const gadgets = load(plan.job.register, []);
+      if (gadgets) return { ...plan, path: { from: "the chain", to: plan.job.register, gadgets } };
+    }
+    if (plan.job.key === "add") {
+      // The distance goes onto the captured ESP, or onto the field address once it is copied, from any
+      // register the chain can load: the build searches for the value itself, bad bytes and all.
+      const copied = plans.filter((other) => other.job.key === "copy")[0];
+      for (const to of [picked("capture")?.at.dest, copied?.pick?.at.dest ?? copied?.path?.to]) {
+        if (!isReg(to)) continue;
+        for (const gadget of index.gadgets) {
+          const by: string | undefined = gadget.capabilities.filter((cap) => (cap.kind === "REGISTER_ADD" || cap.kind === "REGISTER_SUB") && cap.register === to)[0]?.targetRegister;
+          if (!isReg(by) || by === to || movesEsp(gadget) || exclude.indexOf(gadgetAddress(gadget)) >= 0) continue;
+          const loaded = load(by, [to]);
+          if (loaded) return { ...plan, path: { from: "a distance", to, gadgets: [...loaded, gadget] } };
+        }
+      }
+    }
+    return plan;
+  });
+
+  // A register the chain can fill from its own dwords: a pop of it, or a pop of another and a copy over.
+  function load(target: Reg, keep: string[]): RopGadget[] | undefined {
+    for (const via of [target, ...REACH_REGS.filter((r) => r !== target && keep.indexOf(r) < 0)]) {
+      const pop = index!.gadgets.filter((gadget) => exclude.indexOf(gadgetAddress(gadget)) < 0
+        && gadget.instructions[0]?.mnemonic === "pop" && gadget.instructions[0].operands[0]?.trim().toLowerCase() === via && !movesEsp(gadget))[0];
+      const move = pop ? search.copy(via, target, keep) : undefined;
+      if (pop && move) return [pop, ...move.map((effect) => effect.gadget)];
+    }
+    return undefined;
+  }
 }
 
 export function gadgetAddress(gadget: RopGadget): number {
@@ -398,9 +468,15 @@ export function sideEffects(gadget: RopGadget, job: Job): string {
   ].filter(Boolean).join(", ");
 }
 
+const pathText = (path: NonNullable<JobPlan["path"]>): string =>
+  `no single gadget does it, a sequence does: ${path.from} into ${path.to} by ${path.gadgets.map(sequence).join(", then ")}`;
+
 // The pick, up to three candidates the old ranking put above it, and up to two usable alternatives after it.
 export function planLines(plan: JobPlan): string[] {
   const { job, live, verdicts, pick } = plan;
+  if (verdicts.length === 0 && plan.path) {
+    return [`  ${job.title}: ${pathText(plan.path)}`];
+  }
   if (verdicts.length === 0) return [`  ${job.title}: none in the corpus`];
   const keep = live.length > 0
     ? ` (keep ${live.map((entry) => ROLE_NAMES[entry.role] ? `${entry.register} = ${ROLE_NAMES[entry.role]}` : entry.register).join(", ")})` : "";
@@ -421,7 +497,9 @@ export function planLines(plan: JobPlan): string[] {
   if (pick && pick.far) {
     lines.push(`      !! every usable candidate for this job takes more than 0x${LARGE_STACK_MOVE.toString(16)} bytes of stack. This one grows the payload by 0x${(stackMove(pick.gadget) ?? 0).toString(16)} bytes of junk: check the overflow has room for it.`);
   }
-  if (!pick) lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
+  if (!pick && plan.path) {
+    lines.push(`    ${pathText(plan.path)}`);
+  } else if (!pick) lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
   for (const verdict of after) lines.push(...line(verdict, " ", "usable"));
   return lines;
 }

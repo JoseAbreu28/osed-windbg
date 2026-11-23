@@ -322,7 +322,7 @@ describe("dep_plan", () => {
     // it is constants, which stay at module level: a constant is not something he sends.
     expect(chain[0]).toMatch(/^def payload\d+\(\):$/);
     for (const line of chain.slice(1)) if (line.trim()) expect(line.startsWith("    "), line).toBe(true);
-    expect(chain[chain.length - 1]).toBe("    return payload");
+    expect(chain[chain.length - 1]).toBe("    return sendable(payload)");
     expect(chain.some((line) => /^ {4}payload {1,2}=/.test(line) || /^ {4}payload \+=/.test(line))).toBe(true);
     for (const block of blocks.slice(0, 5)) {
       expect(block.some((line) => /^def payload\d+\(\)/.test(line)), block[0]).toBe(false);
@@ -452,7 +452,7 @@ describe("dep_plan", () => {
       '[1/7] modules("libbkup")',
       '[2/7] sc.iat_find("VirtualAlloc")',
       '[3/7] rop.scan_live("libbkup", "00 0A 0D")',
-      '[4/7] dep_candidates("libbkup", "00 0A 0D", "skeleton")',
+      '[4/7] dep_candidates("libbkup", "00 0A 0D", "skeleton", "VirtualAlloc")',
       '[5/7] rop.construct("eax", 0x1, "00 0A 0D")',
       '[5/7] rop.construct("eax", 0x1000, "00 0A 0D")',
       '[5/7] rop.construct("eax", 0x40, "00 0A 0D")',
@@ -462,7 +462,7 @@ describe("dep_plan", () => {
       '[1/7] modules("libbkup")',
       '[2/7] sc.iat_find("WriteProcessMemory")',
       '[3/7] rop.scan_live("libbkup", "00 0A 0D")',
-      '[4/7] dep_candidates("libbkup", "00 0A 0D", "pushad")',
+      '[4/7] dep_candidates("libbkup", "00 0A 0D", "pushad", "WriteProcessMemory")',
       '[4/7] find_bytes("libbkup", "FF E4", 20)',
       '[4/7] find_bytes("libbkup", "FF D4", 20)',
       '[5/7] rop.construct("eax", 0xFFFFFFFF, "00 0A 0D")',
@@ -515,11 +515,11 @@ describe("dep_plan", () => {
     const whole = report.slice(report.indexOf("=== [4/7]"), report.indexOf("\n=== [5/7]"));
     // The block under the separator is dep_plan's own addition, so the comparison stops there.
     const section = whole.slice(0, whole.indexOf(`\n\n${SEPARATOR}`));
-    const call = `dx @$osed().dep_candidates("libbkup", "00 0A 0D", "${style}")`;
+    const call = `dx @$osed().dep_candidates("libbkup", "00 0A 0D", "${style}", "VirtualProtect")`;
     expect(section.split("\n")[1]).toBe(call);
 
     const fresh = loadApi();
-    fresh.dep_candidates("libbkup", "00 0A 0D", style);
+    fresh.dep_candidates("libbkup", "00 0A 0D", style, "VirtualProtect");
     expect(fresh.last_result()).toMatchObject({ command: "dep_candidates", success: true });
     expect(section.slice(section.indexOf(call) + call.length + 1)).toBe(text().replace(/\n$/, ""));
     fresh.rop.query("capability", "MEMORY_READ");

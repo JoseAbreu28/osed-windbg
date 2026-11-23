@@ -89,18 +89,23 @@ function peImage(module: Module): Uint8Array {
 export const logs: string[] = [];
 export const commands: string[] = [];
 
+/** The thread stopped at the crash: its EIP and ESP, and the stack bytes mapped at `stack.base`. */
+export type Crash = { eip: number; esp: number; stack: { base: number; bytes: Uint8Array } };
+
 /** `policy`: the NXSupportPolicy byte at 0x7FFE02D5. `registry`: what reg query prints for the program. */
-export function load(modules: Module[], options: { policy?: number; registry?: string } = {}): Api {
+export function load(modules: Module[], options: { policy?: number; registry?: string; crash?: Crash } = {}): Api {
   const mapped = modules.map((module) => ({ ...module, image: peImage(module) }));
   const kuser = new Uint8Array(0x1000);
   if (options.policy !== undefined) kuser[0x2d5] = options.policy;
-  const regions = [...mapped.map((entry) => ({ base: entry.base, image: entry.image })), ...(options.policy !== undefined ? [{ base: 0x7ffe0000, image: kuser }] : [])];
+  const regions = [...mapped.map((entry) => ({ base: entry.base, image: entry.image })), ...(options.policy !== undefined ? [{ base: 0x7ffe0000, image: kuser }] : []),
+    ...(options.crash ? [{ base: options.crash.stack.base, image: options.crash.stack.bytes }] : [])];
   (globalThis as unknown as { host: unknown }).host = {
     diagnostics: { debugLog: (line: string) => logs.push(line) },
     namespace: { Debugger: { Utility: { Control: { ExecuteCommand: (command: string) => {
       commands.push(command);
       return command.startsWith(".shell") && options.registry !== undefined ? options.registry.split("\n") : [];
     } } } } },
+    currentThread: options.crash ? { Registers: { User: { eip: BigInt(options.crash.eip), esp: BigInt(options.crash.esp) } } } : undefined,
     currentProcess: {
       Is64Bit: false,
       Modules: mapped.map((entry) => ({ Name: entry.name, Path: `C:\\target\\${entry.name}`, BaseAddress: BigInt(entry.base), EndAddress: BigInt(entry.base + entry.image.length), Size: entry.image.length })),
@@ -172,3 +177,14 @@ export const syncBreeze = (() => {
   const FORCED = "HKEY_LOCAL_MACHINE\\...\\syncbrs.exe\n    MitigationOptions    REG_BINARY    010000000000000000000000";
   return { BAD, FORCED, K32, kernel32, odbc32, shape };
 })();
+
+/** The harness's crash input on a stack: OFFSET bytes of A, BBBB as the saved EIP, then C. The crashing
+ * function's `ret gap` leaves ESP `gap` bytes past the dword after EIP. */
+export function crashOf(offset: number, gap: number): Crash {
+  const base = 0x0019f000;
+  const bytes = new Uint8Array(0x1000).fill(0x43);
+  const eipAt = 0x400;
+  bytes.fill(0x41, eipAt - offset, eipAt);
+  bytes.set([0x42, 0x42, 0x42, 0x42], eipAt);
+  return { eip: 0x42424242, esp: base + eipAt + 4 + gap, stack: { base, bytes } };
+}

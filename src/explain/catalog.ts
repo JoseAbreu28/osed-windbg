@@ -501,6 +501,7 @@ export const EXPLANATIONS: ExplainEntry[] = [
       { name: "module", meaning: "Module without ASLR that supplies the gadgets." },
       BADCHARS("Bytes the target corrupts or cuts, as one hex string such as \"00 0A 0D\". Every gadget address that holds one is dropped.", "none"),
       { name: "style", meaning: "Which chain the jobs are for.", optional: true, default: "skeleton", values: { skeleton: "capture ESP, copy, add, negate, read, write, advance, pivot.", pushad: "a pop for each register, read the IAT slot, pushad ; ret, and jmp esp." } },
+      { name: "api", meaning: "The API the chain calls, which decides the jobs: only VirtualAlloc's skeleton negates.", optional: true, default: "VirtualAlloc" },
     ],
     example: "dx @$osed().dep_candidates(\"libbkup\", \"00 09 0A 0B 0C 0D 20\", \"skeleton\")",
     output: "One block per job: the registers to keep in its title, up to 3 higher-ranked gadgets with why each was rejected, the pick marked >, and up to 2 usable alternatives, each with its address, instructions and side effects. A warning names any job with no pick.",
