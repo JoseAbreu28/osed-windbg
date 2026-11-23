@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, test } from "vitest";
 import { handlerCandidates, landingPivots, measureTail } from "../src/commands/dep_delivery";
+import { takesSehHandler } from "../src/analysis/seh";
 import { buildCapabilityIndexFromRpPlusText } from "../src/rop";
 import { prose, sehRun, sehShape } from "./helpers/fixture_process";
 
@@ -23,8 +24,8 @@ const section = (output: string, header: string): string => {
 describe("dep_plan, delivered through an SEH handler", () => {
   const PYTHON = process.env.PYTHON ?? "python";
   const HAS_PYTHON = spawnSync(PYTHON, ["--version"]).status === 0;
-  const run = (): { output: string; host: { currentThread: { Registers: { User: Record<string, bigint> } } } } => {
-    const output = sehRun();
+  const run = (style?: string): { output: string; host: { currentThread: { Registers: { User: Record<string, bigint> } } } } => {
+    const output = sehRun(style);
     return { output, host: (globalThis as unknown as { host: never }).host };
   };
   const send = (output: string): { sent: Buffer; error: string } => {
@@ -79,6 +80,44 @@ describe("dep_plan, delivered through an SEH handler", () => {
     expect(sent.subarray(OFFSET, OFFSET + 4)).toEqual(Buffer.from("AAAA"));
     expect(sent.readUInt32LE(OFFSET + 4)).toBe(0x11111401);
     expect(sent.subarray(OFFSET + 8).every((byte) => byte === 0x41)).toBe(true);
+  });
+
+  // The delivery is not a style. Only one thing about it depends on the style: how much of the buffer
+  // below the chain the style needs for itself, which the skeleton alone asks for. It lays the call
+  // frame under the chain, so the handler it takes has to land far enough into the buffer to leave room
+  // for it, and FRAME_AT follows the landing rather than OFFSET.
+  test.skipIf(!HAS_PYTHON)("the skeleton style asks the same pivot for room below the chain, and its frame lands inside the buffer", () => {
+    const { output } = run("skeleton");
+    expect(section(prose(), "=== Verdict")).toContain("in the skeleton style, delivered through the SEH handler");
+    const six = section(output, "=== [6/7]");
+    const frameBytes = 4 * 6;
+    expect(six).toContain(`HANDLER, CHAIN_AT, RET_GAP = seh_pivot(len(frame))`);
+    expect(six).toContain("FRAME_AT = CHAIN_AT - len(frame)");
+    const { sent, error } = send(output);
+    expect(error).toBe("");
+    for (const bad of BAD) expect(sent.indexOf(bad), `0x${bad.toString(16)} at ${sent.indexOf(bad)}`).toBe(-1);
+    expect(sent.length).toBe(OFFSET + 8 + TAIL);
+    const chainAt = OFFSET - 0xd00 + 0x600;
+    expect(sent.readUInt32LE(chainAt) >>> 16).toBe(0x1111);
+    // The frame sits in the buffer, directly below the chain, and nothing of it falls off the front.
+    expect(chainAt - frameBytes).toBeGreaterThan(0);
+    expect(sent.subarray(0, chainAt - frameBytes).every((byte) => byte === 0x41)).toBe(true);
+    expect(sent.readUInt32LE(OFFSET + 4)).toBe(0x11111401);
+  });
+});
+
+describe("which module the dispatcher calls a handler in", () => {
+  const module = (over: Partial<{ safeseh: "enabled" | "disabled" | "unknown"; aslr: "enabled" | "disabled" | "unknown"; dllCharacteristics: number }> = {}) =>
+    ({ safeseh: "disabled" as const, aslr: "disabled" as const, dllCharacteristics: 0, ...over });
+
+  // One answer for seh_ppr ranking a pop-pop-ret and for dep_plan picking the pivot a DEP target needs,
+  // so the two commands cannot disagree about a module.
+  test("a fixed base and no SafeSEH table, and NO_SEH refused although it has no table either", () => {
+    expect(takesSehHandler(module())).toMatchObject({ ok: true });
+    expect(takesSehHandler(module({ dllCharacteristics: 0x0400 }))).toMatchObject({ ok: false, why: "the image is marked NO_SEH, so the dispatcher refuses every handler in it" });
+    expect(takesSehHandler(module({ safeseh: "enabled" }))).toMatchObject({ ok: false });
+    expect(takesSehHandler(module({ aslr: "enabled" }))).toMatchObject({ ok: false });
+    expect(takesSehHandler(module({ safeseh: "unknown" })).ok).toBe(true);
   });
 });
 

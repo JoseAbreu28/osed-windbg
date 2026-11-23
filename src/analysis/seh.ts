@@ -196,3 +196,19 @@ export function walkSehRecords(teb: bigint, maxRecords = 64, reader: PointerRead
 export function readSehRecords(teb: bigint, maxRecords = 64, reader: PointerReader = readPointer): SehRecordEvidence[] {
   return walkSehRecords(teb, maxRecords, reader).records;
 }
+
+/** The flag that says the image has no exception handlers at all, so the dispatcher refuses every
+ * address inside it before it calls one. It is a different fact from the SafeSEH table and a module
+ * can have neither: `safeseh: "disabled"` on a NO_SEH image means only that there is no table. */
+const IMAGE_DLLCHARACTERISTICS_NO_SEH = 0x0400;
+
+/** Whether the dispatcher will call a handler that points into this module, and why not when it will
+ * not. One answer for every caller: `seh_ppr` ranking a pop-pop-ret for a target without DEP, and
+ * `dep_plan` picking the stack pivot a DEP target's handler has to be. A module whose base moves is out
+ * for both, because the handler is a constant the payload carries. */
+export function takesSehHandler(module: { safeseh: "enabled" | "disabled" | "unknown"; aslr: "enabled" | "disabled" | "unknown"; dllCharacteristics: number }): { ok: boolean; why: string } {
+  if ((module.dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NO_SEH) !== 0) return { ok: false, why: "the image is marked NO_SEH, so the dispatcher refuses every handler in it" };
+  if (module.safeseh === "enabled") return { ok: false, why: "SafeSEH: only an address in the module's own handler table is called" };
+  if (module.aslr !== "disabled") return { ok: false, why: "ASLR: the handler is a constant in the payload and this base moves between runs" };
+  return { ok: true, why: module.safeseh === "disabled" ? "no SafeSEH table and a fixed base" : "no SafeSEH table could be read, and a fixed base" };
+}

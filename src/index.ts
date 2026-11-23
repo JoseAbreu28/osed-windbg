@@ -48,11 +48,12 @@ import { findEncodings } from "./core/backward_scanner";
 import { badcharAddressFilter } from "./logic/pointer_filter_logic";
 import { COPY_SEPARATOR, CORPUS_BLOCK, HELPER_BLOCK, buildExploit, measureLanding, popsAfterPivot, slotBlock, type Block, type Delta } from "./commands/dep_build";
 import { GROUPS as PALETTE_GROUPS, SHAPES as PALETTE_SHAPES, extrasOf as paletteExtras, paletteLines, pickShape, shapeEncodings } from "./commands/palette";
-import { constantsFor, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planWrites, settledLines, SHOWN_ABOVE, type DepPlanStyle, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
+import { constantsFor, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planWrites, settledLines, SHOWN_ABOVE, type DepPlanStyle, type Hit, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
 import { copyBytes, FRAMES, stagedPops, stagingBase, stagingRoom, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { handlerCandidates, landingPivots, measureTail, type Delivery } from "./commands/dep_delivery";
 import { measureHandlerEsp, readByte, sehAtCrash, type SehCrash } from "./commands/dep_delivery_live";
+import { takesSehHandler } from "./analysis/seh";
 import { SCREEN } from "./core/screenshot_rule";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./commands/code_caves";
@@ -3609,16 +3610,9 @@ function bindApi(): OsedApi {
     return toDxResult("Gadget Palette", rows);
   };
 
-  // A module the dispatcher calls a handler in: no SafeSEH table, and not marked NO_SEH, which makes it
-  // refuse every handler in the image.
   const takesHandlers = (address: number): boolean => {
     const module = findModuleByAddress(BigInt(address));
-    if (!module || module.safeseh !== "disabled" || module.aslr !== "disabled") return false;
-    const base = Number(module.base) >>> 0;
-    const lfanew = tryReadMemory(BigInt(base + 0x3c), 4);
-    const pe = lfanew && lfanew.length === 4 ? (lfanew[0] | (lfanew[1] << 8) | (lfanew[2] << 16) | (lfanew[3] << 24)) >>> 0 : undefined;
-    const flags = pe === undefined ? undefined : tryReadMemory(BigInt(base + pe + 0x18 + 0x46), 2);
-    return flags !== undefined && flags.length === 2 && (flags[1] & 0x04) === 0;
+    return module !== undefined && takesSehHandler(module).ok;
   };
   const sehDelivery = (crash: SehCrash, corpus: CapabilityIndex | undefined): Delivery => {
     const candidates = handlerCandidates(corpus?.gadgets ?? [], takesHandlers);

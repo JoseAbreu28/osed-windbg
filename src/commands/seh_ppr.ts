@@ -5,6 +5,9 @@ import { normalizeByteArray } from "../core/validation";
 import { scanPattern } from "../core/scan_engine";
 import { knownPatterns, validateInstructionCandidate } from "../logic/instruction_validation";
 import { findModuleByAddress } from "./modules";
+import { takesSehHandler } from "../analysis/seh";
+
+type HandlerModule = { safeseh: TriState; aslr: TriState; dllCharacteristics: number };
 
 type TriState = "enabled" | "disabled" | "unknown";
 type Mode = "fast" | "thorough";
@@ -37,41 +40,14 @@ function isBadcharSafe(address: bigint, pointerSize: 4 | 8, exclude: number[]): 
   return !addressBytes(address, pointerSize).some((value) => blocked.has(value));
 }
 
-function scoreFinding(badcharSafe: boolean, aslr: TriState, safeseh: TriState): { score: number; reasons: string[] } {
-  let score = 0;
-  const reasons: string[] = [];
-
-  if (badcharSafe) {
-    score += 35;
-    reasons.push("address bytes avoid excluded badchars");
-  } else {
-    score -= 40;
-    reasons.push("address bytes contain excluded badchars");
-  }
-
-  if (aslr === "disabled") {
-    score += 25;
-    reasons.push("module has ASLR disabled");
-  } else if (aslr === "unknown") {
-    score += 5;
-    reasons.push("module ASLR state unknown");
-  } else {
-    score -= 20;
-    reasons.push("module has ASLR enabled");
-  }
-
-  if (safeseh === "disabled") {
-    score += 30;
-    reasons.push("module SafeSEH is disabled");
-  } else if (safeseh === "unknown") {
-    score += 10;
-    reasons.push("module SafeSEH state unknown");
-  } else {
-    score -= 40;
-    reasons.push("module SafeSEH is enabled");
-  }
-
-  return { score, reasons };
+/** Whether the dispatcher will call a handler here is one question, answered by takesSehHandler so that
+ * this command and dep_plan's SEH delivery cannot disagree about a module. A module it refuses scores
+ * below every module it accepts, whatever the address bytes look like. */
+function scoreFinding(badcharSafe: boolean, module: HandlerModule): { score: number; reasons: string[] } {
+  const takes = takesSehHandler(module);
+  const reasons = [badcharSafe ? "address bytes avoid excluded badchars" : "address bytes contain excluded badchars",
+    `${takes.ok ? "the dispatcher calls a handler here" : "the dispatcher never calls a handler here"}: ${takes.why}`];
+  return { score: (badcharSafe ? 35 : -40) + (takes.ok ? 55 : -100), reasons };
 }
 
 function normalizeMode(value: unknown): Mode {
@@ -150,7 +126,7 @@ export function createSehPprCommand(): Command {
           const aslr = moduleInfo?.aslr ?? "unknown";
           const safeseh = moduleInfo?.safeseh ?? "unknown";
           const badcharSafe = isBadcharSafe(hit, pointerSize, normalizedExclude.values);
-          const scored = scoreFinding(badcharSafe, aslr, safeseh);
+          const scored = scoreFinding(badcharSafe, { aslr, safeseh, dllCharacteristics: moduleInfo?.dllCharacteristics ?? 0 });
 
           findings.push({
             address: hit,
@@ -202,7 +178,11 @@ export function createSehPprCommand(): Command {
           score: `${finding.score}`,
         })),
       );
-      out.whyItMatters("Reliable pop-pop-ret selection is central to practical SEH overwrite exploitation.");
+      // A pop-pop-ret returns into the SEH record itself, which is on the stack. That is the whole
+      // technique without DEP and it is dead with DEP on, so the one line that separates them belongs
+      // here rather than in the user's memory.
+      out.info("A pop-pop-ret returns into the record on the stack, so with DEP on it is not the delivery: the handler has to be a gadget that moves ESP into the buffer and returns there. dep_plan measures that ESP and picks the pivot.");
+      out.whyItMatters("Reliable pop-pop-ret selection is central to practical SEH overwrite exploitation without DEP.");
 
       return {
         command: "seh_ppr",

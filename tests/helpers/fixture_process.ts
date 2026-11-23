@@ -269,9 +269,10 @@ export const sehShape = (() => {
   return { OFFSET, STACK, BUFFER, RECORD, HANDLER_ESP, FAULT_ESP, TEB, TAIL, MODULES, sehCrash };
 })();
 
-/** The SEH shape's dep_plan transcript, pushad style. */
-export function sehRun(): string {
+/** The SEH shape's dep_plan transcript. The delivery is not a style, so every style runs on the same
+ * crash: what changes is only where in the buffer the chain starts and what the handler has to clear. */
+export function sehRun(style = "pushad"): string {
   load(sehShape.MODULES, { policy: 2, registry: "", crash: sehShape.sehCrash() });
-  (globalThis as unknown as { osed: Api }).osed.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", "pushad");
+  (globalThis as unknown as { osed: Api }).osed.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", style);
   return text();
 }

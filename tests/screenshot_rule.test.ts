@@ -75,6 +75,12 @@ describe("dep_plan's output against the screenshot rule", () => {
     expect(rules(sehRun())).toEqual([]);
   });
 
+  // The SEH lines are the same in every style, and only the skeleton puts a frame under the chain, so
+  // its [6/7] is the longest one the delivery can produce.
+  test("skeleton, delivered through an SEH handler", () => {
+    expect(rules(sehRun("skeleton"))).toEqual([]);
+  });
+
   // A run that never reached a corpus chose no style, so it keeps "auto" rather than writing out the
   // fallback the rest of the run uses. Writing a choice nobody made is what the echo exists to prevent,
   // and the rule exempts a stopped run for the same reason. Every module here is based where every
