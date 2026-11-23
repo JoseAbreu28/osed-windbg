@@ -5,9 +5,12 @@ export type TableColumn = {
 };
 
 let quietDepth = 0;
+let held: string[] | undefined;
 
 function write(line = ""): void {
-  if (quietDepth === 0) host.diagnostics.debugLog(`${line}\n`);
+  if (quietDepth > 0) return;
+  if (held) held.push(line);
+  else host.diagnostics.debugLog(`${line}\n`);
 }
 
 /** Runs fn with every output.ts line suppressed, for a lookup whose printout nobody asked for. */
@@ -17,6 +20,20 @@ export function quietly<T>(fn: () => T): T {
     return fn();
   } finally {
     quietDepth -= 1;
+  }
+}
+
+/** Runs fn with its lines held back instead of written, so the caller prints them where they belong.
+ * dep_plan needs an answer before its first line that only a section further down produces. A nested
+ * `quietly` still drops its lines rather than handing them over. */
+export function capture<T>(fn: () => T): { value: T; lines: string[] } {
+  const outer = held;
+  const own: string[] = [];
+  held = own;
+  try {
+    return { value: fn(), lines: own };
+  } finally {
+    held = outer;
   }
 }
 

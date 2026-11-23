@@ -3501,7 +3501,37 @@ function bindApi(): OsedApi {
       ...(excludeText || force ? [excludeText] : []), ...(force ? [true] : []),
     ];
 
-    out.section(out.dxCall("dep_plan", callArgs(styleText, anyway)));
+    // The first line has to write out every choice, and the style is the last one made: it comes from
+    // the corpus, which [3/7] scans. So the scan and the solve run here, with their output held back and
+    // replayed under [3/7] where it belongs. An echoed "auto" hid the one choice a screenshot most needs
+    // to show, and reprinting the header lower down cannot fix it: the first line is what gets framed.
+    const dep = depVerdict();
+    // Without DEP the stack runs the shellcode as it is. There is no chain, so no style is chosen and
+    // the scan that would choose one is skipped, exactly as before this reordering.
+    const buildsChain = dep.enforced !== false || anyway;
+    const moduleFailed = chosen.length === 0 || chosen.some((entry) => entry.why !== undefined);
+    const scan = out.capture((): CapabilityIndex | undefined => {
+      if (!buildsChain) return undefined;
+      if (moduleFailed) {
+        out.error("Skipped: no module here can give gadgets. See the STOP above.");
+        return undefined;
+      }
+      if (loadedCorpusCovers(modules, badchars as number[])) {
+        out.info(`Using the corpus already loaded: a complete live scan of ${modulesLabel} for these bad chars, so scanning again could only find the same gadgets.`);
+        return currentRopCorpus;
+      }
+      out.echo("rop.scan_live", [modulesArg, badText]);
+      executeRopScanLive(modulesArg, badText);
+      return currentRopCorpus;
+    });
+    const scanned = scan.value;
+    const solved = moduleFailed || !buildsChain ? undefined : solveStyles(scanned, modules, badchars as number[], exclude, depApi);
+    const style: DepPlanStyle = styleText === "auto" ? (solved ? chooseStyle(solved) : "skeleton") : styleText as DepPlanStyle;
+
+    // A run with no corpus chose no style, so its echo keeps "auto" instead of writing out the fallback
+    // the rest of this function uses. Writing a choice that was never made is the thing the echo exists
+    // to prevent, and the screenshot rule exempts a stopped run's echo for the same reason.
+    out.section(out.dxCall("dep_plan", callArgs(solved ? style : styleText, anyway)));
     const n = DEP_PLAN_SECTIONS;
     const summary: Array<Record<string, string>> = [];
     // Below each section's output, so a screenshot of the output stops here and the block below it is one
@@ -3518,7 +3548,6 @@ function bindApi(): OsedApi {
     };
 
     // Whether a chain is needed at all comes first: without DEP the stack runs the shellcode as it is.
-    const dep = depVerdict();
     if (dep.enforced === false) {
       out.section(`DEP is OFF for ${dep.name}: no chain needed`);
       out.error(`The stack executes: ${dep.why}.`);
@@ -3637,19 +3666,8 @@ function bindApi(): OsedApi {
     printBlock(slotBlock(depApi, owner || modulesLabel, iatSlot, badchars as number[], route?.delta).block);
     summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === undefined ? "no route" : `${dwordHex(iatSlot)}${route?.delta ? ` + delta via ${route.delta.anchor}` : ""}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
 
-    // A module that can give no gadget makes the corpus and the picks meaningless, and scanning it costs time.
-    const moduleFailed = blocker !== undefined && (blocker as { layer: Layer }).layer === "module";
     out.section(`[3/${n}] Gadget corpus from ${modulesLabel}`);
-    let scanned: CapabilityIndex | undefined;
-    if (moduleFailed) out.error("Skipped: no module here can give gadgets. See the STOP above.");
-    else if (loadedCorpusCovers(modules, badchars as number[])) {
-      scanned = currentRopCorpus;
-      out.info(`Using the corpus already loaded: a complete live scan of ${modulesLabel} for these bad chars, so scanning again could only find the same gadgets.`);
-    } else {
-      out.echo("rop.scan_live", [modulesArg, badText]);
-      executeRopScanLive(modulesArg, badText);
-      scanned = currentRopCorpus;
-    }
+    for (const line of scan.lines) out.print(line);
     const gadgetCount = scanned?.gadgets.length ?? 0;
     if (!moduleFailed) out.info(`${gadgetCount} gadgets and ${scanned ? summarizeCapabilities(scanned).length : 0} capabilities, every address free of the bad bytes.`);
     printBlock(CORPUS_BLOCK);
@@ -3667,8 +3685,6 @@ function bindApi(): OsedApi {
     const writable = depApi === "VirtualAlloc" || moduleFailed ? undefined : out.quietly(() => pickCave(4, "STAGING"));
     const cave = depApi === "WriteProcessMemory" && !moduleFailed ? out.quietly(() => pickCave(0x210, "EXEC")) : undefined;
 
-    const solved = moduleFailed ? undefined : solveStyles(scanned, modules, badchars as number[], exclude, depApi);
-    const style: DepPlanStyle = styleText === "auto" ? (solved ? chooseStyle(solved) : "skeleton") : styleText as DepPlanStyle;
     const corpus = solved?.corpus;
     const otherBlocked = solved ? titles(solved.plans[otherStyle(style)].filter((plan) => !met(plan))) : "";
     out.section(`[4/${n}] The gadget picked per job (${style} style${styleText === "auto" && otherBlocked ? `: the ${otherStyle(style)} style lacks ${otherBlocked}` : ""})`);

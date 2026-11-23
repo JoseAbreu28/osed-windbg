@@ -26,8 +26,9 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
     const api = load(shape(), { policy: 2, registry: FORCED });
     api.dep_plan(BAD);
     const output = text();
-    // The echoed call names every choice this run made, so pasting it repeats the run.
-    expect(output.split("\n").find((line) => line !== "")).toBe(`=== dx @$osed().dep_plan("VirtualAlloc", "libspp.dll", "${BAD}", "auto", 1) ===`);
+    // The echoed call names every choice this run made, so pasting it repeats the run. The style is the
+    // last choice made, and it is written out: this shape has no capture ESP, so pushad is the only one.
+    expect(output.split("\n").find((line) => line !== "")).toBe(`=== dx @$osed().dep_plan("VirtualAlloc", "libspp.dll", "${BAD}", "pushad", 1) ===`);
     expect(output).toContain("=== DEP is on for syncbrs.exe ===");
     expect(output).toContain("Exploit Protection turns DEP on for syncbrs.exe (MitigationOptions in its Image File Execution Options key), whatever its NX_COMPAT flag says");
     expect(output).toContain("Gadgets come from every module that can give one: libspp.dll. Not usable: syncbrs.exe, every address holds the bad byte(s) 00; libpal.dll, every address holds the bad byte(s) 00; libsync.dll, every address holds the bad byte(s) 00; 1 with ASLR.");

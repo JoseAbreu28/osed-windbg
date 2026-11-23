@@ -56,12 +56,24 @@ describe("dep_plan's output against the screenshot rule, as measured on 2026-11-
 
   test("pushad, from the short call with only the bad chars", () => {
     load(shape(), { policy: 2, registry: FORCED }).dep_plan(BAD);
-    // The echo says "auto": the header prints before the style is chosen, so a screenshot of it hides one.
-    expect(rules(text()).sort()).toEqual([...COMMON, "echo echo"].sort());
+    expect(rules(text()).sort()).toEqual([...COMMON].sort());
   });
 
   test("skeleton, named in the long call", () => {
     load(shape({ code: GADGETS }), { policy: 2, registry: FORCED }).dep_plan("VirtualAlloc", "libspp.dll", BAD, "skeleton", 1);
     expect(rules(text()).sort()).toEqual([...COMMON].sort());
+  });
+
+  // A run that never reached a corpus chose no style, so it keeps "auto" rather than writing out the
+  // fallback the rest of the run uses. Writing a choice nobody made is what the echo exists to prevent,
+  // and the rule exempts a stopped run for the same reason. Every module here is based where every
+  // address holds 00, so the module layer stops it before anything is scanned.
+  test("a run stopped at a layer writes no style, and the echo is not a violation", () => {
+    const api = load(shape({ base: 0x00a10000 }), { policy: 2, registry: FORCED });
+    api.dep_plan(BAD);
+    const output = text();
+    expect(output.split("\n").find((line) => line !== "")).toContain('"auto", 1)');
+    expect(output).toContain("=== STOP: ");
+    expect(rules(output).filter((rule) => rule.indexOf("echo") === 0)).toEqual([]);
   });
 });
