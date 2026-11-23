@@ -57,7 +57,7 @@ describe("dep_plan's output against the screenshot rule, as measured on 2026-11-
   test("pushad, from the short call with only the bad chars", () => {
     load(shape(), { policy: 2, registry: FORCED }).dep_plan(BAD);
     // The echo says "auto": the header prints before the style is chosen, so a screenshot of it hides one.
-    expect(rules(text()).sort()).toEqual([...COMMON, "echo echo", "[4/7] height"].sort());
+    expect(rules(text()).sort()).toEqual([...COMMON, "echo echo"].sort());
   });
 
   test("skeleton, named in the long call", () => {

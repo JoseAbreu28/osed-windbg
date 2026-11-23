@@ -416,7 +416,8 @@ describe("dep_plan", () => {
     const fresh = loadApi({ extra: [FAR_POP_EBP, NEAR_POP_EBP] });
     fresh.dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad");
     const output = text();
-    expect(output.slice(output.indexOf("  pop ebp"), output.indexOf("  pop ebx"))).toContain("0x11111381");
+    // The swap list is the block's, not the ranking's: [4/7] prints the pick and the candidates ranked
+    // above it, and the usable ones after it are the commented swaps below the separator.
     const table = blocksOf(output)[2];
     expect(table.some((line) => /^# POP_EBP.*= 0x11111391 .*drop-in swap/.test(line)), table.join("\n")).toBe(true);
     expect(table.join("\n")).not.toContain("0x11111381");
@@ -492,11 +493,11 @@ describe("dep_plan", () => {
   ])("pasting an echoed line of %s %s prints the same output dep_plan printed under it", (name, style) => {
     api.dep_plan(name, "libbkup", "00 0A 0D", style);
     const report = text();
-    // Three commands are offered rather than run, so nothing prints under their echo and there is
-    // nothing to compare: dep_plan reads the caves quietly and takes only the address, rop.construct
-    // builds in eax whichever register the frame wants, and the skeleton dep_function frame is the same
-    // frame the block below the separator prints correctly. The pushad dep_function map does print.
-    const offered = (line: string): boolean => line.includes("code_caves(")
+    // Four commands are offered rather than run, so nothing prints under their echo and there is nothing
+    // to compare: dep_plan reads the caves and the jmp esp hits quietly and keeps only the address,
+    // rop.construct builds in eax whichever register the frame wants, and the skeleton dep_function
+    // frame is the one the block below the separator prints correctly. The pushad map does print.
+    const offered = (line: string): boolean => line.includes("code_caves(") || line.includes("find_bytes(")
       || line.includes("rop.construct(") || line.includes('dep_function("' + name + '")');
     const calls = report.split("\n").filter((line) => line.startsWith("dx @$osed().") && !offered(line));
     expect(calls.some((call) => call.includes(".dep_candidates("))).toBe(true);

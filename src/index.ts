@@ -3309,7 +3309,10 @@ function bindApi(): OsedApi {
         const hits: number[] = [];
         for (const module of modules) {
           out.echo("find_bytes", [module, bytes, 20]);
-          invoke("find_bytes", [module, bytes, 20]);
+          // Quietly: find_bytes prints its own section, a two-column table whose Address and Python
+          // columns hold the same value, and a line about what it does not search. Six rows per byte
+          // pattern to carry one address. The line below is the fact, and the echo reproduces the rest.
+          out.quietly(() => invoke("find_bytes", [module, bytes, 20]));
           hits.push(...((lastResult?.findings ?? []) as unknown[])
             .map((hit) => Number(hit))
             .filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0));

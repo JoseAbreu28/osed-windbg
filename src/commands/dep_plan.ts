@@ -471,7 +471,11 @@ export function sideEffects(gadget: RopGadget, job: Job): string {
 const pathText = (path: NonNullable<JobPlan["path"]>): string =>
   `no single gadget does it, a sequence does: ${path.from} into ${path.to} by ${path.gadgets.map(sequence).join(", then ")}`;
 
-// The pick, up to three candidates the old ranking put above it, and up to two usable alternatives after it.
+// The pick and up to three candidates the old ranking put above it, which is the evidence that the pick
+// was not simply the first in the ranking. The usable alternatives after it are not printed here: each is
+// already a commented drop-in swap in the [4/7] copy block, under the name the chain uses and with this
+// same reason, which is where someone swapping one in would edit. Printed in both places they cost four
+// rows a job and put the section past the one-screen budget.
 export function planLines(plan: JobPlan): string[] {
   const { job, live, verdicts, pick } = plan;
   if (verdicts.length === 0 && plan.path) {
@@ -482,7 +486,6 @@ export function planLines(plan: JobPlan): string[] {
     ? ` (keep ${live.map((entry) => ROLE_NAMES[entry.role] ? `${entry.register} = ${ROLE_NAMES[entry.role]}` : entry.register).join(", ")})` : "";
   const at = pick ? verdicts.indexOf(pick) : verdicts.length;
   const above = verdicts.slice(0, at);
-  const after = pick ? verdicts.slice(at + 1).filter((verdict) => verdict.usable).slice(0, 2) : [];
   const line = (verdict: Verdict, mark: string, label: string) => [
     `  ${mark} ${hex32(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}  ${sideEffects(verdict.gadget, job)}`,
     `      ${label}: ${verdict.reason}`,
@@ -500,7 +503,6 @@ export function planLines(plan: JobPlan): string[] {
   if (!pick && plan.path) {
     lines.push(`    ${pathText(plan.path)}`);
   } else if (!pick) lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
-  for (const verdict of after) lines.push(...line(verdict, " ", "usable"));
   return lines;
 }
 
