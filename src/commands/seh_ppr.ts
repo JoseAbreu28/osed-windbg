@@ -178,6 +178,13 @@ export function createSehPprCommand(): Command {
           score: `${finding.score}`,
         })),
       );
+      // The score decided the order and nothing said why, although the reason was already computed and
+      // carried in each finding. One line per distinct verdict, with the count, so the judgement is on
+      // the screenshot next to the facts the columns show.
+      for (const reason of [...new Set(findings.map((finding) => finding.reasons[1]))]) {
+        const count = findings.filter((finding) => finding.reasons[1] === reason).length;
+        out.info(`${count} of ${findings.length}: ${reason}`);
+      }
       // A pop-pop-ret returns into the SEH record itself, which is on the stack. That is the whole
       // technique without DEP and it is dead with DEP on, so the one line that separates them belongs
       // here rather than in the user's memory.

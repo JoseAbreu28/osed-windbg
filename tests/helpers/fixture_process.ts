@@ -18,6 +18,9 @@ export type Module = {
   base: number;
   aslr?: boolean;
   nx?: boolean;
+  /** IMAGE_DLLCHARACTERISTICS_NO_SEH: the image has no exception handlers, so the dispatcher refuses
+   * every address in it. A different fact from the SafeSEH table, and a module can have neither. */
+  noSeh?: boolean;
   /** RVA in .text (0x1000 to 0x2FFF) and the bytes there. */
   code?: Array<[number, number[]]>;
   /** One import descriptor per DLL; each slot holds `target`, the address the loader resolved. */
@@ -40,7 +43,7 @@ function peImage(module: Module): Uint8Array {
   u16(image, pe + 0x14, 0xe0);
   u16(image, optional, 0x10b);
   u32(image, optional + 0x1c, module.base);
-  u16(image, pe + 0x5e, (module.aslr ? 0x40 : 0) | (module.nx ? 0x100 : 0));
+  u16(image, pe + 0x5e, (module.aslr ? 0x40 : 0) | (module.nx ? 0x100 : 0) | (module.noSeh ? 0x400 : 0));
   const section = optional + 0xe0;
   image.set(ascii(".text"), section);
   u32(image, section + 0x8, 0x2000);
