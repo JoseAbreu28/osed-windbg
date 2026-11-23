@@ -11842,10 +11842,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-23T09:32:35.350Z" : globalThis[key2];
+        value = true ? "2026-11-23T11:41:52.267Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "3ea74b5c4ded" : globalThis[key2];
+        value = true ? "879216e6aa33" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15780,14 +15780,14 @@ var osed_bundle = (() => {
     const lines = [];
     let line = `${name} = {`;
     entries.forEach((entry, i) => {
-      const piece = i < entries.length - 1 ? `${entry},` : entry;
+      const piece = i < entries.length - 1 ? `${entry},` : `${entry}}`;
       if (line.length + piece.length + 1 <= width || line.indexOf("{") === line.length - 1) line += line.endsWith("{") ? piece : ` ${piece}`;
       else {
         lines.push(line);
         line = `${indent}${piece}`;
       }
     });
-    return lines.concat(`${line}}`);
+    return lines.concat(entries.length === 0 ? `${line}}` : line);
   }
   var HELPER_BLOCK = { lines: [
     "# needs OFFSET (from the crash) and BADCHARS (from the bad char hunt) already in this file",
@@ -27682,7 +27682,7 @@ ${INDENT}`)]);
       output_exports[delivery.tail === void 0 ? "warn" : "info"](`Past the handler: ${delivery.tailHow}.`);
     };
     const executeDepPlan = (...args) => {
-      var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
+      var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("dep_plan");
       }
@@ -27724,9 +27724,14 @@ ${INDENT}`)]);
       const modules = named2.length > 0 ? named2 : usable.map((entry) => entry.label);
       const modulesArg = modules.join(",");
       const modulesLabel = chosen.map((entry) => entry.label).join(", ") || "no module";
-      const routes = (autoApi ? DEP_PLAN_APIS : [requestedApi]).map((name) => routeFor(name, modules, badchars, fixedOwners));
-      const route = (_a2 = routes.find((candidate) => candidate !== void 0 && !candidate.delta)) != null ? _a2 : routes.find((candidate) => candidate !== void 0);
-      const depApi = (_c = (_b = route == null ? void 0 : route.api) != null ? _b : requestedApi) != null ? _c : "VirtualAlloc";
+      const pickRoute = (names) => {
+        var _a3;
+        const routes = names.map((name) => routeFor(name, modules, badchars, fixedOwners));
+        return (_a3 = routes.find((candidate) => candidate !== void 0 && !candidate.delta)) != null ? _a3 : routes.find((candidate) => candidate !== void 0);
+      };
+      const route = pickRoute(autoApi ? DEP_PLAN_APIS : [requestedApi]);
+      const ownChoice = autoApi ? route : pickRoute(DEP_PLAN_APIS);
+      const depApi = (_b = (_a2 = route == null ? void 0 : route.api) != null ? _a2 : requestedApi) != null ? _b : "VirtualAlloc";
       const callArgs = (styleValue, force) => [
         autoApi && !route ? "" : depApi,
         modulesArg,
@@ -27759,13 +27764,16 @@ ${INDENT}`)]);
       const scanned = scan.value;
       const iatSlot = route == null ? void 0 : route.slot;
       const { writable, cave, caveBytes, stagingFor, roomBelow } = frameAddresses(modules, badText, depApi, moduleFailed);
-      const frameFacts = { iatSlot, slotWritable: slotWritable(iatSlot), delta: (_d = route == null ? void 0 : route.delta) == null ? void 0 : _d.value, writable, cave, caveBytes };
+      const frameFacts = { iatSlot, slotWritable: slotWritable(iatSlot), delta: (_c = route == null ? void 0 : route.delta) == null ? void 0 : _c.value, writable, cave, caveBytes };
       const solved = moduleFailed || !buildsChain ? void 0 : solveStyles(scanned, modules, badchars, exclude, depApi, frameFacts, stagingFor);
       const staging = solved == null ? void 0 : solved.staging;
       const sehCrash = solved ? sehAtCrash() : void 0;
       const style = styleText === "auto" || styleText === "none" ? solved ? chooseStyle(solved) : "skeleton" : styleText;
       const noChain = dep.enforced === false && !anyway;
       section(dxCall("dep_plan", callArgs(solved ? style : noChain ? "none" : styleText, anyway)));
+      if (!autoApi && ownChoice && ownChoice.api !== requestedApi) {
+        warn(`You named ${requestedApi}. Left to choose, the tool takes ${ownChoice.api}, ${ownChoice.delta ? `reached from ${ownChoice.delta.dll}!${ownChoice.delta.anchor} by a distance` : `which ${shortName(ownChoice.owner)} imports directly`}.`);
+      }
       const n = DEP_PLAN_SECTIONS;
       const summary = [];
       const SEPARATOR = COPY_SEPARATOR;
@@ -27785,7 +27793,7 @@ ${INDENT}`)]);
         for (const module of modules) {
           echo("find_bytes", [module, "FF E4", 20, badText]);
           invoke("find_bytes", [module, "FF E4", 20, badText]);
-          jumps.push(...((_e = lastResult == null ? void 0 : lastResult.findings) != null ? _e : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit)));
+          jumps.push(...((_d = lastResult == null ? void 0 : lastResult.findings) != null ? _d : []).map((hit) => Number(hit)).filter((hit) => Number.isFinite(hit)));
         }
         error(jumps.length > 0 ? `Jump straight to your shellcode: payload = b"A" * OFFSET + p32(${hex325(jumps[0])}) + b"\\x90" * 16 + shellcode    (${hex325(jumps[0])} is jmp esp, no bad byte)` : `No jmp esp without a bad byte in ${modulesLabel}. dx @$osed().find_bytes("", "FF E4", 20, "${badText}") searches every module.`);
         if (!anyway) {
@@ -27850,7 +27858,7 @@ ${INDENT}`)]);
       } else if ((unusable == null ? void 0 : unusable.info.aslr) === "enabled") {
         stop("module", `${unusable.label} has ASLR: every gadget address in it moves on each run, so no chain built from it survives a reboot. This is the one case where you change module, and the API stays as it is.`, ...usableNext());
       } else if (unusable) {
-        stop("module", `${(_f = unusable.why) == null ? void 0 : _f.replace(/^every address/, `every address in ${unusable.label}`)}, so no gadget from it is usable.`, ...usableNext());
+        stop("module", `${(_e = unusable.why) == null ? void 0 : _e.replace(/^every address/, `every address in ${unusable.label}`)}, so no gadget from it is usable.`, ...usableNext());
       }
       summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
       section(`[2/${n}] IAT slot of ${depApi}`);
@@ -27889,7 +27897,7 @@ ${INDENT}`)]);
       summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === void 0 ? "no route" : `${hex325(iatSlot)}${(route == null ? void 0 : route.delta) ? ` + delta via ${route.delta.anchor}` : ""}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
       section(`[3/${n}] Gadget corpus from ${modulesLabel}`);
       for (const line of scan.lines) print(line);
-      const gadgetCount = (_g = scanned == null ? void 0 : scanned.gadgets.length) != null ? _g : 0;
+      const gadgetCount = (_f = scanned == null ? void 0 : scanned.gadgets.length) != null ? _f : 0;
       if (!moduleFailed) info(`${gadgetCount} gadgets and ${scanned ? summarizeCapabilities(scanned).length : 0} capabilities, every address free of the bad bytes.`);
       printBlock(CORPUS_BLOCK);
       summary.push({ Section: `[3/${n}] corpus`, Result: moduleFailed ? "skipped" : `${gadgetCount} gadgets` });
@@ -27945,7 +27953,7 @@ ${INDENT}`)]);
         info(`${constant.field} = ${hex325(constant.value)}. To build it in a register by hand:`);
         echo("rop.construct", ["eax", hex(constant.value), badText]);
       }
-      for (const [label, value] of [["IAT slot", iatSlot], ["API_DELTA", (_h = route == null ? void 0 : route.delta) == null ? void 0 : _h.value]]) {
+      for (const [label, value] of [["IAT slot", iatSlot], ["API_DELTA", (_g = route == null ? void 0 : route.delta) == null ? void 0 : _g.value]]) {
         if (blocker || value === void 0 || addressBadBytes(BigInt(value), 4, badSet).length === 0) continue;
         info(`${label} = ${hex325(value)}, which holds a bad byte. To build it in a register by hand:`);
         echo("rop.construct", ["eax", hex(value), badText]);
@@ -27983,10 +27991,10 @@ ${INDENT}`)]);
           const slots = FRAMES[depApi].length;
           echo("code_caves", [modules[0], hex(4 * slots), 25, badText, "STAGING"]);
           info(`The frame is laid at ${hex325(staging)}: ${4 * slots} writable bytes in ${modulesLabel}, not in the payload. Every one of its ${slots} field addresses is free of the bad bytes, so the chain pops them as they are.`);
-          info(`${hex325((_i = roomBelow()) != null ? _i : 0)} bytes of that run sit below the frame, and that is the stack ${depApi} itself runs on: it pushes down from here. The frame is laid as high in the run as its own field addresses allow, for exactly this reason.`);
+          info(`${hex325((_h = roomBelow()) != null ? _h : 0)} bytes of that run sit below the frame, and that is the stack ${depApi} itself runs on: it pushes down from here. The frame is laid as high in the run as its own field addresses allow, for exactly this reason.`);
           info(`The call's ret leaves ESP on the frame, so the sled in [7/${n}] starts by loading it back out of ${hex325(staging + 4 * stackSlot(depApi) >>> 0)}, the field holding the sled's own stack address. An API returns on a few hundred bytes of this run; a shellcode does not.`);
           warn("A run of zero, int3 or nop bytes in a writable section. Nothing here proves the program never writes there.");
-        } else if (style === "staged") for (const line of (_j = solved == null ? void 0 : solved.unavailable) != null ? _j : []) warn(line);
+        } else if (style === "staged") for (const line of (_i = solved == null ? void 0 : solved.unavailable) != null ? _i : []) warn(line);
         if (seh) printSehDelivery(seh, sehCrash, delivery.kind === "seh", style === "skeleton" ? 4 * FRAMES[depApi].length : 0, style);
         if (delivery.kind !== "seh") {
           output_exports[landing2.measured ? "info" : "warn"](landing2.line);
@@ -28031,7 +28039,7 @@ ${INDENT}`)]);
         command: "dep_plan",
         args: { api: depApi, module: modulesArg, badchars: badText, style },
         success: ending === void 0 && missing.length === 0,
-        findings: [{ api: depApi, module: modulesArg, style, dep: dep.enforced, iatSlot, delta: (_k = route == null ? void 0 : route.delta) == null ? void 0 : _k.value, writable, cave, gadgets: gadgetCount, missing, holes: ending ? [] : build.holes }],
+        findings: [{ api: depApi, module: modulesArg, style, dep: dep.enforced, iatSlot, delta: (_j = route == null ? void 0 : route.delta) == null ? void 0 : _j.value, writable, cave, gadgets: gadgetCount, missing, holes: ending ? [] : build.holes }],
         warnings: [...moduleWarnings, ...missing.length > 0 ? [`No candidate for: ${missing.join(", ")}`] : []],
         errors: ending ? [`The ${ending.layer} layer fails: ${ending.what}`, ...ending.next] : []
       });
