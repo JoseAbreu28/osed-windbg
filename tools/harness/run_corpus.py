@@ -1,12 +1,15 @@
 """Run dep_plan over a target corpus on the lab clone, and grade each run by what the target did.
 
-    py -3.12 tools/harness/run_corpus.py <manifest.json> [--only ID|NAME ...] [--ref] [--out DIR]
+    py -3.12 tools/harness/run_corpus.py <manifest.json> [--only ID|NAME ...] [--ref] [--auto] [--out DIR]
 
 For each target the manifest lists:
 
   A. start the target on the clone, attach cdb x86 by PID, load dist/osed-legacy.js, send the target's
-     own crash input, and run dep_plan with nothing but the bad chars and stage 1. The transcript is kept
-     verbatim and graded against the screenshot rule (src/core/screenshot_rule.ts).
+     own crash input, and run dep_plan the way the user would. A target whose manifest entry carries
+     "brief_api", the API its lab's brief demands, gets that API named, with the modules and the style left
+     to the tool; any other target, and every target under --auto, gets the short form, nothing but the bad
+     chars and stage 1. The result records the demanded API and the one the tool would have chosen. The
+     transcript is kept verbatim and graded against the screenshot rule (src/core/screenshot_rule.ts).
   B. paste the copy blocks of [1/7] to [7/7] into one Python file under OFFSET and BADCHARS, the way the
      user would, put a marker shellcode where [7/7] leaves its shellcode hole, and run it. Any other hole
      stops the file, and that is recorded as the tool's failure.
@@ -225,12 +228,26 @@ def between(text, start, end):
     return rest[:b - len(end) if b >= 0 else None]
 
 
-def plan(guest, target, adapters, run_dir, checker):
+def demanded(target, automatic):
+    """The API the lab's brief asks for, which is what the user passes. None when the run measures the tool's own choice."""
+    return None if automatic else target.get("brief_api")
+
+
+def plan_call(target, automatic):
+    """What the user types at the crash. A brief that names the API is obeyed, as he obeys it in the exam: the
+    API is his, the modules and the style stay the tool's. --auto keeps the short form, the automatic path."""
+    api = demanded(target, automatic)
+    if api:
+        return f'dx @$osed().dep_plan("{api}", "", "{target["badchars"]}", "auto", 1)'
+    return f'dx @$osed().dep_plan("{target["badchars"]}", 1)'
+
+
+def plan(guest, target, adapters, run_dir, checker, automatic):
     """Phase A: the dep_plan run. Returns the transcript and its parsed sections."""
     pid = start_target(guest, target, adapters.LAB_ROOT)
     try:
         commands = [f".scriptload {guest.path('osed-legacy.js')}", ".echo HARNESS_ARMED", "g", ".echo HARNESS_CRASH", "r",
-                    ".echo HARNESS_PLAN", f'dx @$osed().dep_plan("{target["badchars"]}", 1)', ".echo HARNESS_END", "q"]
+                    ".echo HARNESS_PLAN", plan_call(target, automatic), ".echo HARNESS_END", "q"]
         under_cdb(guest, pid, commands, "plan")
         crash = adapters.crash(target)
         try:
@@ -277,6 +294,15 @@ def route_of(sections):
         "verdict": " ".join(verdict["lines"]) if verdict else None,
         "stop": " ".join(stops[-1]["lines"]) if stops else None,
     }
+
+
+def auto_api_of(transcript, asked, ran):
+    """The API the tool takes when nobody names one. Unasked, that is the API the run used. Asked, the tool
+    prints a line only when its own choice differs, so no line means the two agree."""
+    if not asked:
+        return ran
+    m = re.search(r"left to choose, the tool takes (\w+)", transcript, flags=re.I)
+    return m.group(1) if m else asked
 
 
 def assemble(target, sections, shellcode, stage=1):
@@ -380,15 +406,15 @@ def judge(seen, dirty, dirty_text):
     return {"status": "FAIL", "stage": "chain", "owner": "tool", "detail": f"never reached a DEP API; {where}"}
 
 
-def run_target(guest, target, adapters, out, checker, ref_mode):
+def run_target(guest, target, adapters, out, checker, ref_mode, automatic):
     run_dir = out / target["lab"]
     run_dir.mkdir(parents=True, exist_ok=True)
-    result = graded(guest, target, adapters, run_dir, checker, ref_mode)
+    result = graded(guest, target, adapters, run_dir, checker, ref_mode, automatic)
     (run_dir / "result.json").write_text(json.dumps(result, indent=2))
     return result
 
 
-def graded(guest, target, adapters, run_dir, checker, ref_mode):
+def graded(guest, target, adapters, run_dir, checker, ref_mode, automatic):
     result = {"id": target.get("id"), "target": target["lab"], "class": target["class"], "main": target["main"]}
     try:
         reason = adapters.not_attempted(target, ref_mode)
@@ -401,10 +427,12 @@ def graded(guest, target, adapters, run_dir, checker, ref_mode):
             return {**result, "status": "PASS" if ok else "FAIL", "stage": "observe", "owner": "-" if ok else "target",
                     "detail": f"reference exploit: {'marker landed' if ok else 'no marker'}; {seen['note']}", "seen": seen}
 
-        planned = plan(guest, target, adapters, run_dir, checker)
+        result["demanded_api"] = demanded(target, automatic)
+        planned = plan(guest, target, adapters, run_dir, checker, automatic)
         result["crash_eip"] = planned["crash_eip"]
         result["violations"] = planned["violations"]
         result["route"] = route_of(planned["sections"])
+        result["auto_api"] = auto_api_of(planned["transcript"], result["demanded_api"], result["route"]["api"])
         result["ground_truth_api"] = target.get("api")
 
         if target["class"] == "B":
@@ -458,6 +486,7 @@ def main():
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--only", nargs="*", default=[])
     parser.add_argument("--ref", action="store_true", help="grade the targets with their reference exploits")
+    parser.add_argument("--auto", action="store_true", help="the short form for every target: the tool chooses the API, even where a brief names one")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
 
@@ -497,11 +526,11 @@ def main():
     for target in targets:
         began = time.time()
         print(f"[{datetime.now():%H:%M:%S}] {target['lab']} ...", flush=True)
-        result = run_target(guest, target, adapters, out, checker, args.ref)
+        result = run_target(guest, target, adapters, out, checker, args.ref, args.auto)
         result["seconds"] = round(time.time() - began)
         results.append(result)
         print(f"    {result['status']}: {result['stage']} / {result['owner']}: {result['detail']}", flush=True)
-        (out / "results.json").write_text(json.dumps({"commit": commit, "dist_sha256": sha, "ref": args.ref, "results": results}, indent=2))
+        (out / "results.json").write_text(json.dumps({"commit": commit, "dist_sha256": sha, "ref": args.ref, "auto": args.auto, "results": results}, indent=2))
     print(f"results: {out / 'results.json'}")
 
 
