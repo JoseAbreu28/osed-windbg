@@ -1,6 +1,6 @@
 """Run dep_plan over a target corpus on the lab clone, and grade each run by what the target did.
 
-    py -3.12 tools/harness/run_corpus.py <manifest.json> [--only NAME ...] [--ref] [--out DIR]
+    py -3.12 tools/harness/run_corpus.py <manifest.json> [--only ID|NAME ...] [--ref] [--out DIR]
 
 For each target the manifest lists:
 
@@ -454,7 +454,13 @@ def main():
     if asked:
         raise SystemExit(f"refusing to run held-out targets: {', '.join(asked)}")
     cfg = manifest["_harness"]
-    targets = [t for t in manifest["targets"] if t["lab"] not in holdout and (not args.only or t["lab"] in args.only)]
+    # --only takes a target id or a lab name. Ids are what this repo and GOAL.md may say out loud, so a
+    # run command written down anywhere uses them; lab names stay for the manifest and the lab tree.
+    named = set(args.only)
+    targets = [t for t in manifest["targets"]
+               if t["lab"] not in holdout and (not named or t["lab"] in named or t.get("id") in named)]
+    if named and not targets:
+        raise SystemExit(f"--only matched no target: {', '.join(sorted(named))}")
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = args.out or (args.manifest.parent / "runs" / f"{stamp}{'-ref' if args.ref else ''}")
