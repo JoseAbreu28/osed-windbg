@@ -3240,7 +3240,7 @@ function bindApi(): OsedApi {
   // whole call frame fits in. dep_plan and dep_candidates both weigh their write gadget against the
   // frame, so both have to see the same ones, or the command [4/7] prints as the one that reproduces it
   // would reproduce something else.
-  const frameAddresses = (modules: string[], badText: string, depApi: DepApi, moduleFailed = false): { writable?: number; cave?: number; caveBytes?: number; stagingFor: StagingFor; roomBelow: () => number | undefined } => {
+  const frameAddresses = (modules: string[], badText: string, depApi: DepApi, moduleFailed = false): { writable?: number; cave?: number; caveBytes?: number; caveWritable?: boolean | null; stagingFor: StagingFor; roomBelow: () => number | undefined } => {
     const bad = (parseHexByteList(badText) || []) as number[];
     let stagingBelow: number | undefined;
     // Clean address first, then the largest. A cave whose own address holds a bad char is usable only from
@@ -3252,14 +3252,21 @@ function bindApi(): OsedApi {
     // then taken clear of it; `clearOfCopy` says why that matters.
     let copied: { at: number; size: number } | undefined;
     const clearOf = (at: number, size: number): boolean => clearOfCopy(at, size, copied);
-    const pickCave = (minSize: number, capability: string): { address: number; size: number } | undefined => {
+    // Among caves the chain can pop as they are, a writable one before a wider read-only one: a shellcode
+    // that decodes itself writes over its own bytes, and msfvenom emits that form for most bad char sets.
+    // The tie-break sits under the clean-address rule, so a shifted writable cave never displaces a clean
+    // read-only one; nothing then changes for a plain shellcode, which runs in either.
+    const pickCave = (minSize: number, capability: string): { address: number; size: number; writable: boolean | null } | undefined => {
       const shifted = (cave: { addrSafe: boolean | null }): number => (cave.addrSafe !== false ? 0 : 1);
+      const readOnly = (cave: { writable: boolean | null }): number => (cave.writable === true ? 0 : 1);
+      const addressOf = (cave: { addrSafe: boolean | null; safeVa: bigint | null; address: bigint }): number =>
+        Number(cave.addrSafe === false && cave.safeVa !== null ? cave.safeVa : cave.address);
       for (const module of modules) {
         const { caves } = findCodeCaves(module, minSize, 25, badText, capability);
         const found = caves.filter((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null)
-          .filter((candidate) => clearOf(Number(candidate.addrSafe === false && candidate.safeVa !== null ? candidate.safeVa : candidate.address), minSize))
-          .sort((left, right) => shifted(left) - shifted(right) || right.size - left.size)[0];
-        if (found) return { address: Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address), size: found.size };
+          .filter((candidate) => clearOf(addressOf(candidate), minSize))
+          .sort((left, right) => shifted(left) - shifted(right) || readOnly(left) - readOnly(right) || right.size - left.size)[0];
+        if (found) return { address: addressOf(found), size: found.size, writable: found.writable };
       }
       return undefined;
     };
@@ -3287,6 +3294,7 @@ function bindApi(): OsedApi {
       writable: depApi === "VirtualAlloc" || moduleFailed ? undefined : out.quietly(() => pickCave(4, "STAGING"))?.address,
       cave: cave?.address,
       caveBytes: cave?.size,
+      caveWritable: cave?.writable,
       stagingFor: (span, offsets) => (moduleFailed ? undefined : out.quietly(() => pickStaging(span, offsets))),
       roomBelow: () => stagingBelow,
     };
@@ -3785,7 +3793,7 @@ function bindApi(): OsedApi {
     // gadget against the frame, and two of the frame's slots are those addresses; [5/7] prints what this
     // found and [4/7]'s block names them.
     const iatSlot = route?.slot;
-    const { writable, cave, caveBytes, stagingFor, roomBelow } = frameAddresses(modules, badText, depApi, moduleFailed);
+    const { writable, cave, caveBytes, caveWritable, stagingFor, roomBelow } = frameAddresses(modules, badText, depApi, moduleFailed);
     const frameFacts: FrameFacts = { iatSlot, slotWritable: slotWritable(iatSlot), delta: route?.delta?.value, writable, cave, caveBytes };
     // Where a staged frame can go depends on the write and pivot gadgets, so solveStyles settles it while
     // it solves and hands the base back.
@@ -4020,6 +4028,15 @@ function bindApi(): OsedApi {
       const copy = copyBytes(frameFacts);
       if (cave === undefined) out.warn(`Code cave: none of 0x${WPM_MIN_COPY.toString(16)} bytes or more with a clean address in ${modulesLabel}. Try dx @$osed().code_caves("", 0x${WPM_MIN_COPY.toString(16)}, 25, "${badText}", "EXEC").`);
       else out.info(`Code cave (return address and lpBaseAddress) = ${dwordHex(cave)}, executable (code_caves EXEC), 0x${(caveBytes ?? 0).toString(16)} bytes.`);
+      // The copy makes the destination hold the shellcode; it does not make the page writable, and
+      // WriteProcessMemory puts the protection back. A shellcode that decodes itself in place, which is
+      // what msfvenom emits for most bad char sets, then faults on its own first write with EIP a few
+      // bytes into its stub. That is invisible from the chain, which is complete and correct, so the fact
+      // belongs on the screen beside the address rather than in whatever the run faults with.
+      if (cave !== undefined && caveWritable !== true) {
+        out.warn(`That cave is executable but not writable, so a shellcode that decodes itself in place faults on its own first write, a few bytes into its stub. A plain shellcode runs there unchanged.`);
+        out.warn(`What an encoded one would need is writable executable bytes: dx @$osed().code_caves("", 0x${WPM_COPY.toString(16)}, 25, "${badText}", "RWX")`);
+      }
       // The copy size is not the design's: it is what this cave holds. A chain that copied more would
       // write past the end of it, so the shellcode has to fit, and that is a constraint on him.
       if (cave !== undefined && copy < WPM_COPY) {
