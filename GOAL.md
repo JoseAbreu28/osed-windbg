@@ -344,6 +344,39 @@ delivery is taken, and T01, T03 and T06, where no handler lands in the buffer an
 other nine never reach a record. That measurement restores the handler, the SEH head and every register, and
 it disturbed nothing in this run, but it runs the program.
 
+## Corpus run, 2026-11-23, measured at `636a034`
+
+`dist/osed-legacy.js` sha256 `4c40bfeb5bfb1beb55bd815cf7f5abd8e9f5d1d37a4cceb52231e36fae65b33a`, the file the corpus ran
+against on the lab clone and the file committed in `dist/`. The three holdout targets were not run, opened or read. Every
+class A target was given only its bad chars and stage 1.
+
+**Twelve of fourteen pass, as before.** Nothing moved and nothing regressed: every target kept the API, the module and the
+style it had at `9d27618`, and the screenshot rule found no violation in any section of any target. This run measured four
+defects in the printed evidence, found while the Workflows pages were captured from the shipped build, not the chain.
+
+| Result | Targets |
+|---|---|
+| marker landed | T01, T02, T03, T04, T05, T06, T07, T09, T10, T12 |
+| refused correctly, leak named | T13, T15 |
+| still failing | T08 |
+| not attempted, the target's fault | T11 |
+
+What changed on the screen, measured on the transcripts of both runs:
+
+| # | Where | Then | Now |
+|---|---|---|---|
+| 1 | `[4/7]` | 15 of the `>` picks on 7 transcripts named a gadget the chain never calls: `read a pointer` in every style and the pushad pops, whose values the `[5/7]` route search loads, and T05's `add`, which the build did through another register | the build reports what its `c.rop` lines call and runs before the ranking prints. All 66 `>` picks on the 13 transcripts that reach `[4/7]` are called. The 15 that were false keep their row without the `>` and say where the chain does the job |
+| 2 | `.explain` of `seh_ppr` | the report line said a pop-pop-ret was selected for the SEH handler, nothing about DEP | it ranks them for a target without DEP and says so in every field; a catalog test fails any field that offers a pop pop ret without naming DEP |
+| 3 | `[5/7]` | `not searched: built from the frame, not searched for` | `not searched: built from the frame` |
+| 4 | `[4/7]` | the commands the section repeats spelled the bad chars upper case under an echo that spelled them as typed | one spelling per target, the echo's |
+
+Two things found and not done:
+
+- `[4/7]`'s copy block still names gadgets the chain never calls. On the skeleton targets it is 9 to 11 of 25 to 30
+  names: routes the search tried and dropped leave their entry in the build's table. They are constants nothing uses, so
+  the file runs, but they are noise in a block he photographs. `Build.called` is the set to filter the table by.
+- No `--ref` pass was made at this commit, as at the last one.
+
 ## Target or tool: T07 and T14, 2026-11-23
 
 Asked to separate, not to fix. Both answers are measured.
