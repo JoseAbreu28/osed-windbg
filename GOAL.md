@@ -66,9 +66,19 @@ iteration, and a change that fixes one must not regress another.
 | `vuln_dep.exe` | `libbkup` | the API is imported directly; skeleton style completes |
 | Sync Breeze 10.0.28 `syncbrs.exe` | `libspp` | no fixed module imports any DEP API; the route is a kernel32 neighbour plus a distance; only one of four fixed modules is usable; pushad is the only viable style |
 | T06 | one exe | no register copy anywhere in the module and no `pushad ; ret` either, so neither stack-frame style can be built: the frame has to be staged at a fixed writable address |
+| T07 | one dll, one exe | no saved EIP takes the overwrite: the overflow faults on a pointer it replaced inside a `__try` and the chain arrives through the SEH handler the dispatcher calls next. The delivery, not the style, is what the target picks |
 
 Add a target whenever one teaches a shape the corpus does not already hold. Record what
 shape it adds, not just that it was added.
+
+**T14 was removed from the corpus on 2026-11-23.** It was a class B target, the same shape T13
+and T15 exercise: nothing at a fixed base, so `dep_plan` must refuse with a named reason and send
+the user to the leak. Its lab was never written. The folder holds only a `lab.json` naming two
+sources and four guest files, none of which exists anywhere in the tree, so there is no build, no
+reference exploit, no offset and no marker. It was never attempted on any run, and counting it in
+the denominator made every score read worse than it was. The manifest keeps its entry under
+`removed`, and it returns to `targets` the moment the lab is written, built and given a reference.
+Nothing about the tool can be learned from it before that. The denominator is 14.
 
 ## How an iteration goes
 
@@ -85,7 +95,7 @@ shape it adds, not just that it was added.
 and every result live outside this repository, because they name course labs; the runner takes the
 manifest path as its argument:
 
-    py -3.12 tools/harness/run_corpus.py <manifest.json> [--only NAME ...] [--ref] [--out DIR]
+    py -3.12 tools/harness/run_corpus.py <manifest.json> [--only ID|NAME ...] [--ref] [--out DIR]
 
 Per target it starts the program on the lab clone (and refuses any other VM), attaches cdb x86 by PID,
 loads `dist/osed-legacy.js`, sends the target's own crash input, and runs `dep_plan(badchars, 1)` with
@@ -98,6 +108,8 @@ reference exploit instead, which grades the target rather than the tool.
 
 The manifest's `holdout` list names the targets kept back for the readiness call. The runner refuses
 them by that list, and refuses a manifest without one, so their names never enter this public repo.
+`--only` takes a target id as well as a lab name, so a run command written down anywhere, here included,
+uses ids; a selection that matches no target stops the run rather than producing an empty one.
 
 `tools/harness/replay.ts` is the same run without a VM, for the questions a module's bytes can answer on
 their own: which modules can give gadgets, the corpus, the IAT slot, the caves, the job picks and every
@@ -282,6 +294,53 @@ What moved, against the previous run:
 
 The screenshot rule on the 13 real transcripts: **no violation in any section of any target.**
 
+## Corpus run, 2026-11-23, measured at `9d27618`
+
+`dist/osed-legacy.js` sha256 `1887cfcac0964cd41bad6c02290b709ea3074da42851b4e7a2c2e3fbc5c009c2`, the file the
+corpus ran against, on the lab clone. The three holdout targets were not run, opened or read. Every class A
+target was given only its bad chars and stage 1. T14 was removed from the corpus before this run, so the
+denominator is 14 and the previous run's eleven of fifteen is eleven of fourteen for comparison.
+
+**Twelve of fourteen pass, from eleven.** Ten class A targets land the marker and two class B targets refuse
+correctly and name the leak. T07 is the one that moved. Nothing regressed: every other target kept the API,
+the module and the style it had, and the whole run took 1333 seconds, 599 of them Sync Breeze's service
+restarts and second fire.
+
+| Result | Targets |
+|---|---|
+| marker landed | T01, T02, T03, T04, T05, T06, T07, T09, T10, T12 |
+| refused correctly, leak named | T13, T15 |
+| still failing | T08 |
+| not attempted, the target's fault | T11 |
+
+What moved, against the previous run:
+
+| # | Targets | Then | Now |
+|---|---|---|---|
+| 1 | T07 | faulted at `0x0040126C` before any gadget ran: its overwrite is a job pointer rather than a saved EIP, and the chain was laid where the pointer is | the chain arrives through the SEH handler the dispatcher calls once that fault happens. `add esp, 0xD10 ; ret` from its dll, with the record measured 0x1410 above the ESP the handler is called with, lands it at `OFFSET - 0x700`. VirtualAlloc is reached from the chain and returns into `jmp esp`. The marker lands |
+| 2 | T08 | refused with nine missing jobs across three style lists, one of them "read a pointer: absent, no hit at all" and "this is the module, not the scan" | still refuses, and says the module is "1 job(s) short of the staged style, the closest of the 3: read a pointer". `[4/7]` names the gadget the search had been hiding: `0x63101ED5  mov eax, dword [eax] ; mov esp, ebp ; ret 0x12`, which is the one its own reference reads the slot with |
+
+What did not move:
+
+- **T08** is the only class A failure left. The refusal is honest and the shape that would close it is written
+  down under "Known gaps": a pivot that reads while it pivots, a frame whose entry slot pushes a register, and
+  a frame base shifted to stay aligned under the pivot's `ret 0x12`. Three things, not one, and none of them
+  is a search tweak.
+- **T11** is still not attempted and still the target's fault: its lab has no measured offset, so the harness
+  cannot aim the crash input. The replay shows it builds a complete chain in the staged style.
+
+The screenshot rule on the 14 real transcripts, scored by the harness with the same module the tests use:
+**no violation in any section of any target.** The SEH delivery adds between four and eleven lines to `[6/7]`
+and every one of them fits.
+
+Two things this run is not. No `--ref` pass was made at this commit, so every statement here about what a
+reference does rests on the earlier runs recorded above and, for T08 and T07, on reading the reference
+sources. And four of the thirteen crashes that reached a corpus look like SEH deliveries by the first test
+applied to them, so four of them let an exception through once to measure the handler's ESP: T07, where the
+delivery is taken, and T01, T03 and T06, where no handler lands in the buffer and the saved EIP stands. The
+other nine never reach a record. That measurement restores the handler, the SEH head and every register, and
+it disturbed nothing in this run, but it runs the program.
+
 ## Target or tool: T07 and T14, 2026-11-23
 
 Asked to separate, not to fix. Both answers are measured.
@@ -299,11 +358,129 @@ chain delivered through an overwritten SEH handler is a shape `dep_plan` does no
 follow, neither started: the harness should let first-chance exceptions through, and the tool needs an SEH
 delivery. Changing the harness changes how every target's fault is recorded, so it is a decision, not a fix.
 
+**Both were done on 2026-11-23, and T07 passes.** The harness rule is per target and not global: a target
+whose exploit path runs through an exception carries `"through_exception": true` in the manifest, and only
+then does the fire step pass first-chance access violations on with `sxd av`. A second chance still stops
+it, and every other target keeps the default, because one that faults and never recovers is dead and
+forgiving that fault would hide it.
+
+**The SEH route is a delivery any style can be wrapped in, not a fourth style.** The handler overwrite
+changes two things and no others: where in the payload the chain starts, and what sits around it. It
+changes nothing about how the call frame is built or which register carries which argument, which is all a
+style is. So `Delivery` is one value on the build input, `deliveryLines` writes the placement block, and
+each of the three styles asks it for the same thing with one parameter: how much of the buffer below the
+chain the style keeps for itself. The skeleton keeps `len(frame)`, because it lays the frame under the
+chain; pushad and staged keep nothing. A fourth style would have duplicated all three job lists to change
+an offset.
+
+**The premise that the handler is a `pop pop ret` is wrong under DEP, and the tool says so on the screen.**
+A `pop pop ret` pops the return address and the exception-record pointer and returns through the dword at
+ESP+8, which is `EstablisherFrame`: the address of the SEH record itself, on the stack. That is the whole
+technique without DEP, where nSEH holds a short jump into the buffer. With DEP the stack does not execute,
+so it faults there. The handler has to be a gadget that adds a large constant to ESP and returns, so that
+its own `ret` reads a dword the overflow wrote and takes the chain the way the vulnerable function's `ret`
+would have. T07's own reference does exactly that: `add esp, imm ; ret` from its dll, chosen for the
+smallest `imm` that lands inside the copied text.
+
+The tool does not special-case the `pop pop ret` away. `handlerCandidates` asks for a fixed stack move and
+a plain return and nothing but the stack touched, and `pop eax ; pop ecx ; ret` satisfies that with a
+landing of 8 bytes: it is the smallest member of the same family. What rules it out is the landing filter,
+which keeps only the handlers whose `ret` reads a dword the overflow wrote, above the ESP the target
+faulted with and below the record. Eight bytes above the handler's ESP is inside the dispatcher's own
+frames. `[6/7]` prints that as a sentence with the `!vprot` of the record behind it, so the reader sees the
+reason rather than a missing option.
+
+What the run measures, in this order. That the crash is an SEH delivery at all: EIP is still inside a
+module, so no saved EIP took the overwrite, and the first record's handler is in no module, so the overflow
+wrote it. Then the ESP the dispatcher calls the handler with, which no static search can give: a candidate
+handler is written over the record's handler field with a breakpoint on it, the exception is let through
+once, ESP is read where it hits, and the handler, the SEH head and every register are put back, so the
+process is at the crash again and a second run measures the same thing. The crash's own handler cannot be
+used for this, because the dispatcher refuses an address in no image before it calls it. Then how far past
+the handler field the crash wrote, so the payload overwrites as far and faults the same way. On T07 the
+record sits 0x1410 above that ESP and `add esp, 0xD10 ; ret` lands the chain at `OFFSET - 0x700`. The
+reference's own constant agrees: its `HANDLER_ESP_TO_TEXT` is 0xC00 and the text starts at `OFFSET` 2064
+below the record, and 0xC00 + 2064 is 0x1410.
+
 **T14 is a lab that was never written.** Its folder holds only `lab.json`, which names two source files and
 four guest files. None of them exists anywhere in the tree outside the holdout and the guides. Nothing
 about the tool can be learned from it until it is written, built and given a reference.
 
 ## Known gaps, newest first
+
+- ~~**A DEP chain delivered through an overwritten SEH handler is a shape `dep_plan` does not model.**~~
+  Closed on 2026-11-23, as a delivery rather than a style: see "Target or tool: T07 and T14" above for
+  what was chosen and why, and what the run measures. T07 lands the marker.
+
+  Two things fell out of it that are not obvious. **A crash that looks like an SEH delivery usually is
+  not one.** The test is EIP still inside a module, so no saved EIP took the overwrite, and the first
+  record's handler in no module, so the overflow wrote it; every overflow long enough to fault inside the
+  program while reaching a record up the stack satisfies both, and most of the corpus does. T01 regressed
+  to an unfillable hole on exactly that. What separates the two is not the crash but whether the delivery
+  can be completed: a handler whose `ret` lands above the ESP the target faulted with and below the
+  record reads a dword the overflow wrote. Where none does, the saved EIP stands and `[6/7]` names the
+  window a gadget would have to add to ESP. And **the `pop pop ret` needs no special case.** It is the
+  smallest member of the same family, a fixed stack move of 8 with a plain return, and the landing filter
+  is what rules it out, because 8 bytes above the handler's ESP is inside the dispatcher's own frames.
+
+  What this costs, and it is a real cost. The ESP the dispatcher calls a handler with cannot be read
+  statically, so it is measured by letting the exception through once with a chosen handler and a
+  breakpoint on it, then putting the handler, the SEH head and every register back. That happens on every
+  crash that looks like an SEH delivery, which was four of the thirteen measured on 2026-11-23, and no
+  cheap pre-filter rules the useless three out: the window a usable pivot has to fall in is itself a
+  function of the ESP being measured.
+  `measureLanding` runs before it, so the gap for the saved-EIP delivery is read off the untouched stack,
+  and nothing after it reads the stack below the faulting ESP. On the corpus it disturbed nothing
+  measurable, but it runs the program, and that is worth knowing before a target where it matters.
+
+- ~~**A job was searched for only as its own instruction followed immediately by a `ret`.**~~ Closed on
+  2026-11-23, and it had been reporting the scan's reach as a fact about the module. `encodingsFor` built
+  `[body, ret]` and `[body, ret N]` and nothing longer, so a module holding the job and one more
+  instruction read as holding none, and the run said "absent: no hit at all" and "this is the module, not
+  the scan". Up to four bytes of anything may now stand between the two, which is one or two more
+  instructions, and `findEncodings` drops any span that does not decode. A hit the ranking never judged
+  is printed with its disassembly, so the second instruction is on the screenshot, and the summary line
+  no longer claims the module is empty over a hit it has just listed. The wider search exposed two
+  counting bugs: one address is matched by several encodings once a tail is allowed, so clean hits are
+  deduplicated by address and dirty hits are collected as addresses rather than summed per encoding.
+
+- **T08 refuses, and the two gadgets that would complete it are both rejected for reasons the message
+  does not give.** Measured on 2026-11-23 against its own reference, which exploits it on the clone.
+
+  The refusal is right that no chain the tool can express exists, and wrong about why. Every memory read
+  in that module either writes the slot back or moves ESP:
+
+  | Address | Gadget | Why the chain cannot take it |
+  |---|---|---|
+  | `0x631023EE` | `xchg dword [ecx], eax ; pop ebp ; ret` | writes the slot as it reads it, and the slot's page is `PAGE_READONLY` |
+  | `0x63102553`-ish | `mov ecx, [eax+4] ; or dword [eax], 2 ; mov [eax+4], ecx ; ret` | writes through the same address twice, same fault |
+  | `0x63101ED5` | `mov eax, dword [eax] ; mov esp, ebp ; ret 0x12` | reads the slot and leaves it alone, and sets ESP from EBP |
+  | `0x63101E84` | `mov eax, [ebp-8] ; mov esp, ebp ; pop ebp ; ret` | the same |
+
+  The reference reads the `WriteProcessMemory` slot with `0x63101ED5`, as the chain's **last** gadget: it
+  loads the API address into EAX and pivots ESP onto the frame in one step, and the frame's first dword is
+  `push eax ; adc byte [ebx+0x5d], ah ; ret`, which enters the call through the register the read just
+  filled. Nothing in the tool can express that. Its staged pivot is `pop ebp, STAGING` then
+  `mov esp, ebp`, and the API address is a value written into a frame field, never carried in a register
+  into the call. That is the one missing shape, and it is three things, not one: a pivot that reads while
+  it pivots, a frame whose entry slot pushes a register, and a frame base shifted to keep the fields
+  aligned under the pivot's `ret 0x12` (the reference picks `pad % 4 == 2` for exactly that).
+
+  **The premise that nothing in that module takes anything out of EBP is wrong.** `lea eax, [ebp - 4] ;
+  mov dword ptr fs:[0], eax ; ret` sits at `0x63101EE6` at a clean address and the reference uses it.
+  `effectOf` already models `lea <dst>, [<src> + disp]` as a transition; what it rejects is the second
+  instruction, a store through a segment-prefixed absolute address, which `memOperand` cannot pin and the
+  model therefore calls a write somewhere nobody chose. `fs:[0]` is the thread's SEH head, which is a
+  perfectly chooseable address, and writing `ebp - 4` there costs the chain nothing on its success path.
+  Allowing it was left undone deliberately: it moves no target, because the read above is the binding
+  constraint, and `effectOf` is the one function the eleven passing targets depend on. The address and the
+  reason are written down here so the next agent does not have to re-derive them.
+
+  **ESP is genuinely needed, not demanded out of habit.** The staged style's field addresses are indeed
+  constants, but `WriteProcessMemory`'s `lpBuffer` has to point at the source bytes, and the only copy of
+  the shellcode is the one the overflow put on the stack. The reference computes exactly that address from
+  a captured ESP. `VirtualProtect` needs one too, for the page it makes executable and for the return into
+  it. No route for this target avoids a stack address.
 
 - ~~**Both chain styles build the frame where only a run can know the address.**~~ The skeleton lays it in
   the stack buffer and PUSHAD keeps it in registers until one gadget writes it, which is why the skeleton
