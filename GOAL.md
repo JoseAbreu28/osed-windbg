@@ -98,6 +98,21 @@ reference exploit instead, which grades the target rather than the tool.
 The manifest's `holdout` list names the targets kept back for the readiness call. The runner refuses
 them by that list, and refuses a manifest without one, so their names never enter this public repo.
 
+`tools/harness/replay.ts` is the same run without a VM, for the questions a module's bytes can answer on
+their own: which modules can give gadgets, the corpus, the IAT slot, the caves, the job picks and every
+register route. It maps a PE the way the loader would, headers and then each section at its VirtualAddress,
+answers `!vprot` from the section characteristics so `code_caves` behaves as it does live, and runs the real
+command through the same host shim the fixture tests use. It takes the module paths as arguments, so no lab
+name reaches this repo:
+
+    node node_modules/esbuild/bin/esbuild tools/harness/replay.ts --bundle --platform=node --format=cjs --outfile=replay.cjs
+    node replay.cjs <module.pe> [more.pe ...] --bad "<bad chars>" [--cmd palette|code_caves|dep_candidates]
+
+Verified against a captured clone transcript: same API, same module, same slot, same job picks, same holes.
+What it cannot reproduce is a route that dereferences an IAT slot to measure a distance, because an on-disk
+image's slots hold their unbound values. A direct import is faithful, since only the slot address is used.
+It says whether a chain was built, never whether one runs: only the clone can say that.
+
 The screenshot rule is `src/core/screenshot_rule.ts`. `tests/screenshot_rule.test.ts` pins one check
 per clause and a ratchet over the fixture output; the harness runs the same module on every real
 capture. The budget is 40 rows and 130 columns per section. The guides draw the command pane in 15 px
