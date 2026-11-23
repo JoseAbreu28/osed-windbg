@@ -49,7 +49,7 @@ import { badcharAddressFilter } from "./logic/pointer_filter_logic";
 import { COPY_SEPARATOR, CORPUS_BLOCK, HELPER_BLOCK, buildExploit, measureLanding, popsAfterPivot, slotBlock, type Block, type Delta } from "./commands/dep_build";
 import { GROUPS as PALETTE_GROUPS, SHAPES as PALETTE_SHAPES, extrasOf as paletteExtras, paletteLines, pickShape, shapeEncodings } from "./commands/palette";
 import { constantsFor, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planWrites, settledLines, SHOWN_ABOVE, type DepPlanStyle, type Hit, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
-import { copyBytes, FRAMES, stackSlot, stagedPops, stagingBase, stagingRoom, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
+import { clearOfCopy, copyBytes, FRAMES, stackSlot, stagedPops, stagingBase, stagingRoom, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { handlerCandidates, landingPivots, measureTail, type Delivery } from "./commands/dep_delivery";
 import { measureHandlerEsp, readByte, sehAtCrash, type SehCrash } from "./commands/dep_delivery_live";
@@ -3248,11 +3248,16 @@ function bindApi(): OsedApi {
     // largest was a 0x1000 byte padding run whose shifted address took the chain into the module's first
     // instructions. Among caves the chain can pop as they are, the largest, because how many bytes the
     // copy may move is the size of the cave it lands in.
+    // What WriteProcessMemory copies over, once the cave is known. Every other address the frame needs is
+    // then taken clear of it; `clearOfCopy` says why that matters.
+    let copied: { at: number; size: number } | undefined;
+    const clearOf = (at: number, size: number): boolean => clearOfCopy(at, size, copied);
     const pickCave = (minSize: number, capability: string): { address: number; size: number } | undefined => {
       const shifted = (cave: { addrSafe: boolean | null }): number => (cave.addrSafe !== false ? 0 : 1);
       for (const module of modules) {
         const { caves } = findCodeCaves(module, minSize, 25, badText, capability);
         const found = caves.filter((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null)
+          .filter((candidate) => clearOf(Number(candidate.addrSafe === false && candidate.safeVa !== null ? candidate.safeVa : candidate.address), minSize))
           .sort((left, right) => shifted(left) - shifted(right) || right.size - left.size)[0];
         if (found) return { address: Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address), size: found.size };
       }
@@ -3266,7 +3271,7 @@ function bindApi(): OsedApi {
         for (const cave of caves) {
           const run = { at: Number(cave.address), size: cave.size };
           const base = stagingBase(run, span, pops, bad);
-          if (base !== undefined) found.push({ base, room: stagingRoom(run, base) });
+          if (base !== undefined && clearOf(base, span)) found.push({ base, room: stagingRoom(run, base) });
         }
       }
       stagingBelow = found.sort((left, right) => right.room - left.room)[0]?.room;
@@ -3277,6 +3282,7 @@ function bindApi(): OsedApi {
     // worth doing. Every other API wants four bytes for an out-parameter and nothing more.
     const cave = depApi === "WriteProcessMemory" && !moduleFailed
       ? out.quietly(() => pickCave(WPM_COPY, "EXEC")) ?? out.quietly(() => pickCave(WPM_MIN_COPY, "EXEC")) : undefined;
+    if (cave) copied = { at: cave.address, size: copyBytes({ caveBytes: cave.size }) };
     return {
       writable: depApi === "VirtualAlloc" || moduleFailed ? undefined : out.quietly(() => pickCave(4, "STAGING"))?.address,
       cave: cave?.address,

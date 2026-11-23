@@ -203,7 +203,11 @@ export function classifyCapabilities(
 
   const caps: CaveCapability[] = [];
   if (r && w && x) caps.push("RWX");
-  if (x && !(r && w && x)) caps.push("EXEC");
+  // EXEC means the bytes here can be executed, and an RWX run can. Denying it EXEC while still granting
+  // it STAGING hid the best WriteProcessMemory destination there is: a module whose only executable caves
+  // are RWX read as having none, and a copy into a writable-and-executable run needs no protection change
+  // at all. RWX stays as the more specific label, so the table still leads with it.
+  if (x) caps.push("EXEC");
   if (w) {
     caps.push("STAGING");
     if (size >= ROP_WORKSPACE_MIN_BYTES) caps.push("ROP_WORKSPACE");

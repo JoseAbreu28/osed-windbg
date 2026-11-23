@@ -882,12 +882,31 @@ describe("findCodeCaves", () => {
 });
 
 describe("classifyCapabilities", () => {
-  test("RWX region", () => {
+  test("RWX region is executable, so it answers the EXEC search too", () => {
     const caps = classifyCapabilities(true, true, true, 200);
     expect(caps).toContain("RWX");
     expect(caps).toContain("STAGING");
     expect(caps).toContain("ROP_WORKSPACE");
-    expect(caps).not.toContain("EXEC");
+    expect(caps).toContain("EXEC");
+  });
+
+  test("an EXEC search returns an RWX cave, which is where a WriteProcessMemory copy can land", () => {
+    const { image, base } = makeImageWithSections(
+      [
+        { name: ".text", rva: 0x1000, virtualSize: 0x1000, characteristics: IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ },
+        { name: ".rwtext", rva: 0x2000, virtualSize: 0x1000, characteristics: IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE },
+      ],
+      0x4000,
+    );
+    for (let i = 0x1000; i < 0x2000; i++) image[i] = 0xc3;
+    for (let i = 0x2000; i < 0x2400; i++) image[i] = 0x00;
+    installPeBackedHost(image, base, makeVprotMap(base, [
+      { offset: 0x1000, size: 0x1000, protect: PAGE_EXECUTE_READ },
+      { offset: 0x2000, size: 0x1000, protect: PAGE_EXECUTE_READWRITE },
+    ]));
+
+    const { caves } = findCodeCaves(undefined, 0x210, 25, "", "EXEC");
+    expect(caves.map((cave) => cave.section)).toContain(".rwtext");
   });
 
   test("RX region", () => {

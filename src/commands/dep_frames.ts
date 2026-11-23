@@ -98,6 +98,17 @@ export type FrameFacts = { iatSlot?: number; slotWritable?: boolean; delta?: num
 /** How many bytes the copy moves, given what the module's cave holds. */
 export const copyBytes = (facts: FrameFacts): number => Math.min(WPM_COPY, facts.caveBytes ?? WPM_COPY);
 
+/** Whether a run of `size` bytes at `at` stays out of what WriteProcessMemory copies over.
+ *
+ * An RWX run answers both the executable-cave search and the writable-dword search, so the copy's
+ * destination and the frame's other addresses can be the same bytes. `lpNumberOfBytesWritten` is written
+ * by the call itself, so a dword taken inside the copy lands in the shellcode that same call is still
+ * moving, and a staged frame taken inside it is overwritten while the call reads it. Neither shows up as
+ * an error: the chain is complete and the shellcode is quietly wrong. */
+export function clearOfCopy(at: number, size: number, copy?: { at: number; size: number }): boolean {
+  return copy === undefined || at + size <= copy.at || at >= copy.at + copy.size;
+}
+
 /** Which field of a frame holds the sled's address on the thread's own stack. Every API has one: the two
  * that make the stack executable point their own first argument at it, and WriteProcessMemory copies from
  * it. A staged chain reads ESP back out of that field, so the field matters beyond its own call. */
