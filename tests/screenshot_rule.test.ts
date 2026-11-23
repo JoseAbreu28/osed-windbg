@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { SCREEN, SEPARATOR, screenshotViolations } from "../src/core/screenshot_rule";
-import { GADGETS, load, syncBreeze, text } from "./helpers/fixture_process";
+import { GADGETS, load, sehRun, syncBreeze, text } from "./helpers/fixture_process";
 
 const ECHO = '=== dx @$osed().dep_plan("VirtualAlloc", "libspp.dll", "00 0A", "pushad", 1) ===';
 const rules = (transcript: string): string[] => screenshotViolations(transcript).map((v) => `${v.section} ${v.rule}`);
@@ -69,6 +69,10 @@ describe("dep_plan's output against the screenshot rule", () => {
   test("skeleton, named in the long call", () => {
     load(shape({ code: GADGETS }), { policy: 2, registry: FORCED }).dep_plan("VirtualAlloc", "libspp.dll", BAD, "skeleton", 1);
     expect(rules(text())).toEqual([]);
+  });
+
+  test("pushad, delivered through an SEH handler", () => {
+    expect(rules(sehRun())).toEqual([]);
   });
 
   // A run that never reached a corpus chose no style, so it keeps "auto" rather than writing out the

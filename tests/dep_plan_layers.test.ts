@@ -446,7 +446,7 @@ describe("dep_plan builds what it sends", () => {
 
   test.skipIf(!HAS_PYTHON).each([
     ["neg edx", [...RECAPTURE, NEG_EDX], "c.rop(NEG_EDX)", "pop the distance negated, negate it and add it"],
-    ["no negate of edx", RECAPTURE, "c.patches.append(((part, len(c) + 1 + c.skip // 4), OFFSET + 4 * here, False))", "add the distance as two dwords"],
+    ["no negate of edx", RECAPTURE, "c.patches.append(((part, len(c) + 1 + c.skip // 4), CHAIN_AT + 4 * here, False))", "add the distance as two dwords"],
   ])("with %s, the shellcode address comes from a second capture of ESP and the payload is clean", (_, code, line, how) => {
     const output = plan("skeleton", code as Array<[number, number[]]>);
     expect(output).toContain("1 hole(s) to fill");

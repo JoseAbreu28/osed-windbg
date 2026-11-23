@@ -51,6 +51,8 @@ import { GROUPS as PALETTE_GROUPS, SHAPES as PALETTE_SHAPES, extrasOf as palette
 import { constantsFor, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planWrites, settledLines, SHOWN_ABOVE, type DepPlanStyle, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
 import { copyBytes, FRAMES, stagedPops, stagingBase, stagingRoom, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
 import { createDepFunctionCommand } from "./commands/dep_function";
+import { handlerCandidates, landingPivots, measureTail, type Delivery } from "./commands/dep_delivery";
+import { measureHandlerEsp, readByte, sehAtCrash, type SehCrash } from "./commands/dep_delivery_live";
 import { SCREEN } from "./core/screenshot_rule";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./commands/code_caves";
@@ -3607,6 +3609,47 @@ function bindApi(): OsedApi {
     return toDxResult("Gadget Palette", rows);
   };
 
+  // A module the dispatcher calls a handler in: no SafeSEH table, and not marked NO_SEH, which makes it
+  // refuse every handler in the image.
+  const takesHandlers = (address: number): boolean => {
+    const module = findModuleByAddress(BigInt(address));
+    if (!module || module.safeseh !== "disabled" || module.aslr !== "disabled") return false;
+    const base = Number(module.base) >>> 0;
+    const lfanew = tryReadMemory(BigInt(base + 0x3c), 4);
+    const pe = lfanew && lfanew.length === 4 ? (lfanew[0] | (lfanew[1] << 8) | (lfanew[2] << 16) | (lfanew[3] << 24)) >>> 0 : undefined;
+    const flags = pe === undefined ? undefined : tryReadMemory(BigInt(base + pe + 0x18 + 0x46), 2);
+    return flags !== undefined && flags.length === 2 && (flags[1] & 0x04) === 0;
+  };
+  const sehDelivery = (crash: SehCrash, corpus: CapabilityIndex | undefined): Delivery => {
+    const candidates = handlerCandidates(corpus?.gadgets ?? [], takesHandlers);
+    const { tail, how: tailHow } = measureTail(crash.record, readByte);
+    const base = { kind: "seh" as const, record: crash.record, handler: crash.handler, tail, tailHow };
+    if (candidates.length === 0) return { ...base, how: "not measured: no gadget in a module without SafeSEH can stand in as the handler", pivots: [] };
+    const measured = measureHandlerEsp(crash, candidates[0].address);
+    if (measured.esp === undefined) return { ...base, how: measured.how, pivots: [] };
+    const sehEsp = (crash.record - measured.esp) >>> 0;
+    return { ...base, sehEsp, how: measured.how, reproduce: measured.reproduce, handlerEsp: measured.esp, pivots: landingPivots(candidates, sehEsp, (crash.esp - measured.esp) >>> 0) };
+  };
+  // [6/7]'s evidence for an SEH delivery: why it is one, why pop pop ret is not the handler, the measured
+  // ESP, and the handlers that land in the buffer.
+  const printSehDelivery = (delivery: Extract<Delivery, { kind: "seh" }>, crash: SehCrash): void => {
+    out.info(`Delivered through the SEH record, not a saved EIP: EIP ${dwordHex(crash.eip)} is in ${crash.eipModule}, and the first record, at ${dwordHex(delivery.record)}, holds handler ${dwordHex(delivery.handler)}, which is in no module (!exchain).`);
+    const page = memoryRegion(BigInt(delivery.record));
+    out.info(`Not pop pop ret: it returns into the record itself, ${page.executable === false ? "on a page that does not execute" : "on the stack"} (!vprot ${dwordHex(delivery.record)}). The handler moves ESP into the buffer instead.`);
+    const { handlerEsp } = delivery;
+    if (delivery.sehEsp === undefined || handlerEsp === undefined) out.warn(`ESP when the handler runs: ${delivery.how}. SEH_ESP is a hole.`);
+    else {
+      out.info(`ESP when the handler runs: ${dwordHex(handlerEsp)}, the record 0x${delivery.sehEsp.toString(16).toUpperCase()} above it. Measured: ${delivery.how}.`);
+      out.info(`Reproduce: ${delivery.reproduce}`);
+      if (delivery.pivots.length === 0) out.warn(`No handler lands between the faulting ESP ${dwordHex(crash.esp)} and the record: dx @$osed().rop.pivots()`);
+      for (const pivot of delivery.pivots.slice(0, 3)) {
+        out.info(`  ${dwordHex(pivot.address)}  ${pivot.sequence}: its ret lands 0x${(delivery.sehEsp - pivot.land).toString(16).toUpperCase()} below the record, at OFFSET - 0x${(delivery.sehEsp - pivot.land).toString(16).toUpperCase()}`);
+      }
+      if (delivery.pivots.length > 3) out.info(`  ${delivery.pivots.length - 3} more in SEH_PIVOTS below`);
+    }
+    out[delivery.tail === undefined ? "warn" : "info"](`Past the handler: ${delivery.tailHow}.`);
+  };
+
   const executeDepPlan = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("dep_plan");
@@ -3707,6 +3750,8 @@ function bindApi(): OsedApi {
     const solved = moduleFailed || !buildsChain ? undefined
       : solveStyles(scanned, modules, badchars as number[], exclude, depApi, frameFacts, stagingFor);
     const staging = solved?.staging;
+    // Read before anything can move the thread: whether the overflow reached a saved EIP or an SEH record.
+    const sehCrash = solved ? sehAtCrash() : undefined;
     const style: DepPlanStyle = styleText === "auto" || styleText === "none" ? (solved ? chooseStyle(solved) : "skeleton") : styleText as DepPlanStyle;
 
     // A run with no corpus chose no style, so its echo keeps "auto" instead of writing out the fallback
@@ -3879,10 +3924,12 @@ function bindApi(): OsedApi {
       const bytes = tryReadMemory(BigInt(address), 4);
       return bytes && bytes.length === 4 ? (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24)) >>> 0 : undefined;
     });
+    // An SEH crash is read now too, and measured last of all: measuring lets the exception through once.
+    const delivery: Delivery = sehCrash && solved ? sehDelivery(sehCrash, corpus) : { kind: "ret" };
     // The loaders search the corpus without the excluded gadgets, so one cannot come back under another name.
     const build = buildExploit({
       api: depApi, style, module: modulesLabel, badchars: badchars as number[], index: corpus, plans,
-      iatSlot, slotWritable: frameFacts.slotWritable, delta: route?.delta, writable, cave, caveBytes, staging, jmpEsp, stage, exclude, landing,
+      iatSlot, slotWritable: frameFacts.slotWritable, delta: route?.delta, writable, cave, caveBytes, staging, jmpEsp, stage, exclude, landing, delivery,
     });
     if (solved) printBlock(build.blocks[4]);
     summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
@@ -3948,9 +3995,12 @@ function bindApi(): OsedApi {
         // frame sits in the program's own memory between the write and the call.
         out.warn("A run of zero, int3 or nop bytes in a writable section. Nothing here proves the program never writes there.");
       } else if (style === "staged") for (const line of solved?.unavailable ?? []) out.warn(line);
-      out[landing.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing.how}.`);
-      out[landing.measured ? "info" : "warn"](!landing.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP."
-        : landing.gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + landing.gap}: RET_GAP puts ${landing.gap} junk bytes after the first gadget.`);
+      if (delivery.kind === "seh") printSehDelivery(delivery, sehCrash!);
+      else {
+        out[landing.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing.how}.`);
+        out[landing.measured ? "info" : "warn"](!landing.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP."
+          : landing.gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + landing.gap}: RET_GAP puts ${landing.gap} junk bytes after the first gadget.`);
+      }
       printBlock(build.blocks[6]);
     }
     summary.push({ Section: `[6/${n}] frame`, Result: blocker ? "skipped" : style === "pushad" ? "register map" : style === "staged" ? `staged at ${staging === undefined ? "nowhere" : dwordHex(staging)}` : "dep_function frame" });
@@ -3987,7 +4037,7 @@ function bindApi(): OsedApi {
       out.warn(`No complete ${depApi} chain in the ${style} style: ${modulesLabel} has no gadget for ${missing.join(", ")}, so [7/7] holds a hole for each. The ${other} style has a gadget for every job: ${out.dxCall("dep_plan", [depApi, modulesArg, badText, other, stage, ...(excludeText || anyway ? [excludeText] : []), ...(anyway ? [true] : [])])}`);
     } else {
       out.section("Verdict");
-      out.info(`A ${depApi} chain from ${modulesLabel} in the ${style} style${route?.delta ? `, the API reached from ${route.delta.dll}!${route.delta.anchor} by a distance measured on this machine` : ""}${build.holes.length > 0 ? `, with ${build.holes.length} hole(s) to fill` : ""}.`);
+      out.info(`A ${depApi} chain from ${modulesLabel} in the ${style} style${delivery.kind === "seh" ? ", delivered through the SEH handler" : ""}${route?.delta ? `, the API reached from ${route.delta.dll}!${route.delta.anchor} by a distance measured on this machine` : ""}${build.holes.length > 0 ? `, with ${build.holes.length} hole(s) to fill` : ""}.`);
       out.info(`The same run with every choice written out: ${out.dxCall("dep_plan", callArgs(style, anyway))}`);
     }
 
