@@ -170,7 +170,7 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
     api.dep_plan("VirtualAlloc", "libspp", BAD, "skeleton");
     const output = prose();
     const picks = section(output, "=== [4/7]");
-    expect(picks).toContain("  capture ESP: none in libspp.dll\n      absent: no hit at all\n      searched: all 42 plain encodings of this job, in every byte of libspp.dll");
+    expect(picks).toContain("  capture ESP: none in libspp.dll\n      absent: no hit at all\n      searched: all 210 encodings of this job, up to 4 bytes before the ret, in every byte of libspp.dll");
     expect(picks).toContain("capture ESP blocks the skeleton style, and the pushad style needs no such gadget: pushad pushes ESP itself.");
     expect(picks).toContain(`In libspp.dll the pushad style has a gadget for every job: dx @$osed().dep_candidates("libspp", "${BAD}", "pushad", "VirtualAlloc")`);
     expect(output).toContain(`No complete VirtualAlloc chain in the skeleton style: libspp.dll has no gadget for capture ESP, so [7/7] holds a hole for each. The pushad style has a gadget for every job: dx @$osed().dep_plan("VirtualAlloc", "libspp", "${BAD}", "pushad", 1)`);
@@ -270,7 +270,21 @@ describe("dep_plan never reports an absence the scan did not settle", () => {
   test("a gadget only at an address holding a bad byte is absent, and the count says why", () => {
     const api = load(module([...without(0x1111), [0x100a, [0x54, 0x5e, 0xc3]]]));
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", "skeleton");
-    expect(text()).toContain("      absent: 1 hit(s), every one at an address holding a bad byte\n      searched: all 42 plain encodings of this job, in every byte of libbkup.dll");
+    expect(text()).toContain("      absent: 1 hit(s), every one at an address holding a bad byte\n      searched: all 210 encodings of this job, up to 4 bytes before the ret, in every byte of libbkup.dll");
+  });
+
+  // The search used to stop at the job's own instruction followed by a ret, so a module holding the job
+  // and one more instruction read as holding nothing, and the run said so: "absent, no hit at all ...
+  // this is the module, not the scan". T08's module is that module. The hit now reaches the output with
+  // its disassembly, so the second instruction is on the screenshot and the reader judges it.
+  test("a gadget that does the job and one thing more is named, not reported absent", () => {
+    const api = load(module([...without(0x1111), [0x12e1, [0x54, 0x5e, 0x8b, 0xe5, 0xc3]]]));
+    api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", "skeleton");
+    const job = section(text(), "=== [4/7]");
+    expect(job).toContain("the ranking never saw, because the job's own");
+    expect(job).toContain("0x222212E1  push esp ; pop esi ; mov esp, ebp ; ret");
+    expect(job).not.toContain("absent: no hit at all");
+    expect(prose()).toContain("and where a hit is listed above, the module has one the chain cannot use, not none.");
   });
 
   test("a gadget the scan never reached is found by searching the module, and used", () => {
@@ -283,7 +297,7 @@ describe("dep_plan never reports an absence the scan did not settle", () => {
     api.dep_plan("VirtualAlloc", "libbkup", bad, "pushad");
     const job = section(text(), "=== [4/7]");
     expect(job).toMatch(/pop edx[^\n]*:\n {2}> 0x22222051 {2}pop edx ; ret/);
-    expect(job).toContain("      the scan had missed it, and this search found it\n      searched: all 2 plain encodings of this job, in every byte of libbkup.dll");
+    expect(job).toContain("      the scan had missed it, and this search found it\n      searched: all 10 encodings of this job, up to 4 bytes before the ret, in every byte of libbkup.dll");
   });
 
   test("a complete scan he already ran is used, not thrown away and redone", () => {

@@ -766,28 +766,58 @@ const BODIES: Partial<Record<CapabilityKind, (register?: string) => number[][]>>
   DISPATCH_PUSHAD: () => [[0x60]],
 };
 
-/** Every plain encoding of the job, each ending in `ret` or `ret N` (-1 is any byte). */
+/** How many bytes of other instructions may stand between the job's own instruction and the ret.
+ *
+ * It used to be none, and that turned the search's reach into a claim about the module. T08's module has
+ * `mov eax, dword ptr [eax] ; mov esp, ebp ; ret 0x12` at 0x63101ED5, which reads a pointer and leaves
+ * the dword alone, and the run said "read a pointer: absent, no hit at all ... this is the module, not
+ * the scan". It was the scan. Four bytes is one or two more instructions, which is what a compiler
+ * leaves before a ret, and `findEncodings` drops any span that does not decode. Whether the extra
+ * instruction ruins the gadget is the planner's judgement, printed as its reason; hiding the candidate
+ * from it is how an absence gets asserted that nobody measured. */
+const JOB_TAIL = 4;
+
+/** Every encoding of the job, each ending in `ret` or `ret N` (-1 is any byte), with up to `JOB_TAIL`
+ * bytes of anything in between. */
 export function encodingsFor(job: Job): number[][] {
+  const tails = Array.from({ length: JOB_TAIL + 1 }, (_, n) => Array.from({ length: n }, () => -1));
   return job.capabilities
     .flatMap((kind) => BODIES[kind]?.(job.register) ?? [])
-    .flatMap((body) => [[...body, 0xc3], [...body, 0xc2, -1, -1]]);
+    .flatMap((body) => tails.flatMap((tail) => [[...body, ...tail, 0xc3], [...body, ...tail, 0xc2, -1, -1]]));
 }
 
+/** How many unjudged hits a job prints. Two is a screenshot; the count carries the rest. */
+const SHOWN_HITS = 2;
+
 /** What searching every byte of the modules for a job's encodings showed. */
-export type Settled = { modules: string; encodings: number; clean: number[]; dirty: number };
+export type Hit = { address: number; sequence: string };
+export type Settled = { modules: string; encodings: number; clean: Hit[]; dirty: number };
 
 // Only a job the scan left without a pick is searched, so this is what replaces "none". Two lines: what
 // the search settled, then what was searched to settle it. As one sentence it named the module twice and
 // ran to 136 columns on a real one, and they are two facts anyway.
 export function settledLines(plan: JobPlan, settled: Settled, exclude: number[]): string[] {
-  const searched = `      searched: all ${settled.encodings} plain encodings of this job, in every byte of ${settled.modules}`;
+  const searched = `      searched: all ${settled.encodings} encodings of this job, up to ${JOB_TAIL} bytes before the ret, in every byte of ${settled.modules}`;
   if (plan.pick) {
-    return settled.clean.indexOf(gadgetAddress(plan.pick.gadget)) >= 0
+    return settled.clean.some((hit) => hit.address === gadgetAddress(plan.pick!.gadget))
       ? ["      the scan had missed it, and this search found it", searched]
       : [];
   }
-  const usable = settled.clean.filter((address) => exclude.indexOf(address) < 0);
+  const usable = settled.clean.filter((hit) => exclude.indexOf(hit.address) < 0);
   if (settled.clean.length > 0 && usable.length === 0) return ["      absent but for what you excluded: every hit is one of them", searched];
+  // A hit the ranking never judged does the job's own instruction and something else with it, and that
+  // something else is why the chain cannot take it. Printing the sequence is the whole evidence: the
+  // reader sees the second instruction. Saying "none of them fits" without it asserts a judgement the
+  // screenshot cannot check, which is the one thing GOAL.md forbids.
+  const ranked = plan.verdicts.map((verdict) => gadgetAddress(verdict.gadget));
+  const unjudged = usable.filter((hit) => ranked.indexOf(hit.address) < 0);
+  if (unjudged.length > 0) return [
+    `      ${usable.length} hit(s) at a clean address and none fits; ${unjudged.length} the ranking never saw, because the job's own`,
+    "      instruction is not the whole gadget there:",
+    ...unjudged.slice(0, SHOWN_HITS).map((hit) => `        ${hex32(hit.address)}  ${hit.sequence}`),
+    ...(unjudged.length > SHOWN_HITS ? [`        ${unjudged.length - SHOWN_HITS} more`] : []),
+    searched,
+  ];
   if (settled.clean.length > 0) return [`      ${settled.clean.length} hit(s) at a clean address, and none of them fits either`, searched];
   return [`      absent: ${settled.dirty > 0 ? `${settled.dirty} hit(s), every one at an address holding a bad byte` : "no hit at all"}`, searched];
 }

@@ -440,8 +440,10 @@ export function scanBackward(options: BackwardScanOptions): {
 export type EncodingSearch = {
   /** Up to `keep` addresses per encoding that pass `clean`, decoded as scanBackward decodes them. */
   hits: Array<{ encoding: number; address: bigint; mnemonic: string }>;
-  /** Per encoding, every match whose address failed `clean`. */
-  dirty: number[];
+  /** Per encoding, the distinct addresses whose bytes matched but failed `clean`. Addresses rather than
+   * a count, because several encodings of one job describe the same gadget and a count would report it
+   * once per encoding. */
+  dirty: Array<Set<number>>;
   /** Executable bytes read; zero means nothing was searched. */
   bytes: number;
 };
@@ -455,7 +457,7 @@ export function findEncodings(module: string, encodings: number[][], clean: (add
   const byFirst: Record<number, number[]> = {};
   encodings.forEach((encoding, index) => { (byFirst[encoding[0]] = byFirst[encoding[0]] ?? []).push(index); });
   const longest = Math.max(1, ...encodings.map((encoding) => encoding.length));
-  const result: EncodingSearch = { hits: [], dirty: encodings.map(() => 0), bytes: 0 };
+  const result: EncodingSearch = { hits: [], dirty: encodings.map(() => new Set<number>()), bytes: 0 };
   const kept = encodings.map(() => 0);
   for (const section of forEachSection({ module, executableOnly: true, maxResults: 0, chunkSize: 0x4000 }).sections) {
     for (let offset = 0; offset < section.size; offset += 0x4000) {
@@ -470,7 +472,7 @@ export function findEncodings(module: string, encodings: number[][], clean: (add
           if (i + encoding.length > bytes.length || encoding.some((byte, j) => byte >= 0 && bytes[i + j] !== byte)) continue;
           const address = start + BigInt(i);
           if (!clean(address)) {
-            result.dirty[index] += 1;
+            result.dirty[index].add(Number(address));
             continue;
           }
           if (kept[index] >= keep) continue;

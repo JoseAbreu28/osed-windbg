@@ -3290,20 +3290,20 @@ function bindApi(): OsedApi {
   // is settled here before anything says it is absent. Each group is the encodings of one job or shape;
   // its result is the clean addresses that hold one and how many hits sat at an address holding a bad
   // byte. The corpus comes back with every clean hit the scan had missed.
-  type Search = { corpus: CapabilityIndex | undefined; groups: Array<{ clean: number[]; dirty: number }> };
+  type Search = { corpus: CapabilityIndex | undefined; groups: Array<{ clean: Hit[]; dirty: number }> };
   const searchEncodings = (scanned: CapabilityIndex | undefined, modules: string[], groups: number[][][], badchars: number[]): Search => {
     const encodings: number[][] = [];
     const owners = groups.map((group) => group.map((encoding) => encodings.push(encoding) - 1));
     const clean = badcharAddressFilter(badchars, 4);
     const known = new Set((scanned?.gadgets ?? []).map((gadget) => depPlanAddress(gadget)));
     const hits: Array<{ mnemonic: string; address: bigint; module: string }> = [];
-    const found: Array<{ encoding: number; address: number }> = [];
-    const dirty = encodings.map(() => 0);
+    const found: Array<{ encoding: number; address: number; sequence: string }> = [];
+    const dirty = encodings.map(() => new Set<number>());
     for (const module of modules) {
       const search = findEncodings(module, encodings, (address) => clean.predicate({ address }), 8);
-      search.dirty.forEach((count, i) => { dirty[i] += count; });
+      search.dirty.forEach((addresses, i) => { for (const address of addresses) dirty[i].add(address); });
       for (const hit of search.hits) {
-        found.push({ encoding: hit.encoding, address: Number(hit.address) });
+        found.push({ encoding: hit.encoding, address: Number(hit.address), sequence: hit.mnemonic });
         if (!known.has(Number(hit.address))) hits.push({ mnemonic: hit.mnemonic, address: hit.address, module });
       }
     }
@@ -3313,8 +3313,13 @@ function bindApi(): OsedApi {
     return {
       corpus,
       groups: owners.map((mine) => ({
-        clean: found.filter((hit) => mine.indexOf(hit.encoding) >= 0).map((hit) => hit.address),
-        dirty: mine.reduce((sum, index) => sum + dirty[index], 0),
+        // A body + ret and the same body + one wildcard + ret both match where the wildcard is itself a
+        // ret, so the same address arrives under two encodings. The shortest span is the gadget, so the
+        // first hit at an address wins and the rest are dropped.
+        clean: found.filter((hit) => mine.indexOf(hit.encoding) >= 0)
+          .filter((hit, i, all) => all.findIndex((other) => other.address === hit.address) === i)
+          .map((hit) => ({ address: hit.address, sequence: hit.sequence })),
+        dirty: new Set(mine.flatMap((index) => [...dirty[index]])).size,
       })),
     };
   };
@@ -3485,7 +3490,15 @@ function bindApi(): OsedApi {
     }
     const missing = plans.filter((plan) => !met(plan));
     const where = modules.map(moduleLabel).join(", ");
-    if (missing.length > 0) out.warn(`No gadget in ${where} for: ${titles(missing)}. Each was searched for in every byte of it, so this is the module, not the scan.`);
+    // "the module, not the scan" is only true where the search found nothing. Where it found a gadget
+    // that does the job's own instruction and more, the lines above name it, and claiming the module is
+    // empty over the top of them is the one wrong a named exit cannot afford.
+    if (missing.length > 0) {
+      const anyHit = missing.some((plan) => (solved.settled[plan.job.key]?.clean.length ?? 0) > 0);
+      out.warn(`No gadget in ${where} for: ${titles(missing)}. Each was searched for in every byte of it, ${anyHit
+        ? "and where a hit is listed above, the module has one the chain cannot use, not none."
+        : "so this is the module, not the scan."}`);
+    }
     // The method can be the only thing wrong: name the style that needs none of what is missing here.
     const other = otherStyle(solved, style);
     const blocking = missing.filter((plan) => !neededBy(plan.job, other, api));
