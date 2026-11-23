@@ -62,7 +62,6 @@ describe("dep_plan's output against the screenshot rule, as measured on 2026-11-
 
   test("skeleton, named in the long call", () => {
     load(shape({ code: GADGETS }), { policy: 2, registry: FORCED }).dep_plan("VirtualAlloc", "libspp.dll", BAD, "skeleton", 1);
-    // [6/7] prints dep_function's frame with six names nothing defines, above the one built with p32.
-    expect(rules(text()).sort()).toEqual([...COMMON, "[6/7] python-above-separator"].sort());
+    expect(rules(text()).sort()).toEqual([...COMMON].sort());
   });
 });

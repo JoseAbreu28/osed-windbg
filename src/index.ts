@@ -3733,7 +3733,11 @@ function bindApi(): OsedApi {
     } else {
       const frameArgs = style === "pushad" ? [depApi, style] : [depApi];
       out.echo("dep_function", frameArgs);
-      invoke("dep_function", frameArgs);
+      // The pushad map names the register each argument goes in, and that is this section's evidence.
+      // The skeleton frame is Python instead, and broken Python: six names nothing defines, written with
+      // pack where the pasted file uses p32. The block below the separator is the same frame with every
+      // field named and the values this run measured, so the broken copy is not printed at all.
+      if (style === "pushad") invoke("dep_function", frameArgs);
       out[landing.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing.how}.`);
       out[landing.measured ? "info" : "warn"](!landing.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP."
         : landing.gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + landing.gap}: RET_GAP puts ${landing.gap} junk bytes after the first gadget.`);

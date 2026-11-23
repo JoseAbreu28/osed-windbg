@@ -293,7 +293,11 @@ describe("dep_plan", () => {
     expect(named.get("XCHG_EAX_ESP")).toBe(pick("pivot ESP")?.address);
     expect(table.find((line) => line.startsWith("COST = {"))).toContain("NEG_EAX: (1, 0)");
     expect(output).toContain("# confirm: bp 0x11111111 ; g ; r esp ; s -d esp-400 L100 45454545");
-    expect(output).toContain("=== VirtualAlloc Python Call-Frame Skeleton ===");
+    // [6/7] prints the frame once, under the separator, with every argument named in call order. The
+    // skeleton used to print dep_function's copy above it too, in pack() and with six undefined names.
+    expect(blocksOf(output)[4].map((line) => /#\s*(\w+)/.exec(line)?.[1]).slice(0, 6))
+      .toEqual(["VirtualAlloc", "return", "lpAddress", "dwSize", "flAllocationType", "flProtect"]);
+    expect(output).not.toContain("Python Call-Frame Skeleton");
     expect(api.last_result().findings[0]).toMatchObject({ api: "VirtualAlloc", module: "libbkup", style: "skeleton" });
   });
 
@@ -488,13 +492,15 @@ describe("dep_plan", () => {
   ])("pasting an echoed line of %s %s prints the same output dep_plan printed under it", (name, style) => {
     api.dep_plan(name, "libbkup", "00 0A 0D", style);
     const report = text();
-    // Two commands are offered rather than run: dep_plan reads the caves quietly and takes only the
-    // address, and rop.construct builds in eax whichever register the frame wants, so its recipe would
-    // sit above a loader that contradicts it. Nothing prints under either echo, so neither is compared.
-    const offered = (line: string): boolean => line.includes("code_caves(") || line.includes("rop.construct(");
+    // Three commands are offered rather than run, so nothing prints under their echo and there is
+    // nothing to compare: dep_plan reads the caves quietly and takes only the address, rop.construct
+    // builds in eax whichever register the frame wants, and the skeleton dep_function frame is the same
+    // frame the block below the separator prints correctly. The pushad dep_function map does print.
+    const offered = (line: string): boolean => line.includes("code_caves(")
+      || line.includes("rop.construct(") || line.includes('dep_function("' + name + '")');
     const calls = report.split("\n").filter((line) => line.startsWith("dx @$osed().") && !offered(line));
     expect(calls.some((call) => call.includes(".dep_candidates("))).toBe(true);
-    expect(calls.some((call) => call.includes(".dep_function("))).toBe(true);
+    expect(calls.some((call) => call.includes(".dep_function("))).toBe(style === "pushad");
     const osed = (globalThis as unknown as { osed: unknown }).osed;
     for (const call of calls) {
       logs.length = 0;
