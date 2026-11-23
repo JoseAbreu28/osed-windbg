@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { createBadcharFindCommand } from "../src/commands/badchars";
+import { unwrap } from "../src/core/output";
 
 // Lab09 under cdb: the payload never crashed the target, a break-in stopped it in ntdll on a thread
 // whose stack ends 1216 bytes above ESP.
@@ -39,8 +40,8 @@ describe("badchar_find on a target that did not crash", () => {
     const result = createBadcharFindCommand().execute({ exclude: [0x00], windowBytes: 2048, minRun: 8 });
     expect(result.findings[0]).toEqual({ located: false });
     expect(log).toContain("Test array not found: scanned 1216 bytes from the anchor");
-    expect(log).toContain("eip 0x77AE320C is inside");
-    expect(log).toContain("the target has not crashed yet (break-in or breakpoint)");
+    expect(unwrap(log)).toContain("eip 0x77AE320C is inside");
+    expect(unwrap(log)).toContain("the target has not crashed yet (break-in or breakpoint)");
     expect(reads).toBeLessThan(40);
   });
 });

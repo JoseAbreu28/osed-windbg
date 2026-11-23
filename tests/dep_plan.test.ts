@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { beforeEach, describe, expect, test } from "vitest";
-import { stripDml } from "../src/core/output";
+import { stripDml, unwrap } from "../src/core/output";
 import { initializeScript } from "../src/index";
 import { picksOf } from "./helpers/dep_plan_picks";
 
@@ -133,6 +133,8 @@ function loadApi(options: { imports?: string[]; aslr?: boolean; movable?: string
 }
 
 const text = (): string => stripDml(logs.join(""));
+// The same transcript with the lines output.ts wrapped rejoined, for a check on what it says.
+const prose = (): string => unwrap(text());
 
 const SECTIONS = [1, 2, 3, 4, 5, 6, 7].map((n) => `=== [${n}/7]`);
 const SEPARATOR = "# ------------------ copy into your exploit ------------------";
@@ -543,7 +545,9 @@ describe("dep_plan", () => {
   test("no route to the API at all: one conclusion naming the API layer, and no list of things to try", () => {
     const fresh = loadApi({ imports: [] });
     fresh.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
-    const output = text();
+    // The conclusion is one sentence and output.ts breaks it across lines to fit the screen, so this
+    // reads the rejoined transcript rather than pinning where the break falls.
+    const output = prose();
     const conclusion = "[-] The API layer fails: no module with ASLR disabled imports VirtualAlloc, nor any other export of kernel32 or kernelbase to reach it from by a fixed distance. Its address needs a leak first.";
     expect(output.split(conclusion).length - 1).toBe(2);
     for (const homework of ["in this order", 'sc.iat_find("GetProcAddress")', "last resort", "rop.generate", "Only if you are free"]) {

@@ -1,4 +1,4 @@
-import { stripDml } from "../../src/core/output";
+import { stripDml, unwrap } from "../../src/core/output";
 import { initializeScript } from "../../src/index";
 
 // A debugger process built from real PE structures (headers, an import table, an export table), so the
@@ -127,6 +127,10 @@ export function load(modules: Module[], options: { policy?: number; registry?: s
 }
 
 export const text = (): string => stripDml(logs.join(""));
+
+/** The transcript with wrapped lines rejoined, for a check on what a section says rather than on where
+ * output.ts broke it. The screenshot rule reads `text()`, because the break points are what it measures. */
+export const prose = (): string => unwrap(text());
 
 // What a module needs for either style, minus what each test takes away. The comment is the decoding.
 export const GADGETS: Array<[number, number[]]> = [

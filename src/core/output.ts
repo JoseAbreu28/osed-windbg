@@ -1,3 +1,5 @@
+import { SCREEN } from "./screenshot_rule";
+
 export type TableColumn = {
   key: string;
   header: string;
@@ -84,16 +86,76 @@ export function echo(path: string, args: unknown[]): void {
   write(dxCall(path, args));
 }
 
+/** A dx call is one token. Breaking inside one leaves a command nobody can paste in one drag, so a call
+ * that does not fit moves whole onto the next line instead. Its arguments never contain a `)`. */
+const DX_CALL = /dx @\$osed\(\)\.[\w.]+\([^)]*\)/g;
+
+/** The message split on spaces, with each dx call kept whole. */
+function words(message: string): string[] {
+  const found: string[] = [];
+  let at = 0;
+  DX_CALL.lastIndex = 0;
+  for (let call = DX_CALL.exec(message); call !== null; call = DX_CALL.exec(message)) {
+    found.push(...message.slice(at, call.index).split(" "), call[0]);
+    at = call.index + call[0].length;
+  }
+  found.push(...message.slice(at).split(" "));
+  return found.filter((word) => word !== "");
+}
+
+/** `message` under `prefix`, broken at spaces so no line passes the screen's width. The prefix repeats
+ * on every line, because the screenshot rule reads it as evidence rather than as something to paste,
+ * and the continuations are indented so a wrapped line reads as one. A word longer than the room left
+ * overflows: cutting it would lose an address, and a guide's renderer would cut it anyway. */
+export function wrapped(prefix: string, message: string, width = SCREEN.columns): string[] {
+  const indent = /^\s*/.exec(message)?.[0] ?? "";
+  const rest = `${prefix}${indent}    `;
+  const lines: string[] = [];
+  let line: string | undefined;
+  for (const word of words(message)) {
+    if (line === undefined) line = `${prefix}${indent}${word}`;
+    else if (`${line} ${word}`.length <= width) line = `${line} ${word}`;
+    else {
+      lines.push(line);
+      line = `${rest}${word}`;
+    }
+  }
+  return line === undefined ? [`${prefix}${indent}`] : lines.concat(line);
+}
+
+/** A continuation `wrapped` made: the same tag, then the four spaces it indents by on top of whatever
+ * the message itself was indented. No message in a dep_plan section starts that far in, so this marks a
+ * continuation and nothing else there. The one ASCII table drawn with `out.info` does, so do not run
+ * `unwrap` over a transcript that holds one. */
+const CONTINUATION = /^(\[[+!-]\]) {5,}(\S.*)$/;
+
+/** A transcript with the lines `wrapped` broke rejoined. A reader sees sentences, so a check on what a
+ * section says reads this instead of pinning where a break happened to fall. */
+export function unwrap(transcript: string): string {
+  const lines: string[] = [];
+  for (const line of transcript.split("\n")) {
+    const more = CONTINUATION.exec(line);
+    const previous = lines[lines.length - 1];
+    if (more && previous !== undefined && previous.indexOf(more[1]) === 0) lines[lines.length - 1] = `${previous} ${more[2]}`;
+    else lines.push(line);
+  }
+  return lines.join("\n");
+}
+
+function tagged(tag: string, message: string): void {
+  for (const line of wrapped(tag, message)) write(line);
+}
+
 export function info(message: string): void {
-  write(`[+] ${message}`);
+  tagged("[+] ", message);
 }
 
 export function warn(message: string): void {
-  write(`[!] ${message}`);
+  tagged("[!] ", message);
 }
 
 export function error(message: string): void {
-  write(`[-] ${message}`);
+  tagged("[-] ", message);
 }
 
 export function whyItMatters(line: string): void {
