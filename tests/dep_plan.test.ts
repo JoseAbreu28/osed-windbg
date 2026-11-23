@@ -459,6 +459,21 @@ describe("dep_plan", () => {
     expect(output.indexOf(header)).toBeLessThan(output.indexOf("=== [1/7]"));
   });
 
+  // A brief names the API, so he types it. Where his API is not the one the tool would have taken, the
+  // screenshot of the first line has to say so: that run is the one the automatic path never measured.
+  test("a named API the tool would not have chosen is said under the first line, and a matching one is not", () => {
+    const fresh = loadApi({ imports: ["VirtualAlloc", "WriteProcessMemory"] });
+    fresh.dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D", "skeleton");
+    const lines = text().split("\n").filter((line) => line !== "");
+    expect(lines[0]).toBe('=== dx @$osed().dep_plan("WriteProcessMemory", "libbkup", "00 0A 0D", "skeleton", 1) ===');
+    expect(lines[1]).toBe("[!] You named WriteProcessMemory. Left to choose, the tool takes VirtualAlloc, which libbkup.dll imports directly.");
+    for (const args of [["VirtualAlloc", "libbkup", "00 0A 0D", "skeleton"], ["00 0A 0D"]]) {
+      logs.length = 0;
+      fresh.dep_plan(...args);
+      expect(text(), JSON.stringify(args)).not.toContain("Left to choose");
+    }
+  });
+
   test.each([
     ["VirtualAlloc", "skeleton", [
       '[1/7] modules("libbkup")',

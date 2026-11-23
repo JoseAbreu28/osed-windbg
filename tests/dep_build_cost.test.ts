@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildExploit, extraPops, lastRetN } from "../src/commands/dep_build";
+import { buildExploit, dictLines, extraPops, lastRetN } from "../src/commands/dep_build";
 import { gadgetAddress, hex32, planWrites, sequence } from "../src/commands/dep_plan";
 import { buildCapabilityIndexFromRpPlusText } from "../src/rop";
 
@@ -123,4 +123,18 @@ test("a slot built from the frame says it was not searched, once", () => {
     "ecx = return (no value to search for): not searched: built from the frame",
     "ecx = lpAddress (no value to search for): not searched: built from the frame",
   ]);
+});
+
+// Measured on T08 with WriteProcessMemory named: the last COST row ended at column 130 and its closing
+// brace made it 131, past the screen the guides photograph.
+describe("dictLines", () => {
+  test("the closing brace counts toward the width of the line it ends", () => {
+    const entries = Array.from({ length: 40 }, (_, i) => `0x${(0x63101000 + i).toString(16).toUpperCase()}: (1, 0)`);
+    for (let width = 60; width <= 130; width += 1) {
+      const lines = dictLines("COST", entries, width);
+      for (const line of lines) expect(line.length, `width ${width}: ${line}`).toBeLessThanOrEqual(width);
+      expect(lines.join(" ").replace(/\s+/g, " ")).toBe(`COST = {${entries.join(", ")}}`);
+    }
+    expect(dictLines("COST", [])).toEqual(["COST = {}"]);
+  });
 });

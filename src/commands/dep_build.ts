@@ -225,19 +225,20 @@ export const COPY_SEPARATOR = "# ------------------ copy into your exploit -----
 /** `name = {entries}`, broken after a comma when it does not fit the screen. One gadget per job and a
  * swap or two each puts COST well past 130 columns on a real module, and Python takes a newline inside
  * braces, so the dict that carries every junk count is readable instead of running off the figure. */
-function dictLines(name: string, entries: string[], width = SCREEN.columns): string[] {
+export function dictLines(name: string, entries: string[], width = SCREEN.columns): string[] {
   const indent = " ".repeat(name.length + 4);
   const lines: string[] = [];
   let line = `${name} = {`;
   entries.forEach((entry, i) => {
-    const piece = i < entries.length - 1 ? `${entry},` : entry;
+    // The closing brace rides on the last entry, so it is measured with it.
+    const piece = i < entries.length - 1 ? `${entry},` : `${entry}}`;
     if (line.length + piece.length + 1 <= width || line.indexOf("{") === line.length - 1) line += line.endsWith("{") ? piece : ` ${piece}`;
     else {
       lines.push(line);
       line = `${indent}${piece}`;
     }
   });
-  return lines.concat(`${line}}`);
+  return lines.concat(entries.length === 0 ? `${line}}` : line);
 }
 
 export const HELPER_BLOCK: Block = { lines: [

@@ -3732,8 +3732,15 @@ function bindApi(): OsedApi {
     const modulesLabel = chosen.map((entry) => entry.label).join(", ") || "no module";
 
     // API layer, resolved before the header so the echoed call names what this run used.
-    const routes = (autoApi ? DEP_PLAN_APIS : [requestedApi as DepApi]).map((name) => routeFor(name, modules, badchars as number[], fixedOwners));
-    const route = routes.find((candidate) => candidate !== undefined && !candidate.delta) ?? routes.find((candidate) => candidate !== undefined);
+    // The first API with a direct import wins, else the first reached by a distance.
+    const pickRoute = (names: DepApi[]): Route | undefined => {
+      const routes = names.map((name) => routeFor(name, modules, badchars as number[], fixedOwners));
+      return routes.find((candidate) => candidate !== undefined && !candidate.delta) ?? routes.find((candidate) => candidate !== undefined);
+    };
+    const route = pickRoute(autoApi ? DEP_PLAN_APIS : [requestedApi as DepApi]);
+    // What the short form would have taken. Where a named API differs from it, the named one is the API the
+    // tool would not have reached for first, and the run deserves the closer reading.
+    const ownChoice = autoApi ? route : pickRoute(DEP_PLAN_APIS);
     const depApi: DepApi = route?.api ?? requestedApi ?? "VirtualAlloc";
     const callArgs = (styleValue: string, force: boolean): unknown[] => [
       autoApi && !route ? "" : depApi, modulesArg, badText, styleValue, stage,
@@ -3789,6 +3796,10 @@ function bindApi(): OsedApi {
     // without DEP is the other run with no corpus, and it did decide something: that no chain is needed.
     const noChain = dep.enforced === false && !anyway;
     out.section(out.dxCall("dep_plan", callArgs(solved ? style : noChain ? "none" : styleText, anyway)));
+    if (!autoApi && ownChoice && ownChoice.api !== requestedApi) {
+      out.warn(`You named ${requestedApi}. Left to choose, the tool takes ${ownChoice.api}, ${ownChoice.delta
+        ? `reached from ${ownChoice.delta.dll}!${ownChoice.delta.anchor} by a distance` : `which ${shortName(ownChoice.owner)} imports directly`}.`);
+    }
     const n = DEP_PLAN_SECTIONS;
     const summary: Array<Record<string, string>> = [];
     // Below each section's output, so a screenshot of the output stops here and the block below it is one
