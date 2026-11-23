@@ -298,7 +298,7 @@ The screenshot rule on the 13 real transcripts: **no violation in any section of
 
 `dist/osed-legacy.js` sha256 `1887cfcac0964cd41bad6c02290b709ea3074da42851b4e7a2c2e3fbc5c009c2`, the file the
 corpus ran against, on the lab clone. The bundle committed and left on disk is
-`7a4320c25e30265e9acbce2520f59513e790451b3e511c09cba42a6b4db4c7f1`. The two are the same source and differ in
+`a16adf2434b3db23753ac80e3e29d215d96fbf5bb0c4c092b29f8ab8b6934bad, rebuilt and verified by the parent and shipped to the VMs and to Notion (the agent left 7a4320c25e30265e9acbce2520f59513e790451b3e511c09cba42a6b4db4c7f1, the same source with a different build stamp)`. The two are the same source and differ in
 five bytes, the `__OSED_BUILD_TIME__` stamp, verified here by building twice and diffing: same length, five
 differing bytes, all inside that one string. So a published sha256 identifies the exact file, not the source. The three holdout targets were not run, opened or read. Every class A
 target was given only its bad chars and stage 1. T14 was removed from the corpus before this run, so the
