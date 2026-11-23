@@ -442,6 +442,55 @@ below the record, and 0xC00 + 2064 is 0x1410.
 four guest files. None of them exists anywhere in the tree outside the holdout and the guides. Nothing
 about the tool can be learned from it until it is written, built and given a reference.
 
+## First holdout, spent 2026-11-23
+
+**T16 passed cold. The marker landed.**
+
+Three targets were held back from the start and never run, opened, read or grepped, because
+corpus results cannot answer "is it ready": every target used to fix the tool has been taught to
+it. One of the three was spent on the build shipped at `ba01d86`, `dist/osed-legacy.js` sha256
+`4c40bfeb5bfb1beb55bd815cf7f5abd8e9f5d1d37a4cceb52231e36fae65b33a`. **Two remain.**
+
+The agent running it was stopped by a model safeguard before it could write this section. The run
+itself had completed, and what follows was read from the run directory and verified by the parent,
+not taken from a report.
+
+**What it was given.** The offset and the bad chars, which `GOAL.md` has always put out of scope
+because they come from the crash and from the user's own hunt. Nothing else: no module, no API,
+no style, no hint.
+
+**The call, as it appears first in the transcript:**
+
+```
+dx @$osed().dep_plan("00 0a 0d 3b 23 24 a0", 1)
+```
+
+That is the short form. The long form that appears later in the same log is the tool echoing the
+choices it made, which the harness then re-runs to reproduce the sections.
+
+**What it worked out on its own:**
+
+| Decision | What it chose |
+|---|---|
+| DEP | on, by system policy OptIn and the program's own NX_COMPAT |
+| module | the main image; six others rejected for ASLR, counted not listed |
+| API | VirtualAlloc |
+| the API address | an import slot in that module, read with `mov eax, [eax]` |
+| style | skeleton |
+| delivery | a saved return address |
+| holes left | one, the shellcode |
+
+The chain reached `VirtualAlloc` under the harness breakpoint and the marker appeared. The
+screenshot rule found **no violation in any section**, which matters as much as the pass: the
+evidence it printed on a target nobody had prepared for it still fitted a picture.
+
+**What this does and does not settle.** `GOAL.md` says the honest answer to "is it ready" stays no
+until a holdout has been exploited cold at least once. That has now happened. It does not make the
+answer an unqualified yes: this target is class A with gadgets in its own image, which is the
+shape the corpus holds most of, so it is the easiest of the three. The two held back are a harder
+class A, where only a DLL is at a fixed base, and a class B, where nothing is fixed and the right
+answer is a refusal that names the leak.
+
 ## Known gaps, newest first
 
 - ~~**A DEP chain delivered through an overwritten SEH handler is a shape `dep_plan` does not model.**~~
