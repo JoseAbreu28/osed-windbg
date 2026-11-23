@@ -680,8 +680,7 @@ export function buildExploit(input: BuildInput): Build {
             ...route.back,
           ];
         };
-        const unreached = `no register takes the captured ESP out of ${capture?.at.dest ?? "a register"} and a distance onto it: the shellcode's address
-`
+        const unreached = `no register takes the captured ESP out of ${capture?.at.dest ?? "a register"} and a distance onto it: the shellcode's address\n`
           + `is ESP plus a few hundred bytes, so this needs an add or a sub of a register the chain can pop into: dx @$osed().palette("${input.module}", "${badSpaced}")`;
         if (style === "staged") {
           if (!capture) return missing(`no gadget captures ESP in ${input.module}: see [4/7]`);
