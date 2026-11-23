@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { buildExploit, extraPops, lastRetN } from "../src/commands/dep_build";
-import { gadgetAddress, hex32, planSkeleton, sequence } from "../src/commands/dep_plan";
+import { gadgetAddress, hex32, planWrites, sequence } from "../src/commands/dep_plan";
 import { buildCapabilityIndexFromRpPlusText } from "../src/rop";
 
 // The emitted file pads junk for the stack dwords a gadget takes past the values the chain hands it, and
@@ -52,7 +52,7 @@ const addressIn = (lines: string[], name: string): number => {
 
 const built = () => {
   const index = corpus(...LINES);
-  const { plans } = planSkeleton(index, [], "VirtualProtect", FACTS, BAD);
+  const { plans } = planWrites(index, [], "VirtualProtect", FACTS, BAD);
   const build = buildExploit({
     api: "VirtualProtect", style: "skeleton", module: "t.dll", badchars: BAD,
     index, plans, exclude: [], stage: 1, ...FACTS,

