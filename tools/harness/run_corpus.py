@@ -308,6 +308,16 @@ def gadgets_in(sections):
     return found
 
 
+def modules_in(log):
+    """Every image cdb reported loading, as (low, high). A return address outside all of them was not
+    pushed by any code the process loaded, so no call the program made could have left it."""
+    return [(int(a, 16), int(b, 16)) for a, b in re.findall(r"^ModLoad: ([0-9a-f]{8}) ([0-9a-f]{8})", log, flags=re.M)]
+
+
+def in_module(address, images):
+    return any(low <= address < high for low, high in images)
+
+
 def fire(guest, target, adapters, run_dir, deliver, marker, gadgets):
     """Phase C: the target under cdb with every DEP API broken on, the payload sent, the marker watched."""
     guest.vm.delete(marker)
@@ -329,15 +339,20 @@ def fire(guest, target, adapters, run_dir, deliver, marker, gadgets):
     finally:
         guest.kill_all()
         stop_target(guest, target, pid)
+    images = modules_in(log)
     hits = []
     for block in re.split(r"^HARNESS_API ", log, flags=re.M)[1:]:
         api = block.split()[0]
         words = re.findall(r"^([0-9a-f]{8})\s+([0-9a-f]{8})", block, flags=re.M)
         if words:
             esp, ret = int(words[0][0], 16), int(words[0][1], 16)
-            from_chain = ret in gadgets or abs(ret - esp) < 0x10000
+            # Whose call this is, by the return address. A chain gadget names itself. The staged style's
+            # return address is the sled on the stack and no gadget, so what settles it there is that no
+            # image holds that address: nothing the program loaded could have pushed it. The near-ESP
+            # clause keeps the styles whose frame is the stack the call was reached on.
+            from_chain = ret in gadgets or not in_module(ret, images) or abs(ret - esp) < 0x10000
             hits.append({"api": api, "esp": f"{esp:08x}", "return": f"{ret:08x}", "from_chain": from_chain,
-                         "return_is": gadgets.get(ret)})
+                         "return_is": gadgets.get(ret) or (None if in_module(ret, images) else "not in any loaded module")})
     fault = between(log, "HARNESS_FAULT", "HARNESS_END")
     eip = re.search(r"eip=([0-9a-f]{8})", fault)
     stopped = int(eip.group(1), 16) if eip else None
