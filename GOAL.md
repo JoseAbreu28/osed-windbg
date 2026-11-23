@@ -255,6 +255,54 @@ columns. It is `modules()`, a listing of every module the process has, printed w
 section whose size follows the target rather than the chain, and it is the next thing to cut. Every other
 section of every other target is inside 40 rows and 130 columns.
 
+## Corpus run, 2026-11-23, measured at `2038a47`
+
+`dist/osed-legacy.js` sha256 `1e914b42d519975984619edb3c4b767fab907d6c708e8c0d9cd2225f4e97cdc2` (the file the
+corpus ran against), on the lab clone. The three holdout targets were not run, opened or read. Every class A target
+was given only its bad chars and stage 1. A run at `482ab7a` gave the same eleven passes and one width violation,
+which `2038a47` fixes; this table is the second run.
+
+**Eleven of fifteen pass, from ten.** Eight class A targets land the marker and two class B targets refuse correctly
+and name the leak. T10 is the one that moved. Nothing regressed.
+
+| Result | Targets |
+|---|---|
+| marker landed | T01, T02, T03, T04, T05, T06, T09, T10, T12 |
+| refused correctly, leak named | T13, T15 |
+| still failing | T07, T08 |
+| not attempted, the target's fault | T11, T14 |
+
+What moved, against the previous run:
+
+| # | Targets | Then | Now |
+|---|---|---|---|
+| 1 | T10 | stopped on `lpbuffer_value`: "no gadget adds a popped distance to eax" | the shellcode's address comes from a second capture of ESP, as the reference does it, and the distance is popped negated into EDX and negated back by `neg edx`, which the module had all along. The marker lands |
+| 2 | T08 | built in the staged style with four holes, one of them a read the tool should have allowed | the read it was asked to allow, `xchg dword [ecx], eax` on the IAT slot, faults: the slot's page is `PAGE_READONLY` on the clone. Both layers now refuse it and the run stops at the method layer naming "read a pointer". Still a fail, now an honest one |
+| 3 | T12 | `[1/7]` 60 rows, 51 lines past 130 columns | inside the budget: the table holds the four modules without ASLR and counts the rest |
+
+The screenshot rule on the 13 real transcripts: **no violation in any section of any target.**
+
+## Target or tool: T07 and T14, 2026-11-23
+
+Asked to separate, not to fix. Both answers are measured.
+
+**T07 is a working lab that the harness grades wrongly, and its tool failure is the tool's.** The vulnerable
+function copies into a 2048 byte buffer inside `__try`. The overflow reaches its pointer argument, and the
+store through it faults at `0x0040126C` on the planted pointer. That fault is the trigger: the exploit is the SEH handler the same
+overflow replaces. The harness's fire step runs `g` and, on the first break, records the registers and quits,
+and cdb breaks on a first-chance access violation by default. So nothing that needs the exception to reach
+its handler can pass there, which is why the reference and the tool failed at the same address. Fired again
+with `sxd av` and nothing else changed, the reference lands the marker: VirtualAlloc is reached and returns
+into `jmp esp`. The tool's own payload from the same run, fired the same way, ends in `c00001a5`, an invalid
+exception handler: it lays a saved-EIP chain at `JOB_OFFSET` and leaves the SEH record as padding. A DEP
+chain delivered through an overwritten SEH handler is a shape `dep_plan` does not model. Two pieces of work
+follow, neither started: the harness should let first-chance exceptions through, and the tool needs an SEH
+delivery. Changing the harness changes how every target's fault is recorded, so it is a decision, not a fix.
+
+**T14 is a lab that was never written.** Its folder holds only `lab.json`, which names two source files and
+four guest files. None of them exists anywhere in the tree outside the holdout and the guides. Nothing
+about the tool can be learned from it until it is written, built and given a reference.
+
 ## Known gaps, newest first
 
 - ~~**Both chain styles build the frame where only a run can know the address.**~~ The skeleton lays it in
@@ -389,26 +437,33 @@ Written down so the next agent does not look for it.
   so in those words instead of claiming no path exists: a truncated verdict is not proof of absence.
 - **`cdq ; ret` and the one-operand `imul`, `mul`, `div`, `idiv` are rejected, not modelled.** Safe, and it
   costs real routes in a module whose only spare gadget is one of those.
-- **A memory read that also writes memory is not a transition.** `effectOf` refuses any gadget that stores
-  through an address the search cannot pin, so `xchg dword [ecx], eax` is unusable as a deref although the
-  dword it clobbers is the one the chain just read and never needs again. Measured on T08 with the replay
-  lever at `e596453`: it is that module's only memory read, `[4/7]` picks it for the read job, and
-  `load_virtualalloc` is still a hole. The method layer and the value search disagree about one gadget.
+- ~~**A memory read that also writes memory is not a transition.**~~ Closed on 2026-11-23, and the premise
+  it was recorded under was wrong. `xchg dword [ecx], eax` reads the dword and stores the old EAX over it.
+  That was written down as harmless, because the chain never needs the slot again. On the clone T08's IAT
+  page is `PAGE_READONLY` (`!vprot 0x63103018`, `.rdata`), and on most modules it is, so the store half
+  faults. The search now models the swap as a read, gated on the run's own `!vprot` of the slot
+  (`FrameFacts.slotWritable`), and only where the swap is the gadget's sole memory access. The method layer
+  refuses it for the read job on a read-only slot, with that reason on the screen, so the two layers agree.
+  On T08 this moved the run from four holes in the staged style to a method-layer `STOP` naming "read a
+  pointer". That is the honest exit: the module has no memory read that leaves the slot alone.
 - **The captured ESP can land in a register nothing moves out of.** `[4/7]` judges the capture on its own
   and the move out of it is the build's business, so a module whose only capture is `mov ebp, esp` and
   which has no `mov <reg>, ebp`, `xchg ebp, <reg>`, `push ebp ; pop <reg>` or `add <reg>, ebp` reaches
   `[7/7]` and leaves every stack-address slot a hole. T08 again. The hole names the cause, which is one
   layer better than a refusal, and a job that tested the move would have said it at the method layer.
 
-- **The distance to the sled is one popped dword, so its sign decides whether a target is reachable.**
-  The emitted script works the distance out, patches it into the chain and loops a gap until it is clean,
-  so no static search owns it. Subtracted it pops as `0xFFFFFExx` and added as `0x000001xx`, which no
-  target with `00` as a bad char accepts, and no gap inside the loop's range changes that: the top two
-  bytes of a few hundred are zero whatever the gap. A module with no `sub` into the register the frame is
-  built in therefore cannot carry a stack address at all. Measured on T10, whose module has `add eax, edx`
-  and no `sub` anywhere, where it is the only hole left. The script knows the number, so a pop, a pop and
-  an add laid out in advance would let it split the distance into two clean dwords; that is a change to
-  what the chain emits for one slot, not to the search.
+- ~~**The distance to the sled is one popped dword, so its sign decides whether a target is reachable.**~~
+  Closed on 2026-11-23. The diagnosis recorded here missed two things in T10's module. It has
+  `neg edx ; ret`, so the distance could always be popped negated and negated back. And the real blocker
+  was elsewhere: the skeleton worked the shellcode's address out from the field address in ECX, and the
+  only way out of ECX is `xchg eax, ecx`, which takes the field address with it. T10's reference never
+  copies the field address. It captures ESP a second time in the value register and adds the distance to
+  that. The skeleton now does the same when the field route fails, through the loader the staged style
+  already used. The distance itself has three shapes, cheapest first: one dword the op takes as it is, one
+  popped negated and negated back, or two dwords the script picks free of bad chars and adds in turn. Each
+  patch carries its dwords, the payload offset its register held and its sign, so one `to_sled` serves both
+  styles. T10 lands the marker on the clone. The two-dword shape is exercised by a fixture with no negate
+  of the distance register, whose emitted Python is run and lands both values on the first NOP.
 
 ### What an adversarial review of the search found, and what it cost
 
@@ -478,9 +533,14 @@ What this did not touch, and is the next evidence work:
   candidates ranked above the pick would still exceed 40 rows. A budget that spends the rejected
   candidates against the rows left is the structural fix, and it needs the section's lines counted before
   any of them is printed.
-- A run with DEP off has no chain and so no style, and it prints no `STOP`, so the rule's echo exemption
-  does not cover it and its echo still reads `"auto"`. Either the run should say it stopped, or the rule
-  should know that a run needing no chain made no choice. Not in the measured set, so not yet decided.
+- ~~A run with DEP off has no chain and so no style, and its echo still reads `"auto"`.~~ Closed on
+  2026-11-23. That run decided something: no chain is needed. The echo writes it as the style `"none"`,
+  `dep_plan` accepts `"none"` only for a process without DEP and says why otherwise, and the screenshot
+  rule takes `"none"` only after the `DEP is OFF` exit.
+- ~~`[1/7]` printed every module in the process.~~ Closed on 2026-11-23. It was the one section whose size
+  followed the target: 60 rows on T12, 51 of them past 130 columns for their full paths. `modules("", true)`
+  lists the modules without ASLR, the ones a chain can come from, names each by its file, and counts the
+  rest in one line that carries the command for the whole list.
 
 ## Out of scope
 
