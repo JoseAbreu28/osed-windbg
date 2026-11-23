@@ -534,6 +534,11 @@ after the bundle was built. Neither can change any corpus run: one prints a diff
 debugger lists no module at all, which no target in either run reached, and the other moves a comment. The
 sha256 is the thing to trust, and it is the same in both runs.
 
+The bundle committed and left on disk after the runs is a different file, sha256
+`d4cba4975dd64733badccaa1b74d9ad9b8cd6021936e9c96c9be7b7a34a2d2e0`, built from `9ba38e9`: the measured
+source plus those two commits. Nothing in the corpus separates the two, and the published figures and the
+Workflows pages are unaffected, because neither commit changes a line any target prints.
+
 **On the denominator, because it is not the one the sections above use.** This section counts all
 seventeen targets the manifest runs, the two spent holdouts T16 and T17 included, because the demanded API
 is a property of a lab's brief and both of those are labs. The sections above counted fifteen and reported
