@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { beforeEach, describe, expect, test } from "vitest";
-import { stripDml } from "../src/core/output";
+import { stripDml, unwrap } from "../src/core/output";
 import { initializeScript } from "../src/index";
 import { picksOf } from "./helpers/dep_plan_picks";
 
@@ -133,6 +133,8 @@ function loadApi(options: { imports?: string[]; aslr?: boolean; movable?: string
 }
 
 const text = (): string => stripDml(logs.join(""));
+// The same transcript with the lines output.ts wrapped rejoined, for a check on what it says.
+const prose = (): string => unwrap(text());
 
 const SECTIONS = [1, 2, 3, 4, 5, 6, 7].map((n) => `=== [${n}/7]`);
 const SEPARATOR = "# ------------------ copy into your exploit ------------------";
@@ -266,7 +268,8 @@ describe("dep_plan", () => {
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
     const output = text();
     const negate = output.slice(output.indexOf("  negate"), output.indexOf("  pivot ESP"));
-    expect(negate).toMatch(/^  negate \(keep edi = the field address\):\n    0x11111361  neg edi ; ret.*\n      no: clobbers edi, which still holds the field address\n  > 0x11111161  neg eax ; pop ebp ; ret/);
+    // A rejected candidate is one row, so its reason sits beside its address rather than under it.
+    expect(negate).toMatch(/^  negate \(keep edi = the field address\)[^\n]*\n    0x11111361  neg edi ; ret\s+no: clobbers edi, which still holds the field address\n  > 0x11111161  neg eax ; pop ebp ; ret/);
     const copy = output.slice(output.indexOf("  copy a register"), output.indexOf("  read a pointer"));
     expect(copy).toContain("no: copies eax, but the captured ESP is in esi");
     expect(copy).toContain("> 0x11111331  mov edi, esi ; ret");
@@ -293,7 +296,11 @@ describe("dep_plan", () => {
     expect(named.get("XCHG_EAX_ESP")).toBe(pick("pivot ESP")?.address);
     expect(table.find((line) => line.startsWith("COST = {"))).toContain("NEG_EAX: (1, 0)");
     expect(output).toContain("# confirm: bp 0x11111111 ; g ; r esp ; s -d esp-400 L100 45454545");
-    expect(output).toContain("=== VirtualAlloc Python Call-Frame Skeleton ===");
+    // [6/7] prints the frame once, under the separator, with every argument named in call order. The
+    // skeleton used to print dep_function's copy above it too, in pack() and with six undefined names.
+    expect(blocksOf(output)[4].map((line) => /#\s*(\w+)/.exec(line)?.[1]).slice(0, 6))
+      .toEqual(["VirtualAlloc", "return", "lpAddress", "dwSize", "flAllocationType", "flProtect"]);
+    expect(output).not.toContain("Python Call-Frame Skeleton");
     expect(api.last_result().findings[0]).toMatchObject({ api: "VirtualAlloc", module: "libbkup", style: "skeleton" });
   });
 
@@ -412,7 +419,8 @@ describe("dep_plan", () => {
     const fresh = loadApi({ extra: [FAR_POP_EBP, NEAR_POP_EBP] });
     fresh.dep_plan("VirtualProtect", "libbkup", "00 0A 0D", "pushad");
     const output = text();
-    expect(output.slice(output.indexOf("  pop ebp"), output.indexOf("  pop ebx"))).toContain("0x11111381");
+    // The swap list is the block's, not the ranking's: [4/7] prints the pick and the candidates ranked
+    // above it, and the usable ones after it are the commented swaps below the separator.
     const table = blocksOf(output)[2];
     expect(table.some((line) => /^# POP_EBP.*= 0x11111391 .*drop-in swap/.test(line)), table.join("\n")).toBe(true);
     expect(table.join("\n")).not.toContain("0x11111381");
@@ -488,9 +496,15 @@ describe("dep_plan", () => {
   ])("pasting an echoed line of %s %s prints the same output dep_plan printed under it", (name, style) => {
     api.dep_plan(name, "libbkup", "00 0A 0D", style);
     const report = text();
-    const calls = report.split("\n").filter((line) => line.startsWith("dx @$osed().") && !line.includes("code_caves("));
+    // Four commands are offered rather than run, so nothing prints under their echo and there is nothing
+    // to compare: dep_plan reads the caves and the jmp esp hits quietly and keeps only the address,
+    // rop.construct builds in eax whichever register the frame wants, and the skeleton dep_function
+    // frame is the one the block below the separator prints correctly. The pushad map does print.
+    const offered = (line: string): boolean => line.includes("code_caves(") || line.includes("find_bytes(")
+      || line.includes("rop.construct(") || line.includes('dep_function("' + name + '")');
+    const calls = report.split("\n").filter((line) => line.startsWith("dx @$osed().") && !offered(line));
     expect(calls.some((call) => call.includes(".dep_candidates("))).toBe(true);
-    expect(calls.some((call) => call.includes(".dep_function("))).toBe(true);
+    expect(calls.some((call) => call.includes(".dep_function("))).toBe(style === "pushad");
     const osed = (globalThis as unknown as { osed: unknown }).osed;
     for (const call of calls) {
       logs.length = 0;
@@ -532,7 +546,9 @@ describe("dep_plan", () => {
   test("no route to the API at all: one conclusion naming the API layer, and no list of things to try", () => {
     const fresh = loadApi({ imports: [] });
     fresh.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
-    const output = text();
+    // The conclusion is one sentence and output.ts breaks it across lines to fit the screen, so this
+    // reads the rejoined transcript rather than pinning where the break falls.
+    const output = prose();
     const conclusion = "[-] The API layer fails: no module with ASLR disabled imports VirtualAlloc, nor any other export of kernel32 or kernelbase to reach it from by a fixed distance. Its address needs a leak first.";
     expect(output.split(conclusion).length - 1).toBe(2);
     for (const homework of ["in this order", 'sc.iat_find("GetProcAddress")', "last resort", "rop.generate", "Only if you are free"]) {

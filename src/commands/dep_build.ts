@@ -1,3 +1,4 @@
+import { SCREEN } from "../core/screenshot_rule";
 import { CapabilityIndex } from "../rop/capabilities";
 import { rankCandidates } from "../rop/emitter";
 import { RopGadget } from "../rop/types";
@@ -162,6 +163,24 @@ function assignNames(table: Entry[]): void {
 // It packs with int.to_bytes, so the block imports nothing and never doubles an import his file already has.
 // Above it the evidence a screenshot keeps, below it the lines to paste.
 export const COPY_SEPARATOR = "# ------------------ copy into your exploit ------------------";
+
+/** `name = {entries}`, broken after a comma when it does not fit the screen. One gadget per job and a
+ * swap or two each puts COST well past 130 columns on a real module, and Python takes a newline inside
+ * braces, so the dict that carries every junk count is readable instead of running off the figure. */
+function dictLines(name: string, entries: string[], width = SCREEN.columns): string[] {
+  const indent = " ".repeat(name.length + 4);
+  const lines: string[] = [];
+  let line = `${name} = {`;
+  entries.forEach((entry, i) => {
+    const piece = i < entries.length - 1 ? `${entry},` : entry;
+    if (line.length + piece.length + 1 <= width || line.indexOf("{") === line.length - 1) line += line.endsWith("{") ? piece : ` ${piece}`;
+    else {
+      lines.push(line);
+      line = `${indent}${piece}`;
+    }
+  });
+  return lines.concat(`${line}}`);
+}
 
 export const HELPER_BLOCK: Block = { lines: [
   "# needs OFFSET (from the crash) and BADCHARS (from the bad char hunt) already in this file",
@@ -837,18 +856,20 @@ export function buildExploit(input: BuildInput): Build {
           ...swapsFor(entry.address, entry.loads).map((swap) =>
             `# ${entry.name.padEnd(width - 2)} = ${hex(swap.address)}   # ${swap.sequence}   drop-in swap, ranked lower: ${swap.why}`),
         ]),
-        `COST = {${[
+        "# (the stack dwords each one takes, ret N). The swap-ins are here too, so swapping one in needs no other edit.",
+        ...dictLines("COST", [
           ...cost.map((entry) => `${entry.name}: (${entry.pops}, ${entry.retn ? `0x${entry.retn.toString(16)}` : 0})`),
           ...table.flatMap((entry) => swapsFor(entry.address, entry.loads))
             .filter((swap, i, all) => (swap.pops > 0 || swap.retn > 0)
               && table.every((entry) => entry.address !== swap.address)
               && all.findIndex((other) => other.address === swap.address) === i)
             .map((swap) => `${hex(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`),
-        ].join(", ")}}     # (the stack dwords each one takes, ret N). The swap-ins are here too, so swapping one in needs no other edit.`,
+        ]),
         `PAD = b"\\x${(JUNK & 0xff).toString(16).padStart(2, "0")}"                   # the byte the payload pads with, not a bad char`,
         "JUNK = int.from_bytes(PAD * 4, \"little\")   # and the junk dword made of it",
         "",
-        "class Chain(list):                # c.rop(gadget, values): the gadget, junk for the last ret N, its values, junk for the dwords it pops past them",
+        "# c.rop(gadget, values): the gadget, junk for the last ret N, its values, junk for the dwords it pops past them",
+        "class Chain(list):",
         "    skip, patches = 0, None",
         "    def rop(self, gadget, *values):",
         "        pops, retn = COST.get(gadget, (0, 0))",

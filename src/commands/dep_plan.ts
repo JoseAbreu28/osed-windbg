@@ -1,5 +1,6 @@
 import { CapabilityIndex, spoilsOwnInput } from "../rop/capabilities";
 import { rankCandidates } from "../rop/emitter";
+import { SCREEN } from "../core/screenshot_rule";
 import { isPath, ReachIndex, Reg, REGS as REACH_REGS, Val } from "../rop/reach";
 import { CapabilityKind, RopGadget } from "../rop/types";
 import { FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, Slot } from "./dep_frames";
@@ -622,8 +623,17 @@ export function sideEffects(gadget: RopGadget, job: Job): string {
 const pathText = (path: NonNullable<JobPlan["path"]>): string =>
   `no single gadget does it, a sequence does: ${path.from} into ${path.to} by ${path.gadgets.map(sequence).join(", then ")}`;
 
-// The pick, up to three candidates the old ranking put above it, and up to two usable alternatives after it.
-export function planLines(plan: JobPlan): string[] {
+/** How many of the candidates the ranking put above the pick are shown. They are the evidence that the
+ * pick was not taken blind, and three of them is what fits a screen on most targets; a section that
+ * would not fit spends fewer, because a section past one screen is a dump and not evidence. */
+export const SHOWN_ABOVE = 3;
+
+// The pick and up to three candidates the old ranking put above it, which is the evidence that the pick
+// was not simply the first in the ranking. The usable alternatives after it are not printed here: each is
+// already a commented drop-in swap in the [4/7] copy block, under the name the chain uses and with this
+// same reason, which is where someone swapping one in would edit. Printed in both places they cost four
+// rows a job and put the section past the one-screen budget.
+export function planLines(plan: JobPlan, shown = SHOWN_ABOVE): string[] {
   const { job, live, verdicts, pick } = plan;
   if (verdicts.length === 0 && plan.path) {
     return [`  ${job.title}: ${pathText(plan.path)}`];
@@ -633,14 +643,17 @@ export function planLines(plan: JobPlan): string[] {
     ? ` (keep ${live.map((entry) => ROLE_NAMES[entry.role] ? `${entry.register} = ${ROLE_NAMES[entry.role]}` : entry.register).join(", ")})` : "";
   const at = pick ? verdicts.indexOf(pick) : verdicts.length;
   const above = verdicts.slice(0, at);
-  const after = pick ? verdicts.slice(at + 1).filter((verdict) => verdict.usable).slice(0, 2) : [];
-  const line = (verdict: Verdict, mark: string, label: string) => [
-    `  ${mark} ${hex32(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}  ${sideEffects(verdict.gadget, job)}`,
-    `      ${label}: ${verdict.reason}`,
-  ];
-  const lines = [`  ${job.title}${keep}:`];
-  for (const verdict of above.slice(0, 3)) lines.push(...line(verdict, " ", verdict.usable ? "usable" : "no"));
-  if (above.length > 3) lines.push(`      ... and ${above.length - 3} more above it`);
+  const row = (verdict: Verdict, mark: string): string =>
+    `  ${mark} ${hex32(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}  ${sideEffects(verdict.gadget, job)}`;
+  const line = (verdict: Verdict, mark: string, label: string) => [row(verdict, mark), `      ${label}: ${verdict.reason}`];
+  const rejected = (verdict: Verdict): string[] => {
+    const label = verdict.usable ? "usable" : "no";
+    const one = `    ${hex32(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}  ${label}: ${verdict.reason}`;
+    return one.length <= SCREEN.columns ? [one] : line(verdict, " ", label);
+  };
+  const hidden = Math.max(0, above.length - shown);
+  const lines = [`  ${job.title}${keep}:${hidden > 0 ? `   ${hidden} more ranked above the pick` : ""}`];
+  for (const verdict of above.slice(0, shown)) lines.push(...rejected(verdict));
   if (pick) lines.push(...line(pick, ">", "PICK"));
   if (pick && pick.uncontrolled.length > 0) {
     lines.push(`      !! every candidate for this job reads through ${pick.uncontrolled.join(", ")}. Point ${pick.uncontrolled.join(" and ")} at readable memory before this gadget runs, or the chain dies here.`);
@@ -651,7 +664,6 @@ export function planLines(plan: JobPlan): string[] {
   if (!pick && plan.path) {
     lines.push(`    ${pathText(plan.path)}`);
   } else if (!pick) lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
-  for (const verdict of after) lines.push(...line(verdict, " ", "usable"));
   return lines;
 }
 
@@ -687,18 +699,20 @@ export function encodingsFor(job: Job): number[][] {
 /** What searching every byte of the modules for a job's encodings showed. */
 export type Settled = { modules: string; encodings: number; clean: number[]; dirty: number };
 
-// Only a job the scan left without a pick is searched, so this is the line that replaces "none".
+// Only a job the scan left without a pick is searched, so this is what replaces "none". Two lines: what
+// the search settled, then what was searched to settle it. As one sentence it named the module twice and
+// ran to 136 columns on a real one, and they are two facts anyway.
 export function settledLines(plan: JobPlan, settled: Settled, exclude: number[]): string[] {
-  const searched = `every byte of ${settled.modules} searched for the ${settled.encodings} plain encodings of this job`;
+  const searched = `      searched: all ${settled.encodings} plain encodings of this job, in every byte of ${settled.modules}`;
   if (plan.pick) {
     return settled.clean.indexOf(gadgetAddress(plan.pick.gadget)) >= 0
-      ? [`      the scan had missed it: ${searched} found it`]
+      ? ["      the scan had missed it, and this search found it", searched]
       : [];
   }
   const usable = settled.clean.filter((address) => exclude.indexOf(address) < 0);
-  if (settled.clean.length > 0 && usable.length === 0) return [`      absent but for what you excluded: ${searched}, and each hit is one of them`];
-  if (settled.clean.length > 0) return [`      ${searched}: ${settled.clean.length} at a clean address, and none of them fits either`];
-  return [`      absent from ${settled.modules}: ${searched}, ${settled.dirty > 0 ? `${settled.dirty} hit(s), every one at an address holding a bad byte` : "no hit at all"}`];
+  if (settled.clean.length > 0 && usable.length === 0) return ["      absent but for what you excluded: every hit is one of them", searched];
+  if (settled.clean.length > 0) return [`      ${settled.clean.length} hit(s) at a clean address, and none of them fits either`, searched];
+  return [`      absent: ${settled.dirty > 0 ? `${settled.dirty} hit(s), every one at an address holding a bad byte` : "no hit at all"}`, searched];
 }
 
 /** KUSER_SHARED_DATA.NXSupportPolicy, the two low bits of the byte at 0x7FFE02D5: the system DEP

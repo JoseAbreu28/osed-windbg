@@ -48,9 +48,10 @@ import { findEncodings } from "./core/backward_scanner";
 import { badcharAddressFilter } from "./logic/pointer_filter_logic";
 import { COPY_SEPARATOR, CORPUS_BLOCK, HELPER_BLOCK, buildExploit, measureLanding, slotBlock, type Block, type Delta } from "./commands/dep_build";
 import { GROUPS as PALETTE_GROUPS, SHAPES as PALETTE_SHAPES, extrasOf as paletteExtras, paletteLines, pickShape, shapeEncodings } from "./commands/palette";
-import { constantsFor, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planSkeleton, settledLines, type DepPlanStyle, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
+import { constantsFor, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planSkeleton, settledLines, SHOWN_ABOVE, type DepPlanStyle, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
 import { copyBytes, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
 import { createDepFunctionCommand } from "./commands/dep_function";
+import { SCREEN } from "./core/screenshot_rule";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
@@ -3328,16 +3329,53 @@ function bindApi(): OsedApi {
     return missing("skeleton") <= missing("pushad") ? "skeleton" : "pushad";
   };
 
+  /** Rows of [4/7] that are not the ranking, counted from what this run will print rather than reserved:
+   * the echoed command, the two-line sentence above the ranking, the line weighing the write gadgets, the
+   * PUSHAD style's two byte searches, and the warnings naming the jobs with no gadget and the style they
+   * do not block. Every term depends only on the plans, the style and the API, which dep_candidates has
+   * too, so both commands size the ranking identically and the echoed command still reproduces the
+   * section. */
+  const reservedRows = (solved: Solved, style: DepPlanStyle): number => {
+    const missing = solved.plans[style].filter((plan) => !met(plan));
+    const blocking = missing.filter((plan) => !neededBy(plan.job, otherStyle(style), "VirtualAlloc"));
+    // Two for the note that says a job shows fewer rejections than usual. It is reserved whether or not
+    // it prints, because deciding how many rows the ranking may have is what decides whether it prints.
+    return 1 + 2 + 2
+      + (style === "skeleton" && solved.tried.length > 1 ? 3 : 0)
+      + (style === "pushad" ? 6 : 0)
+      + (missing.length > 0 ? 2 : 0)
+      + (blocking.length > 0 ? 4 : 0);
+  };
+
   // The body of dep_plan's [4/7] and all of dep_candidates, so pasting the echoed line repeats the section.
   const printDepCandidates = (solved: Solved, modules: string[], badSet: Set<number>, style: DepPlanStyle, api: DepApi, exclude: number[] = []) => {
     out.info("Ranked by fewest side effects, then the smallest stack move. The pick (>) is the first that keeps every register the chain still needs.");
     const plans = solved.plans[style];
-    for (const plan of plans) {
+    // Every job's header and pick always print. The candidates the ranking put above a pick are the
+    // evidence it was not taken blind, and they are what the section can afford: nine jobs with three
+    // rejections each is 70 rows, and a section past one screen is a dump rather than evidence. So the
+    // rows are counted before any is printed and handed out a round at a time, one per job that has a
+    // rejection left to show. A job with one rejection keeps it however crowded the section is, which a
+    // single number cut from every job would have thrown away.
+    const rows = (shown: number[]): string[] => plans.flatMap((plan, at) => {
       const settled = solved.settled[plan.job.key];
-      const lines = planLines(plan);
+      const lines = planLines(plan, shown[at]);
       if (settled && plan.verdicts.length === 0 && !plan.path) lines[0] = `  ${plan.job.title}: none in ${settled.modules}`;
-      for (const line of lines) out.print(line);
-      if (settled) for (const line of settledLines(plan, settled, exclude)) out.print(line);
+      return lines.concat(settled ? settledLines(plan, settled, exclude).flatMap((line) => out.wrapped("", line)) : []);
+    });
+    // Less one for the section's own title, which the rule counts as a row of the screenshot.
+    const budget = SCREEN.rows - 1 - reservedRows(solved, style);
+    const shown = plans.map(() => 0);
+    for (let round = 0; round < SHOWN_ABOVE; round += 1) {
+      for (let at = 0; at < plans.length; at += 1) {
+        shown[at] += 1;
+        if (rows(shown).length > budget) shown[at] -= 1;
+      }
+    }
+    for (const line of rows(shown)) out.print(line);
+    const cut = plans.filter((plan, at) => shown[at] < SHOWN_ABOVE && planLines(plan, SHOWN_ABOVE).length > planLines(plan, shown[at]).length).length;
+    if (cut > 0) {
+      out.info(`${cut} job(s) show fewer rejected candidates than usual, so this section fits one screen. For all of them: dx @$osed().dep_candidates("${modules.join(",")}", "${byteList([...badSet])}", "${style}", "${api}")`);
     }
     let jmpEsp: number | undefined;
     if (style === "pushad") {
@@ -3345,7 +3383,10 @@ function bindApi(): OsedApi {
         const hits: number[] = [];
         for (const module of modules) {
           out.echo("find_bytes", [module, bytes, 20]);
-          invoke("find_bytes", [module, bytes, 20]);
+          // Quietly: find_bytes prints its own section, a two-column table whose Address and Python
+          // columns hold the same value, and a line about what it does not search. Six rows per byte
+          // pattern to carry one address. The line below is the fact, and the echo reproduces the rest.
+          out.quietly(() => invoke("find_bytes", [module, bytes, 20]));
           hits.push(...((lastResult?.findings ?? []) as unknown[])
             .map((hit) => Number(hit))
             .filter((hit) => Number.isFinite(hit) && addressBadBytes(BigInt(hit), 4, badSet).length === 0));
@@ -3354,12 +3395,14 @@ function bindApi(): OsedApi {
         jmpEsp = jmpEsp ?? hits[0];
       }
     }
-    // Which write gadget was weighed and what the frame could be filled with through each: the pick above
-    // is the ranking's only when the frame agrees, so the frame's answer is shown beside it.
+    // The write gadget decides which register holds the field address and which the value, so the pick
+    // above is the ranking's only when the frame agrees. Each candidate's address and disassembly are in
+    // the ranking already; what it cannot say is the register pair and how much of the frame follows.
     if (style === "skeleton" && solved.tried.length > 1) {
-      for (const trial of solved.tried) {
-        out.print(`  ${dwordHex(trial.address)}  ${trial.sequence.padEnd(34)}  value in ${trial.value}, field in ${trial.field || "nowhere"}: ${trial.filled} of ${trial.of} frame values reachable${trial.unmet > 0 ? `, ${trial.unmet} job(s) left open` : ""}`);
-      }
+      const chosen = plans.filter((plan) => plan.job.key === "write")[0]?.pick;
+      const at = chosen ? depPlanAddress(chosen.gadget) : 0;
+      out.info(`Weighed against the frame: ${solved.tried.map((trial) =>
+        `${dwordHex(trial.address)} ${trial.value}/${trial.field || "-"} ${trial.filled} of ${trial.of}${trial.unmet > 0 ? ` and ${trial.unmet} open` : ""}${trial.address === at ? " PICKED" : ""}`).join(", ")}. Each is the register the value goes into over the one holding the field address, then the frame values reachable that way.`);
     }
     const missing = plans.filter((plan) => !met(plan));
     const where = modules.map(moduleLabel).join(", ");
@@ -3472,7 +3515,7 @@ function bindApi(): OsedApi {
     }
     out.print("");
     out.print(COPY_SEPARATOR);
-    for (const line of paletteLines(entries, paletteExtras(gadgets), label)) out.print(line);
+    for (const line of paletteLines(entries, paletteExtras(gadgets), label)) for (const fit of out.fitted(line)) out.print(fit);
     const rows = entries.filter((entry) => entry.pick).map((entry) => ({ Name: entry.shape.name, Address: dwordHex(depPlanAddress(entry.pick!.gadget)), Gadget: gadgetSequence(entry.pick!.gadget) }));
     setResult({
       command: "palette",
@@ -3543,7 +3586,45 @@ function bindApi(): OsedApi {
       ...(excludeText || force ? [excludeText] : []), ...(force ? [true] : []),
     ];
 
-    out.section(out.dxCall("dep_plan", callArgs(styleText, anyway)));
+    // The first line has to write out every choice, and the style is the last one made: it comes from
+    // the corpus, which [3/7] scans. So the scan and the solve run here, with their output held back and
+    // replayed under [3/7] where it belongs. An echoed "auto" hid the one choice a screenshot most needs
+    // to show, and reprinting the header lower down cannot fix it: the first line is what gets framed.
+    const dep = depVerdict();
+    // Without DEP the stack runs the shellcode as it is. There is no chain, so no style is chosen and
+    // the scan that would choose one is skipped, exactly as before this reordering.
+    const buildsChain = dep.enforced !== false || anyway;
+    const moduleFailed = chosen.length === 0 || chosen.some((entry) => entry.why !== undefined);
+    const scan = out.capture((): CapabilityIndex | undefined => {
+      if (!buildsChain) return undefined;
+      if (moduleFailed) {
+        out.error("Skipped: no module here can give gadgets. See the STOP above.");
+        return undefined;
+      }
+      if (loadedCorpusCovers(modules, badchars as number[])) {
+        out.info(`Using the corpus already loaded: a complete live scan of ${modulesLabel} for these bad chars, so scanning again could only find the same gadgets.`);
+        return currentRopCorpus;
+      }
+      out.echo("rop.scan_live", [modulesArg, badText]);
+      executeRopScanLive(modulesArg, badText);
+      return currentRopCorpus;
+    });
+    const scanned = scan.value;
+    // One set of facts about this target, so the jobs, the register choice, the printed recipes and the
+    // loaders all answer to the same numbers. The caves are found here because the solve weighs the write
+    // gadget against the frame, and two of the frame's slots are those addresses; [5/7] prints what this
+    // found and [4/7]'s block names them.
+    const iatSlot = route?.slot;
+    const { writable, cave, caveBytes } = frameAddresses(modules, badText, depApi, moduleFailed);
+    const frameFacts: FrameFacts = { iatSlot, delta: route?.delta?.value, writable, cave, caveBytes };
+    const solved = moduleFailed || !buildsChain ? undefined
+      : solveStyles(scanned, modules, badchars as number[], exclude, depApi, frameFacts);
+    const style: DepPlanStyle = styleText === "auto" ? (solved ? chooseStyle(solved) : "skeleton") : styleText as DepPlanStyle;
+
+    // A run with no corpus chose no style, so its echo keeps "auto" instead of writing out the fallback
+    // the rest of this function uses. Writing a choice that was never made is the thing the echo exists
+    // to prevent, and the screenshot rule exempts a stopped run's echo for the same reason.
+    out.section(out.dxCall("dep_plan", callArgs(solved ? style : styleText, anyway)));
     const n = DEP_PLAN_SECTIONS;
     const summary: Array<Record<string, string>> = [];
     // Below each section's output, so a screenshot of the output stops here and the block below it is one
@@ -3556,11 +3637,10 @@ function bindApi(): OsedApi {
         return;
       }
       out.print(SEPARATOR);
-      for (const line of block.lines) out.print(line);
+      for (const line of block.lines) for (const fit of out.fitted(line)) out.print(fit);
     };
 
     // Whether a chain is needed at all comes first: without DEP the stack runs the shellcode as it is.
-    const dep = depVerdict();
     if (dep.enforced === false) {
       out.section(`DEP is OFF for ${dep.name}: no chain needed`);
       out.error(`The stack executes: ${dep.why}.`);
@@ -3646,7 +3726,6 @@ function bindApi(): OsedApi {
     summary.push({ Section: `[1/${n}] module`, Result: moduleWarnings.length === 0 ? "fixed, clean base" : `${moduleWarnings.length} warning(s)` });
 
     out.section(`[2/${n}] IAT slot of ${depApi}`);
-    const iatSlot = route?.slot;
     const slotBad = iatSlot === undefined ? [] : addressBadBytes(BigInt(iatSlot), 4, badSet);
     const owner = route ? shortName(route.owner) : "";
     if (!route) {
@@ -3658,7 +3737,11 @@ function bindApi(): OsedApi {
     } else if (route.delta) {
       const delta = route.delta;
       const signed = delta.value > 0x7fffffff ? `- ${dwordHex(-delta.value >>> 0)}` : `+ ${dwordHex(delta.value)}`;
-      out.info(`No module with ASLR disabled imports ${depApi} itself, but ${owner} imports ${delta.dll}!${delta.anchor}, at slot ${dwordHex(route.slot)}. ${depApi} is a fixed distance from it inside ${delta.dll}: ${depApi} = [${dwordHex(route.slot)}] ${signed}, measured now with ${delta.anchor} at ${dwordHex(delta.anchorAt)} and ${depApi} at ${dwordHex(delta.apiAt)}. The chain reads the slot and adds API_DELTA.`);
+      // Three facts, so three lines. As one sentence this was 351 characters: the route to the API is
+      // the hardest thing this command concludes, and a screenshot of it should show the steps apart.
+      out.info(`No module with ASLR disabled imports ${depApi} itself, but ${owner} imports ${delta.dll}!${delta.anchor}, at slot ${dwordHex(route.slot)}.`);
+      out.info(`${depApi} is a fixed distance from it inside ${delta.dll}: ${depApi} = [${dwordHex(route.slot)}] ${signed}, measured now with ${delta.anchor} at ${dwordHex(delta.anchorAt)} and ${depApi} at ${dwordHex(delta.apiAt)}.`);
+      out.info("The chain reads the slot and adds API_DELTA.");
       const others = delta.others.filter((name, i) => delta.others.indexOf(name) === i);
       out.info(delta.why === "only"
         ? `This is the only slot in a module without ASLR that reaches ${depApi} by a distance.`
@@ -3679,33 +3762,13 @@ function bindApi(): OsedApi {
     printBlock(slotBlock(depApi, owner || modulesLabel, iatSlot, badchars as number[], route?.delta).block);
     summary.push({ Section: `[2/${n}] IAT slot`, Result: iatSlot === undefined ? "no route" : `${dwordHex(iatSlot)}${route?.delta ? ` + delta via ${route.delta.anchor}` : ""}${slotBad.length > 0 ? " (bad bytes)" : ""}` });
 
-    // A module that can give no gadget makes the corpus and the picks meaningless, and scanning it costs time.
-    const moduleFailed = blocker !== undefined && (blocker as { layer: Layer }).layer === "module";
     out.section(`[3/${n}] Gadget corpus from ${modulesLabel}`);
-    let scanned: CapabilityIndex | undefined;
-    if (moduleFailed) out.error("Skipped: no module here can give gadgets. See the STOP above.");
-    else if (loadedCorpusCovers(modules, badchars as number[])) {
-      scanned = currentRopCorpus;
-      out.info(`Using the corpus already loaded: a complete live scan of ${modulesLabel} for these bad chars, so scanning again could only find the same gadgets.`);
-    } else {
-      out.echo("rop.scan_live", [modulesArg, badText]);
-      executeRopScanLive(modulesArg, badText);
-      scanned = currentRopCorpus;
-    }
+    for (const line of scan.lines) out.print(line);
     const gadgetCount = scanned?.gadgets.length ?? 0;
     if (!moduleFailed) out.info(`${gadgetCount} gadgets and ${scanned ? summarizeCapabilities(scanned).length : 0} capabilities, every address free of the bad bytes.`);
     printBlock(CORPUS_BLOCK);
     summary.push({ Section: `[3/${n}] corpus`, Result: moduleFailed ? "skipped" : `${gadgetCount} gadgets` });
 
-    // The caves are found here so the [4/7] block can name them; [5/7] prints what this found.
-    const { writable, cave, caveBytes } = frameAddresses(modules, badText, depApi, moduleFailed);
-    // One set of facts about this target, so the jobs, the register choice, the printed recipes and the
-    // loaders all answer to the same numbers.
-    const frameFacts: FrameFacts = { iatSlot, delta: route?.delta?.value, writable, cave, caveBytes };
-
-    const solved = moduleFailed ? undefined
-      : solveStyles(scanned, modules, badchars as number[], exclude, depApi, frameFacts);
-    const style: DepPlanStyle = styleText === "auto" ? (solved ? chooseStyle(solved) : "skeleton") : styleText as DepPlanStyle;
     const corpus = solved?.corpus;
     const otherBlocked = solved ? titles(solved.plans[otherStyle(style)].filter((plan) => !met(plan))) : "";
     out.section(`[4/${n}] The gadget picked per job (${style} style${styleText === "auto" && otherBlocked ? `: the ${otherStyle(style)} style lacks ${otherBlocked}` : ""})`);
@@ -3732,18 +3795,19 @@ function bindApi(): OsedApi {
     if (solved) printBlock(build.blocks[4]);
     summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
 
-    out.section(`[5/${n}] Clean recipes for the constants`);
+    out.section(`[5/${n}] The constants the call needs, and the route to each`);
     if (blocker) out.error(`Skipped: these are the arguments of a ${depApi} call this chain cannot make. See the STOP above.`);
+    // Each constant is one line and the command that builds it by hand. rop.construct's own recipe is
+    // printed only when he asks for it: it targets eax whatever register the frame wants, so running it
+    // here put a clean eax recipe directly above a loader saying the register it needs cannot be reached.
     for (const constant of blocker ? [] : constantsFor(depApi, frameFacts)) {
-      out.info(`${constant.field} = ${dwordHex(constant.value)}`);
+      out.info(`${constant.field} = ${dwordHex(constant.value)}. To build it in a register by hand:`);
       out.echo("rop.construct", ["eax", out.hex(constant.value), badText]);
-      executeRopConstruct("eax", constant.value, badText);
     }
     for (const [label, value] of [["IAT slot", iatSlot], ["API_DELTA", route?.delta?.value]] as Array<[string, number | undefined]>) {
       if (blocker || value === undefined || addressBadBytes(BigInt(value), 4, badSet).length === 0) continue;
-      out.info(`${label} = ${dwordHex(value)}`);
+      out.info(`${label} = ${dwordHex(value)}, which holds a bad byte. To build it in a register by hand:`);
       out.echo("rop.construct", ["eax", out.hex(value), badText]);
-      executeRopConstruct("eax", value, badText);
     }
     if (depApi !== "VirtualAlloc" && !blocker) {
       const field = depApi === "VirtualProtect" ? "lpflOldProtect" : "lpNumberOfBytesWritten";
@@ -3764,10 +3828,9 @@ function bindApi(): OsedApi {
     }
     // One line per loader before the loaders themselves: which gadgets the search chose, in order, and
     // why that route and not a shorter one. Their addresses and disassembly are the [4/7] table, so this
-    // stays a route and never repeats it. The recipes printed above are for eax alone and are a reference
-    // for building each constant by hand; what the chain does to each register is this list.
+    // stays a route and never repeats it. This list is the evidence for the chain.
     if (!blocker && build.routes.length > 0) {
-      out.info(`The recipes above build each constant in eax, as a reference. What the chain does is below: one line per register, searched through ${modulesLabel} rather than following one recipe.`);
+      out.info(`What the chain does, one line per register, each searched through ${modulesLabel} rather than following a recipe:`);
       for (const route of build.routes) out.info(`  ${route}`);
     }
     if (!blocker) printBlock(build.blocks[5]);
@@ -3779,7 +3842,11 @@ function bindApi(): OsedApi {
     } else {
       const frameArgs = style === "pushad" ? [depApi, style] : [depApi];
       out.echo("dep_function", frameArgs);
-      invoke("dep_function", frameArgs);
+      // The pushad map names the register each argument goes in, and that is this section's evidence.
+      // The skeleton frame is Python instead, and broken Python: six names nothing defines, written with
+      // pack where the pasted file uses p32. The block below the separator is the same frame with every
+      // field named and the values this run measured, so the broken copy is not printed at all.
+      if (style === "pushad") invoke("dep_function", frameArgs);
       out[landing.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing.how}.`);
       out[landing.measured ? "info" : "warn"](!landing.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP."
         : landing.gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + landing.gap}: RET_GAP puts ${landing.gap} junk bytes after the first gadget.`);

@@ -47,23 +47,33 @@ describe("the screenshot rule, one check per clause of GOAL.md", () => {
   });
 });
 
-// The baseline: every violation dep_plan prints today on the reproduced Sync Breeze shape, in both
-// styles. It is a ratchet. A new violation turns this red, and so does fixing one, until the fix also
-// takes it off this list. Nothing here is accepted; it is the next iteration's work, written down.
-describe("dep_plan's output against the screenshot rule, as measured on 2026-11-22", () => {
+// dep_plan's whole output against every clause of the rule, on the reproduced Sync Breeze shape, in
+// both styles. This was a ratchet over the violations of 2026-11-22, down to none on 2026-11-23. It
+// stays an exact list rather than a count, so a new violation names itself instead of appearing as a
+// number, and nothing may be added to it without the output being fixed first.
+describe("dep_plan's output against the screenshot rule", () => {
   const { BAD, FORCED, shape } = syncBreeze;
-  const COMMON = ["DEP width", "[1/7] width", "[2/7] width", "[3/7] width", "[4/7] width", "[5/7] height", "[5/7] width",
-    "[5/7] python-above-separator", "Verdict width"];
 
   test("pushad, from the short call with only the bad chars", () => {
     load(shape(), { policy: 2, registry: FORCED }).dep_plan(BAD);
-    // The echo says "auto": the header prints before the style is chosen, so a screenshot of it hides one.
-    expect(rules(text()).sort()).toEqual([...COMMON, "echo echo", "[4/7] height"].sort());
+    expect(rules(text())).toEqual([]);
   });
 
   test("skeleton, named in the long call", () => {
     load(shape({ code: GADGETS }), { policy: 2, registry: FORCED }).dep_plan("VirtualAlloc", "libspp.dll", BAD, "skeleton", 1);
-    // [6/7] prints dep_function's frame with six names nothing defines, above the one built with p32.
-    expect(rules(text()).sort()).toEqual([...COMMON, "[6/7] python-above-separator"].sort());
+    expect(rules(text())).toEqual([]);
+  });
+
+  // A run that never reached a corpus chose no style, so it keeps "auto" rather than writing out the
+  // fallback the rest of the run uses. Writing a choice nobody made is what the echo exists to prevent,
+  // and the rule exempts a stopped run for the same reason. Every module here is based where every
+  // address holds 00, so the module layer stops it before anything is scanned.
+  test("a run stopped at a layer writes no style, and the echo is not a violation", () => {
+    const api = load(shape({ base: 0x00a10000 }), { policy: 2, registry: FORCED });
+    api.dep_plan(BAD);
+    const output = text();
+    expect(output.split("\n").find((line) => line !== "")).toContain('"auto", 1)');
+    expect(output).toContain("=== STOP: ");
+    expect(rules(output).filter((rule) => rule.indexOf("echo") === 0)).toEqual([]);
   });
 });

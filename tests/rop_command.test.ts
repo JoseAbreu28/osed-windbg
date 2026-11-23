@@ -5,6 +5,7 @@ import { createFindMemBytesCommand } from "../src/commands/find_mem_bytes";
 import { createRopCommands } from "../src/commands/rop";
 import { createFindStackBytesCommand } from "../src/commands/find_stack_bytes";
 import { initializeScript } from "../src/index";
+import { unwrap } from "../src/core/output";
 import { buildCapabilityIndexFromRpPlusText, exportCorpus, type CorpusFingerprint } from "../src/rop";
 
 function writeUint16LE(bytes: Uint8Array, offset: number, value: number): void {
@@ -546,7 +547,7 @@ describe("rop_suggest command", () => {
     }).osed;
 
     expect(api.find_mem_bytes(Number(base), 0x200, "43 43 43 43", 10).success).toBe(true);
-    expect(logs.join("")).toContain("Scope: explicit live-memory range only; this can search stack, heap, modules, or any readable region if you provide the correct address and length.");
+    expect(unwrap(logs.join(""))).toContain("Scope: explicit live-memory range only; this can search stack, heap, modules, or any readable region if you provide the correct address and length.");
   });
 
   test("find_mem_bytes scans readable prefixes inside a partially readable range", () => {

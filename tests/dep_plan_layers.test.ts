@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { ReachIndex } from "../src/rop/reach";
 import { spawnSync } from "node:child_process";
 import { measureLanding } from "../src/commands/dep_build";
-import { commands, crashOf, GADGETS, load, logs, syncBreeze, text, without, type Crash, type Module } from "./helpers/fixture_process";
+import { commands, crashOf, GADGETS, load, logs, syncBreeze, prose, text, without, type Crash, type Module } from "./helpers/fixture_process";
 
 // dep_plan from evidence alone: which modules can give gadgets, where the API's address comes from, which
 // style the corpus supports, and whether a chain is needed at all. Each process here is built from real PE
@@ -25,9 +25,10 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   test("one call with only the bad chars reaches the route, the module and the style", () => {
     const api = load(shape(), { policy: 2, registry: FORCED });
     api.dep_plan(BAD);
-    const output = text();
-    // The echoed call names every choice this run made, so pasting it repeats the run.
-    expect(output.split("\n").find((line) => line !== "")).toBe(`=== dx @$osed().dep_plan("VirtualAlloc", "libspp.dll", "${BAD}", "auto", 1) ===`);
+    const output = prose();
+    // The echoed call names every choice this run made, so pasting it repeats the run. The style is the
+    // last choice made, and it is written out: this shape has no capture ESP, so pushad is the only one.
+    expect(output.split("\n").find((line) => line !== "")).toBe(`=== dx @$osed().dep_plan("VirtualAlloc", "libspp.dll", "${BAD}", "pushad", 1) ===`);
     expect(output).toContain("=== DEP is on for syncbrs.exe ===");
     expect(output).toContain("Exploit Protection turns DEP on for syncbrs.exe (MitigationOptions in its Image File Execution Options key), whatever its NX_COMPAT flag says");
     expect(output).toContain("Gadgets come from every module that can give one: libspp.dll. Not usable: syncbrs.exe, every address holds the bad byte(s) 00; libpal.dll, every address holds the bad byte(s) 00; libsync.dll, every address holds the bad byte(s) 00; 1 with ASLR.");
@@ -47,8 +48,9 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
     expect(esi).toMatch(/c\.rop\((MOV_ESI_EAX|ADD_ESI_ECX)\)/);
     expect(esi).not.toContain("hole(");
     expect(esi.slice(esi.lastIndexOf("c.rop"))).toMatch(/now \[IAT_SLOT\] \+ API_DELTA/);
-    // Above the code, one line saying which gadgets were chosen for ESI and why that route.
-    expect(loaders).toContain("What the chain does is below: one line per register, searched through libspp.dll rather than following one recipe.");
+    // Above the code, one line saying which gadgets were chosen for ESI and why that route. The heading
+    // must say the list is the chain's own, because a reader who takes it for a reference stops trusting it.
+    expect(loaders).toMatch(/What the chain does, one line per register, each searched through libspp\.dll/);
     expect(loaders).toMatch(/esi = VirtualAlloc \(\[IAT_SLOT\] \+ API_DELTA\): [A-Z_0-9 ->]*MOV_EAX_MEM_EAX[A-Z_0-9 ->]*\. \d gadgets: the value is the dword at IAT_SLOT, known only at run time/);
     expect(output).toContain("A VirtualAlloc chain from libspp.dll in the pushad style, the API reached from kernel32!GetDriveTypeA by a distance measured on this machine");
     expect(api.last_result().success).toBe(true);
@@ -63,7 +65,7 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   test("no mov into ESI, so the value goes through the stack instead of leaving the register a hole", () => {
     const api = load(shape({ code: [...NO_MOV_ESI, PUSH_POP_ESI] }), { policy: 2, registry: FORCED });
     api.dep_plan("VirtualAlloc", "libspp", BAD, "pushad");
-    const output = text();
+    const output = prose();
     const loaders = section(output, "=== [5/7]");
     const esi = loaders.slice(loaders.indexOf("def load_virtualalloc"), loaders.indexOf("def load_return"));
     expect(esi).not.toContain("hole(");
@@ -83,7 +85,7 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   test("nothing reaches ESI at all: the message names what was searched and the one gadget that would open it", () => {
     const api = load(shape({ code: NO_MOV_ESI }), { policy: 2, registry: FORCED });
     api.dep_plan("VirtualAlloc", "libspp", BAD, "pushad");
-    const output = text();
+    const output = prose();
     const loaders = section(output, "=== [5/7]");
     const esi = loaders.slice(loaders.indexOf("def load_virtualalloc"), loaders.indexOf("def load_return"));
     // Still a hole, because the module really cannot do it. What changes is that the hole says why.
@@ -132,7 +134,7 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
     modules[2] = { ...modules[2], imports: [{ dll: "KERNEL32.dll", symbol: "TerminateProcess", target: K32 + 0x1900 }] };
     const api = load([...modules, odbc32], { policy: 2, registry: FORCED });
     api.dep_plan("VirtualAlloc", "libspp", BAD, "auto", 6);
-    const slot = section(text(), "=== [2/7]");
+    const slot = section(prose(), "=== [2/7]");
     expect(slot).toContain("[+] No module with ASLR disabled imports VirtualAlloc itself, but libspp.dll imports kernel32!GetDriveTypeA, at slot 0x10113200.");
     expect(slot).toContain("[+] Chosen from 2 slots in modules without ASLR that reach VirtualAlloc by a distance: none is free of bad bytes, and this one is in libspp.dll, where the gadgets come from. The other one is in libsync.dll.");
     expect(slot).toContain("[+] ODBC32.dll imports VirtualAlloc itself, but has ASLR: its slot moves on every boot. No slot in a module with ASLR anchors the distance either.");
@@ -145,7 +147,7 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   test("a kernel32 export imported only by a module with ASLR is never offered as the anchor", () => {
     const api = load([...shape({ imports: [{ dll: "MSVCRT.dll", symbol: "memcpy", target: 0x10111121 }] }), odbc32], { policy: 2, registry: FORCED });
     api.dep_plan("VirtualAlloc", "libspp", BAD);
-    const output = text();
+    const output = prose();
     expect(output).toContain("[-] The API layer fails: no module with ASLR disabled imports VirtualAlloc (ODBC32.dll does, and it has ASLR), nor any other export of kernel32 or kernelbase to reach it from by a fixed distance. Its address needs a leak first.");
     expect(output).not.toContain("0x72893");
     expect(output).not.toContain("API_DELTA");
@@ -154,9 +156,9 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   test("asked for the skeleton, it says the method is what fails and names the style that works", () => {
     const api = load(shape(), { policy: 2, registry: FORCED });
     api.dep_plan("VirtualAlloc", "libspp", BAD, "skeleton");
-    const output = text();
+    const output = prose();
     const picks = section(output, "=== [4/7]");
-    expect(picks).toContain("  capture ESP: none in libspp.dll\n      absent from libspp.dll: every byte of libspp.dll searched for the 42 plain encodings of this job, no hit at all");
+    expect(picks).toContain("  capture ESP: none in libspp.dll\n      absent: no hit at all\n      searched: all 42 plain encodings of this job, in every byte of libspp.dll");
     expect(picks).toContain("capture ESP blocks the skeleton style, and the pushad style needs no such gadget: pushad pushes ESP itself.");
     expect(picks).toContain(`In libspp.dll the pushad style has a gadget for every job: dx @$osed().dep_candidates("libspp", "${BAD}", "pushad", "VirtualAlloc")`);
     expect(output).toContain(`No complete VirtualAlloc chain in the skeleton style: libspp.dll has no gadget for capture ESP, so [7/7] holds a hole for each. The pushad style has a gadget for every job: dx @$osed().dep_plan("VirtualAlloc", "libspp", "${BAD}", "pushad", 1)`);
@@ -166,7 +168,7 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   test("nothing fixed imports from kernel32: the API layer fails, in one line, with its reason", () => {
     const api = load(shape({ imports: [{ dll: "MSVCRT.dll", symbol: "memcpy", target: 0x10111121 }] }), { policy: 2, registry: FORCED });
     api.dep_plan(BAD);
-    const output = text();
+    const output = prose();
     const conclusion = "[-] The API layer fails: no module with ASLR disabled imports VirtualAlloc, VirtualProtect, WriteProcessMemory, nor any other export of kernel32 or kernelbase to reach it from by a fixed distance. Its address needs a leak first.";
     expect(output.split(conclusion).length - 1).toBe(2);
     expect(api.last_result().errors).toEqual([conclusion.slice(4)]);
@@ -175,7 +177,7 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   test("no module can give a gadget: the module layer fails, and nothing is scanned", () => {
     const api = load(shape({ base: 0x00a10000 }), { policy: 2, registry: FORCED });
     api.dep_plan(BAD);
-    const output = text();
+    const output = prose();
     expect(output).toContain("[-] The module layer fails: no loaded module can give gadgets: syncbrs.exe (every address holds the bad byte(s) 00), libpal.dll (every address holds the bad byte(s) 00), libsync.dll (every address holds the bad byte(s) 00), libspp.dll (every address holds the bad byte(s) 00), and the rest have ASLR.");
     expect(output).not.toContain("rop.scan_live(");
   });
@@ -188,7 +190,7 @@ describe("dep_plan on a target with nothing at a fixed base", () => {
       { name: "KERNEL32.DLL", base: 0x75310000, aslr: true, nx: true },
     ], { policy: 3 });
     api.dep_plan("00");
-    const output = text();
+    const output = prose();
     const stop = output.slice(output.lastIndexOf("=== STOP"));
     expect(stop).toContain("[-] The module layer fails: no loaded module can give gadgets: every one has ASLR.");
     expect(stop).toContain("[-] The missing piece is a leak: one pointer the target sends back, minus its RVA, is the base of a module with ASLR.");
@@ -208,7 +210,7 @@ describe("dep_plan asks first whether a chain is needed", () => {
   test("DEP off: the stack runs the shellcode, so it hands over jmp esp and skips the chain, visibly", () => {
     const api = load(vuln(false), { policy: 2, registry: ABSENT });
     api.dep_plan("00 0A 0D");
-    const output = text();
+    const output = prose();
     expect(output).toContain("=== DEP is OFF for vuln.exe: no chain needed ===");
     expect(output).toContain("[-] The stack executes: the system policy is OptIn, vuln.exe does not opt in (NX_COMPAT disabled) and no Exploit Protection setting turns DEP on for it.");
     expect(output).toContain('[-] Jump straight to your shellcode: payload = b"A" * OFFSET + p32(0x11111291) + b"\\x90" * 16 + shellcode');
@@ -232,7 +234,7 @@ describe("dep_plan asks first whether a chain is needed", () => {
   ])("NX_COMPAT %s, policy %i: the verdict and its reason", (nx, policy, registry, header, why) => {
     const api = load(vuln(nx), { policy, registry });
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
-    const output = text();
+    const output = prose();
     expect(output).toContain(header);
     expect(output).toContain(why);
     expect(output).toContain("=== [7/7]");
@@ -248,7 +250,7 @@ describe("dep_plan never reports an absence the scan did not settle", () => {
   test("a gadget only at an address holding a bad byte is absent, and the count says why", () => {
     const api = load(module([...without(0x1111), [0x100a, [0x54, 0x5e, 0xc3]]]));
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D", "skeleton");
-    expect(text()).toContain("      absent from libbkup.dll: every byte of libbkup.dll searched for the 42 plain encodings of this job, 1 hit(s), every one at an address holding a bad byte");
+    expect(text()).toContain("      absent: 1 hit(s), every one at an address holding a bad byte\n      searched: all 42 plain encodings of this job, in every byte of libbkup.dll");
   });
 
   test("a gadget the scan never reached is found by searching the module, and used", () => {
@@ -261,7 +263,7 @@ describe("dep_plan never reports an absence the scan did not settle", () => {
     api.dep_plan("VirtualAlloc", "libbkup", bad, "pushad");
     const job = section(text(), "=== [4/7]");
     expect(job).toMatch(/pop edx[^\n]*:\n {2}> 0x22222051 {2}pop edx ; ret/);
-    expect(job).toContain("      the scan had missed it: every byte of libbkup.dll searched for the 2 plain encodings of this job found it");
+    expect(job).toContain("      the scan had missed it, and this search found it\n      searched: all 2 plain encodings of this job, in every byte of libbkup.dll");
   });
 
   test("a complete scan he already ran is used, not thrown away and redone", () => {
@@ -269,7 +271,7 @@ describe("dep_plan never reports an absence the scan did not settle", () => {
     api.rop.scan_live("libbkup", "00 0A 0D");
     logs.length = 0;
     api.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
-    const output = text();
+    const output = prose();
     expect(output).toContain("[+] Using the corpus already loaded: a complete live scan of libbkup.dll for these bad chars");
     expect(output).not.toContain("rop.scan_live(");
     // Other bad chars are another corpus, so that one is scanned.
@@ -295,7 +297,7 @@ describe("palette", () => {
   test("one line per shape, valid Python, each name once, None only where the module has none", () => {
     const api = load(module);
     api.palette("libbkup", "00 0A 0D");
-    const output = text();
+    const output = prose();
     const block = blockOf(output);
     const names: string[] = [];
     for (const line of block) {
