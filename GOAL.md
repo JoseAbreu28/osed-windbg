@@ -65,6 +65,7 @@ iteration, and a change that fixes one must not regress another.
 |---|---|---|
 | `vuln_dep.exe` | `libbkup` | the API is imported directly; skeleton style completes |
 | Sync Breeze 10.0.28 `syncbrs.exe` | `libspp` | no fixed module imports any DEP API; the route is a kernel32 neighbour plus a distance; only one of four fixed modules is usable; pushad is the only viable style |
+| T06 | one exe | no register copy anywhere in the module and no `pushad ; ret` either, so neither stack-frame style can be built: the frame has to be staged at a fixed writable address |
 
 Add a target whenever one teaches a shape the corpus does not already hold. Record what
 shape it adds, not just that it was added.
@@ -204,6 +205,55 @@ What did not move, and why each is a different problem:
 The build is reproducible apart from one stamp: `__OSED_BUILD_TIME__` differs between two builds of
 the same source and nothing else does, five bytes in 1.3 MB. So a published sha256 identifies the
 exact file shipped, not the source it came from.
+
+## Corpus run, 2026-11-23, measured at `ef5d741`
+
+`dist/osed-legacy.js` sha256 `77c7c177e5889d7b7cd5976444226e7921c453f406b6f5629ac802018a3e4e61`. Targets are listed by id; the manifest outside this repo maps each
+id to its lab. The three holdout targets were not run, opened or read. Every class A target was given
+only its bad chars and stage 1.
+
+**Ten of fifteen pass, from eight.** Seven class A targets land the marker and two class B targets refuse
+correctly and name the leak. The two that moved are T05, whose chain was complete at the last run and died
+on a junk dword, and T06, which the last run refused at the method layer and which now takes its target
+with a third chain style.
+
+| Result | Targets |
+|---|---|
+| marker landed | T01, T02, T03, T04, T05, T06, T09, T12 |
+| refused correctly, leak named | T13, T15 |
+| still failing | T07, T08, T10 |
+| not attempted, the target's fault | T11, T14 |
+
+What moved, against the previous run:
+
+| # | Targets | Then | Now |
+|---|---|---|---|
+| 1 | T05 | reached the payload and stopped on `still to fill: virtualprotect_value` | the write gadget is weighed against the frame it has to fill, so the chain carries the field address and the value in registers the corpus can actually load. The chain completed, then died at `0x41414141`: one `COST` row served a gadget used with one value in one place and two in another. A row now counts the gadget's own appetite. The marker lands |
+| 2 | T06 | refused at the method layer: no register copy in the module, and no `pushad ; ret` either, both true | a third style lays the call frame at a fixed writable address, so every field address is a constant the chain pops and no copy is needed. It reached WriteProcessMemory with every argument right and faulted inside the call, because the pivot puts ESP on the frame and the frame sat near the bottom of its writable run. Laid at the top of the run instead, with 0x3DFD bytes under it, the marker lands |
+| 3 | T10 | the harness raised before the tool was asked anything: the marker shellcode generator could not avoid `5e`, the opcode of `pop esi` | `sc_builder` chooses the form of a pop against the bad chars, so T10 is graded. It now finds its executable cave, which it could not while `nSize` was hard coded at 0x210 and the module's largest clean cave is 0x180, and stops on the shellcode's address on the stack |
+| 4 | T11 | refused at the method layer | builds a complete chain in the staged style. Its lab has no measured offset, so the harness still cannot fire it: this is visible only in the replay |
+
+What did not move, and why each is a different problem:
+
+- **T07** still faults at `0x0040126C`, where it faulted before. Its overwrite is a job pointer rather than
+  a saved EIP, so the chain goes where the pointer is. Its own reference also fails on the clone, so target
+  and tool are still not separated. Out of scope by instruction, and unchanged.
+- **T08** no longer refuses. It builds in the staged style and names three holes, and the module owns two of
+  them: its only ESP capture leaves the address in EBP and nothing in it moves EBP anywhere, so no stack
+  address can reach the register the frame is built in. The third is the tool's: its only memory read is
+  `xchg dword [ecx], eax`, which `effectOf` refuses as a transition because it stores through an address
+  the search cannot pin, although the dword it clobbers is the slot the chain has just read.
+- **T10** stops on `lpbuffer_value`, the shellcode's address on the stack. The emitted script works that
+  distance out, so no static search owns it, and subtracted it pops as `0xFFFFFExx` while added it pops as
+  `0x000001xx`, which `00` rules out. The module has `add eax, edx` and no `sub` at all.
+
+The screenshot rule on the 13 real transcripts, scored by the harness with the same module the tests use.
+**Two violations in all, both in `[1/7]` of one target**, where the last run had a height or a width
+violation in nearly every section of every target and a widest line of 368 characters. What is left is the
+module table of the only target with four loaded modules: 60 rows against 40, and 51 lines at up to 135
+columns. It is `modules()`, a listing of every module the process has, printed whole; it is the one
+section whose size follows the target rather than the chain, and it is the next thing to cut. Every other
+section of every other target is inside 40 rows and 130 columns.
 
 ## Known gaps, newest first
 
