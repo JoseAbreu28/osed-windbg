@@ -1311,14 +1311,17 @@ var osed_bundle = (() => {
     return {
       name: "modules",
       description: "Enumerate modules and mitigation states.",
-      usage: "dx @$osed().modules(filter?)",
-      examples: ["dx @$osed().modules()", 'dx @$osed().modules("kernel32")'],
+      usage: "dx @$osed().modules(filter?, fixed?)",
+      examples: ["dx @$osed().modules()", 'dx @$osed().modules("kernel32")', 'dx @$osed().modules("", true)'],
       schema: {
-        filter: { type: "string" }
+        filter: { type: "string" },
+        fixed: { type: "boolean" }
       },
       execute(options) {
         const modules = listModulesWithMitigations(options.filter);
         const pointerSize = getPointerSize();
+        const moving = options.fixed === true ? modules.filter((module) => module.aslr === "enabled") : [];
+        const shown = modules.filter((module) => moving.indexOf(module) < 0);
         section("Modules");
         table([
           { key: "name", header: "Module", width: 20 },
@@ -1328,15 +1331,20 @@ var osed_bundle = (() => {
           { key: "nxcompat", header: "NX_COMPAT", width: 10 },
           { key: "safeseh", header: "SafeSEH", width: 8 },
           { key: "system", header: "System", width: 8 }
-        ], modules.map((module) => ({
-          name: module.name,
-          base: formatAddress(module.base, pointerSize),
-          size: `0x${module.size.toString(16).toUpperCase()}`,
-          aslr: module.aslr,
-          nxcompat: module.nxcompat,
-          safeseh: module.safeseh,
-          system: module.system ? "yes" : "no"
-        })));
+        ], shown.map((module) => {
+          var _a2;
+          return {
+            name: (_a2 = module.name.split("\\").pop()) != null ? _a2 : module.name,
+            base: formatAddress(module.base, pointerSize),
+            size: `0x${module.size.toString(16).toUpperCase()}`,
+            aslr: module.aslr,
+            nxcompat: module.nxcompat,
+            safeseh: module.safeseh,
+            system: module.system ? "yes" : "no"
+          };
+        }));
+        if (moving.length > 0)
+          info(`${moving.length} more with ASLR, not listed: dx @$osed().modules()`);
         whyItMatters("Mitigation triage identifies practical modules for reliable exploitation paths.");
         return {
           command: "modules",
@@ -12305,10 +12313,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-23T03:24:05.485Z" : globalThis[key2];
+        value = true ? "2026-11-23T04:38:58.661Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "68561f1e0889" : globalThis[key2];
+        value = true ? "1d20a0f34707" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14855,6 +14863,7 @@ var osed_bundle = (() => {
     const pushed = {};
     const reads = [];
     const stores = [];
+    const swaps = [];
     let sp = 0;
     let deepest = 0;
     const value = (s) => {
@@ -14947,6 +14956,16 @@ var osed_bundle = (() => {
           return void 0;
         sp -= 4;
         pushed[sp] = v;
+        continue;
+      }
+      if (mnemonic === "xchg" && (dm && typeof dm === "object" && s && isReg(s) || sm && typeof sm === "object" && isReg(d))) {
+        const m = dm && typeof dm === "object" ? dm : sm;
+        const r = dm && typeof dm === "object" ? s : d;
+        if (m.size !== "dword" || m.base === "esp")
+          return void 0;
+        const node = read(m);
+        swaps.push(node.id);
+        set(r, node);
         continue;
       }
       if (dm && typeof dm === "object") {
@@ -15042,6 +15061,8 @@ var osed_bundle = (() => {
       return void 0;
     if (deepest > sp / 4)
       return void 0;
+    if (swaps.length > 0 && (reads.length !== 1 || stores.length > 0))
+      return void 0;
     const writes2 = {};
     written.forEach((r) => {
       const e = regs[r];
@@ -15050,7 +15071,7 @@ var osed_bundle = (() => {
     });
     const retOperand = last.operands[0];
     const retn = retOperand ? (_a2 = imm(retOperand.trim().toLowerCase())) != null ? _a2 : 0 : 0;
-    return { gadget, writes: writes2, reads, stores, slots: Math.max(deepest, sp / 4), retn };
+    return { gadget, writes: writes2, reads, stores, swaps, slots: Math.max(deepest, sp / 4), retn };
   }
   var isLiteral = (text) => /^0x[0-9A-F]{8}$/.test(text);
   var constVal = (k, text) => ({ k: MASK(k), text: text != null ? text : hex5(k) });
@@ -15118,11 +15139,11 @@ var osed_bundle = (() => {
         const out = [];
         if (g.mem && g.k === 0) {
           for (const need of solve(e.a, constVal(g.mem.at, g.mem.text), opts, depth + 1))
-            out.push(join(need, { regs: [], slots: [], pinned: [e.id] }));
+            out.push(join(need, { regs: [], slots: [], pinned: [[e.id, g.mem.at]] }));
         }
         if (opts.scratch && !(g.mem && g.k === 0)) {
           for (const need of solve(e.a, constVal(opts.scratch.at, opts.scratch.text), opts, depth + 1)) {
-            out.push(join(need, { regs: [], slots: [], pinned: [e.id], scratch: g }));
+            out.push(join(need, { regs: [], slots: [], pinned: [[e.id, opts.scratch.at]], scratch: g }));
           }
         }
         return out;
@@ -15489,7 +15510,14 @@ var osed_bundle = (() => {
       }
       const out = [];
       for (const alt of alternatives) {
-        if (effect.reads.some((id) => alt.pinned.indexOf(id) < 0))
+        const pinnedAt = new Map(alt.pinned);
+        if (effect.reads.some((id) => !pinnedAt.has(id)))
+          continue;
+        const clobbers = effect.swaps.map((id) => pinnedAt.get(id));
+        if (clobbers.some((at) => {
+          var _a3, _b;
+          return at !== ((_a3 = opts.scratch) == null ? void 0 : _a3.at) && ((_b = opts.writable) != null ? _b : []).indexOf(at) < 0;
+        }))
           continue;
         const regs = /* @__PURE__ */ new Map();
         node.regs.forEach((v, r) => {
@@ -15532,12 +15560,14 @@ var osed_bundle = (() => {
         const notes = needed.map(([r, v, e]) => e.op === "slot" ? `${r} = ${slots.get(e.i)}` : `${r} = ${show(e, slots)}, now ${describe(v)}`);
         if (storeNote)
           notes.push(storeNote);
+        if (clobbers.length > 0)
+          notes.push("the old value is left in that dword");
         const kind = storeNote ? "store" : needed.length > 0 ? kindOf2(needed[0][2]) : "set";
         const cost = node.cost + 1e3 + clobbered * 10 + stackCost(effect, values.length) + effect.retn + effect.gadget.instructions.length;
         const dense = [];
         for (let i = 0; i < values.length; i += 1)
           dense.push(values[i]);
-        out.push({ regs, scratch, cost, hops: node.hops + 1, prev: node, hop: { gadget: effect.gadget, values: dense, notes, kind, alts } });
+        out.push({ regs, scratch, cost, hops: node.hops + 1, prev: node, hop: { gadget: effect.gadget, values: dense, notes, clobbers, kind, alts } });
       }
       return out;
     }
@@ -15904,13 +15934,16 @@ var osed_bundle = (() => {
     const plan = fieldSetter(plans);
     return (_c = (_a2 = plan == null ? void 0 : plan.pick) == null ? void 0 : _a2.at.dest) != null ? _c : (_b = plan == null ? void 0 : plan.path) == null ? void 0 : _b.to;
   }
-  function rejection(gadget, job, at, live, bound) {
-    var _a2, _b, _c, _d;
+  function rejection(gadget, job, at, live, bound, slotWritable) {
+    var _a2, _b, _c, _d, _e;
     const capability2 = jobCapability(gadget, job);
+    if (job.key === "read" && !slotWritable && /^xchg\b/.test((_a2 = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _a2 : "")) {
+      return "writes the slot as it reads it, and the IAT slot's page is read-only, so it faults";
+    }
     if (job.key === "add") {
       if (job.backwards && (capability2 == null ? void 0 : capability2.kind) === "REGISTER_SUB")
         return "subtracts: the distance to field 1 is negative, so pop it and add";
-      if (!REGISTER.test((_a2 = at.source) != null ? _a2 : ""))
+      if (!REGISTER.test((_b = at.source) != null ? _b : ""))
         return `adds a fixed ${at.source}, not the distance you pop`;
       if (at.source === at.dest)
         return `adds ${at.dest} to itself, which doubles it and adds no distance`;
@@ -15921,11 +15954,11 @@ var osed_bundle = (() => {
       return `copies ${at.source}, but the captured ESP is in ${bound.pointer}`;
     if (job.key === "pivot" && !at.source)
       return "takes ESP from the stack, not from a register";
-    const target = (_b = at.dest) != null ? _b : at.source;
-    if (target && spoilsOwnInput(gadget, (_c = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _c : "", target)) {
+    const target = (_c = at.dest) != null ? _c : at.source;
+    if (target && spoilsOwnInput(gadget, (_d = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _d : "", target)) {
       return `something before it overwrites ${target}, so it works on that instead of the value you gave it`;
     }
-    const extra = memoryWrites(gadget, (_d = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _d : "");
+    const extra = memoryWrites(gadget, (_e = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _e : "");
     if (job.key !== "write" && extra.length > 0)
       return `also writes memory at ${extra[0]}`;
     const written = writtenRegisters(gadget);
@@ -15975,7 +16008,7 @@ var osed_bundle = (() => {
     }
     return out;
   }
-  function planJobs(index, style, exclude = [], api = "VirtualAlloc", copiedTo, preferred = {}) {
+  function planJobs(index, style, exclude = [], api = "VirtualAlloc", copiedTo, preferred = {}, slotWritable = false) {
     var _a2, _b, _c, _d, _e;
     const jobs = jobsFor(style, api);
     const bound = {};
@@ -15993,7 +16026,7 @@ var osed_bundle = (() => {
         const uncontrolled = dereferencedRegisters(gadget, own2).filter((register2) => controlled.indexOf(register2) < 0);
         const far2 = movesStackFar(gadget, job);
         const note = (uncontrolled.length > 0 ? `; reads through ${uncontrolled.join(", ")}, which nothing in the chain has pointed anywhere yet` : "") + (far2 ? `; 0x${((_d2 = stackMove(gadget)) != null ? _d2 : 0).toString(16)} bytes of stack, all junk` : "");
-        const rejected = rejection(gadget, job, at, live, bound);
+        const rejected = rejection(gadget, job, at, live, bound, slotWritable);
         if (rejected)
           return { gadget, at, usable: false, far: far2, uncontrolled, leads, reason: rejected };
         const needed = moves(job, at, bound);
@@ -16030,15 +16063,15 @@ var osed_bundle = (() => {
     if (writeAt && setter && preferred[setter.job.key] === void 0 && setter.pick && setter.pick.at.dest !== writeAt) {
       const better = setter.verdicts.filter((verdict) => verdict.usable && verdict.at.dest === writeAt)[0];
       if (better)
-        return planJobs(index, style, exclude, api, copiedTo, __spreadProps(__spreadValues({}, preferred), { [setter.job.key]: gadgetAddress(better.gadget) }));
+        return planJobs(index, style, exclude, api, copiedTo, __spreadProps(__spreadValues({}, preferred), { [setter.job.key]: gadgetAddress(better.gadget) }), slotWritable);
     }
     const done = withPaths(plans, index, exclude);
     const copied = (_e = (_d = fieldSetter(done)) == null ? void 0 : _d.path) == null ? void 0 : _e.to;
-    return copied && copied !== copiedTo ? withPaths(planJobs(index, style, exclude, api, copied, preferred), index, exclude) : done;
+    return copied && copied !== copiedTo ? withPaths(planJobs(index, style, exclude, api, copied, preferred, slotWritable), index, exclude) : done;
   }
   function planWrites(index, exclude, api, facts, badchars, style = "skeleton") {
     var _a2, _b;
-    const base = planJobs(index, style, exclude, api);
+    const base = planJobs(index, style, exclude, api, void 0, {}, facts.slotWritable);
     const goals = FRAMES[api].map((slot) => frameGoal(slot, facts)).filter((goal) => goal !== void 0);
     const write2 = base.filter((plan) => plan.job.key === "write")[0];
     const capture2 = base.filter((plan) => plan.job.key === "capture")[0];
@@ -16061,19 +16094,20 @@ var osed_bundle = (() => {
     const search = new ReachIndex(index.gadgets.filter((gadget) => exclude.indexOf(gadgetAddress(gadget)) < 0 && !movesEsp(gadget)));
     const clean2 = (value) => [0, 8, 16, 24].every((shift) => badchars.indexOf(value >>> shift & 255) < 0);
     const scratch = facts.writable !== void 0 && clean2(facts.writable) ? { at: facts.writable, text: "WRITABLE" } : void 0;
+    const writable = facts.slotWritable && facts.iatSlot !== void 0 ? [facts.iatSlot] : [];
     const answers = {};
     const reaches = (register2, goal, keep) => {
       var _a3, _b2;
       const key2 = `${register2}|${(_b2 = (_a3 = goal.mem) == null ? void 0 : _a3.at) != null ? _b2 : ""}|${goal.k}|${keep.join(",")}`;
       if (answers[key2] === void 0) {
-        answers[key2] = REGS2.indexOf(register2) >= 0 && isPath(search.reach(register2, goal, { bad: badchars, keep, scratch }));
+        answers[key2] = REGS2.indexOf(register2) >= 0 && isPath(search.reach(register2, goal, { bad: badchars, keep, scratch, writable }));
       }
       return answers[key2];
     };
     const tried = pairs3.map((candidate) => {
       var _a3, _b2, _c;
       const address = gadgetAddress(candidate.gadget);
-      const plans2 = candidate === write2.pick ? base : planJobs(index, style, exclude, api, void 0, { write: address });
+      const plans2 = candidate === write2.pick ? base : planJobs(index, style, exclude, api, void 0, { write: address }, facts.slotWritable);
       const chosen = (_a3 = plans2.filter((plan) => plan.job.key === "write")[0]) == null ? void 0 : _a3.pick;
       const field = (_b2 = fieldRegister(plans2)) != null ? _b2 : "";
       const value = (_c = chosen == null ? void 0 : chosen.at.source) != null ? _c : "";
@@ -16088,7 +16122,7 @@ var osed_bundle = (() => {
       };
     });
     const best = tried.slice().sort((a, b) => a.unmet - b.unmet || b.filled - a.filled || tried.indexOf(a) - tried.indexOf(b))[0];
-    const plans = best.address === gadgetAddress((_b = (_a2 = write2.pick) == null ? void 0 : _a2.gadget) != null ? _b : pairs3[0].gadget) ? base : planJobs(index, style, exclude, api, void 0, { write: best.address });
+    const plans = best.address === gadgetAddress((_b = (_a2 = write2.pick) == null ? void 0 : _a2.gadget) != null ? _b : pairs3[0].gadget) ? base : planJobs(index, style, exclude, api, void 0, { write: best.address }, facts.slotWritable);
     return { plans, tried };
   }
   function withPaths(plans, index, exclude) {
@@ -16193,8 +16227,12 @@ var osed_bundle = (() => {
     const keep = live.length > 0 ? ` (keep ${live.map((entry) => ROLE_NAMES[entry.role] ? `${entry.register} = ${ROLE_NAMES[entry.role]}` : entry.register).join(", ")})` : "";
     const at = pick2 ? verdicts.indexOf(pick2) : verdicts.length;
     const above = verdicts.slice(0, at);
-    const row = (verdict, mark) => `  ${mark} ${hex325(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}  ${sideEffects(verdict.gadget, job)}`;
-    const line = (verdict, mark, label) => [row(verdict, mark), `      ${label}: ${verdict.reason}`];
+    const row = (verdict, mark) => {
+      const head = `  ${mark} ${hex325(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}`;
+      const effects = sideEffects(verdict.gadget, job);
+      return `${head}  ${effects}`.length <= SCREEN.columns ? [`${head}  ${effects}`] : [head.trimEnd(), `      ${effects}`];
+    };
+    const line = (verdict, mark, label) => [...row(verdict, mark), `      ${label}: ${verdict.reason}`];
     const rejected = (verdict) => {
       const label = verdict.usable ? "usable" : "no";
       const one2 = `    ${hex325(gadgetAddress(verdict.gadget))}  ${sequence(verdict.gadget).padEnd(40)}  ${label}: ${verdict.reason}`;
@@ -16214,8 +16252,10 @@ var osed_bundle = (() => {
     }
     if (!pick2 && plan.path) {
       lines.push(`    ${pathText(plan.path)}`);
-    } else if (!pick2)
+    } else if (!pick2 && live.length > 0)
       lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
+    else if (!pick2)
+      lines.push(`    none of the ${verdicts.length} is usable`);
     return lines;
   }
   var REGS3 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
@@ -16409,7 +16449,7 @@ var osed_bundle = (() => {
     ] } };
   }
   function buildExploit(input) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
     const { api, style, index, badchars } = input;
     const stages = [];
     const nextStage = () => {
@@ -16506,6 +16546,7 @@ var osed_bundle = (() => {
     };
     const badSpaced = badchars.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
     const reachIndex = new ReachIndex(gadgets);
+    const slotWritable = input.slotWritable && input.iatSlot !== void 0 ? [input.iatSlot] : [];
     const scratch = input.writable !== void 0 && isClean(input.writable, badchars) ? { at: input.writable, text: "WRITABLE" } : void 0;
     const unlockShapes = (register2) => [
       `pop ${register2}`,
@@ -16560,7 +16601,7 @@ ${fix}`
       var _a3, _b2;
       const key2 = `${register2}|${(_b2 = (_a3 = goal.mem) == null ? void 0 : _a3.at) != null ? _b2 : ""}|${goal.k}|${goal.text}|${keep.slice().sort().join(",")}`;
       if (!answers[key2])
-        answers[key2] = reachIndex.reach(register2, goal, { bad: badchars, keep, scratch });
+        answers[key2] = reachIndex.reach(register2, goal, { bad: badchars, keep, scratch, writable: slotWritable });
       return answers[key2];
     };
     const walk = (register2, goal, name, result3) => {
@@ -16633,7 +16674,7 @@ ${fix}`
     };
     const lone = () => rankCandidates(gadgets.filter((gadget) => gadget.instructions.length === 1 && gadget.instructions[0].mnemonic === "ret" && gadget.instructions[0].operands.length === 0))[0];
     const skipper = () => rankCandidates(gadgets.filter((gadget) => !movesEsp(gadget) && extraPops(gadget, 0) === 3 && lastRetN(gadget) === 0 && memoryWrites(gadget, "").length === 0))[0];
-    const facts = { iatSlot: input.iatSlot, delta: (_f = input.delta) == null ? void 0 : _f.value, writable: input.writable, cave: input.cave, caveBytes: input.caveBytes };
+    const facts = { iatSlot: input.iatSlot, slotWritable: input.slotWritable, delta: (_f = input.delta) == null ? void 0 : _f.value, writable: input.writable, cave: input.cave, caveBytes: input.caveBytes };
     const goalOf = (slot2) => {
       switch (slot2.source.kind) {
         case "ropnop": {
@@ -16683,21 +16724,30 @@ ${fix}`
       const capability2 = gadget.capabilities.filter((cap) => cap.kind === "REGISTER_NEGATE" && cap.register === register2)[0];
       return capability2 !== void 0 && capability2.evidence[0] === ((_a3 = gadget.instructions[0]) == null ? void 0 : _a3.normalizedText) && usable(gadget, keep, [register2]);
     })))[0];
-    const sledOps = (register2, keep) => {
+    const cheapest = (found) => found.filter((route) => route !== void 0).sort((a, b) => a.sled.rank - b.sled.rank)[0];
+    const sledOps = (register2, keep, base) => {
       const math = arithmetic(register2, keep);
       if (!math)
         return void 0;
-      const sendable = (negated2) => negated2 || badchars.indexOf(0) < 0;
+      const at = "len(c) + 1 + c.skip // 4";
       const pop = { call: math.pop, values: [computed("0")], note: `${math.by} = the distance to the NOPs, patched below` };
-      if (sendable(math.sub))
-        return { ops: [pop, { call: math.op, values: [] }], negated: math.sub };
+      const op5 = { call: math.op, values: [] };
+      if (math.sub || badchars.indexOf(0) < 0)
+        return { ops: [{ line: `c.patches.append(((${at},), ${base}, ${math.sub ? "True" : "False"}))` }, pop, op5], negated: math.sub, how: `${math.sub ? "sub" : "add"} the distance`, rank: 0 };
       const flip = negateGadget(math.by, keep.concat(register2));
-      if (!flip)
-        return void 0;
-      return { ops: [pop, { call: entry(flip, `negate the distance`), values: [] }, { call: math.op, values: [] }], negated: !math.sub };
+      if (flip) {
+        return { ops: [{ line: `c.patches.append(((${at},), ${base}, True))` }, pop, { call: entry(flip, `negate the distance`), values: [] }, op5], negated: true, how: "pop the distance negated, negate it and add it", rank: 1 };
+      }
+      const half = { call: math.pop, values: [computed("0")], note: `${math.by} = one of two dwords that add up to the distance, patched below` };
+      return {
+        ops: [{ line: `part = ${at}` }, half, op5, { line: `c.patches.append(((part, ${at}), ${base}, False))` }, half, op5],
+        negated: false,
+        how: "add the distance as two dwords free of bad chars",
+        rank: 2
+      };
     };
     const load = (slot2, register2, keep) => {
-      var _a3;
+      var _a3, _b2, _c2;
       const source = slot2.source;
       const missing = (why) => hole(`${ident(slot2.name)}_value`, why);
       const to = (goal, why) => {
@@ -16740,54 +16790,68 @@ ${fix}`
           ];
         }
         case "shellcode": {
-          if (style === "staged") {
-            if (!capture2)
-              return missing(`no gadget captures ESP in ${input.module}: see [4/7]`);
-            const from = (_a3 = capture2.at.dest) != null ? _a3 : "";
-            const route = [from, ...REGISTERS3.filter((r) => r !== from && keep.indexOf(r) < 0)].map((at) => {
+          const recapture = () => {
+            var _a4;
+            if (!capture2 || writtenRegisters(capture2.gadget).some((r) => keep.indexOf(r) >= 0))
+              return void 0;
+            const from = (_a4 = capture2.at.dest) != null ? _a4 : "";
+            const route = cheapest([from, ...REGISTERS3.filter((r) => r !== from && keep.indexOf(r) < 0)].map((at) => {
               const there = moveOps(from, at, keep);
-              const sled = there ? sledOps(at, keep) : void 0;
+              const sled = there ? sledOps(at, keep, "OFFSET + 4 * here") : void 0;
               const back = sled ? moveOps(at, register2, keep) : void 0;
               return there && sled && back ? { there, sled, back } : void 0;
-            }).filter((found) => found !== void 0)[0];
-            if (!route) {
-              return missing(`no register takes the captured ESP out of ${from} and a distance onto it: the shellcode's address
-is ESP plus a few hundred bytes, so this needs an add or a sub whose distance the chain can send, and
-the chain can only send it negated while 00 is a bad char: dx @$osed().palette("${input.module}", "${badSpaced}")`);
-            }
-            sledSub = route.sled.negated;
-            say(register2, slot2.name, "the captured ESP plus a distance", `capture ESP, then ${route.sled.negated ? "sub" : "add"} the distance the script patches below`, `the captured ESP plus the distance to the NOPs`);
+            }));
+            if (!route)
+              return void 0;
+            say(register2, slot2.name, "the captured ESP plus a distance", `capture ESP, then ${route.sled.how}, which the script patches below`, `the captured ESP plus the distance to the NOPs`);
             return [
               { line: `here = len(c) + 1 + c.skip // 4     # ${from} = the address of this chain dword` },
               { call: entry(capture2.gadget, "capture ESP"), values: [] },
               ...route.there,
-              { line: "c.patches.append((len(c) + 1 + c.skip // 4, here))" },
               ...route.sled.ops,
               ...route.back
             ];
+          };
+          const unreached = `no register takes the captured ESP out of ${(_a3 = capture2 == null ? void 0 : capture2.at.dest) != null ? _a3 : "a register"} and a distance onto it: the shellcode's address
+is ESP plus a few hundred bytes, so this needs an add or a sub of a register the chain can pop into: dx @$osed().palette("${input.module}", "${badSpaced}")`;
+          if (style === "staged") {
+            if (!capture2)
+              return missing(`no gadget captures ESP in ${input.module}: see [4/7]`);
+            return (_b2 = recapture()) != null ? _b2 : missing(unreached);
           }
-          const via = [register2, ...REGISTERS3.filter((r) => r !== register2 && keep.indexOf(r) < 0)].map((at) => {
-            const math2 = arithmetic(at, keep);
-            const there = math2 && (math2.sub || badchars.indexOf(0) < 0) ? moveOps(field, at, keep) : void 0;
-            const back = there ? moveOps(at, register2, keep) : void 0;
-            return math2 && there && back ? { math: math2, there, back } : void 0;
-          }).filter((found) => found !== void 0)[0];
-          if (style === "skeleton" && via) {
-            sledSub = via.math.sub;
-            return [...via.there, { line: "c.patches.append((len(c) + 1 + c.skip // 4, field))" }, { call: via.math.pop, values: [computed("0")] }, { call: via.math.op, values: [] }, ...via.back];
+          if (style !== "skeleton") {
+            return missing(`the shellcode's address on the stack, so this dword needs a write before the pushad: bp ${pick2("pushad") ? hex6(gadgetAddress(pick2("pushad").gadget)) : "<pushad gadget>"} ; g ; s -b esp L400${" 90".repeat(16)}`);
           }
-          const math = arithmetic(register2, keep);
-          const move = moveOps(field, register2, keep);
-          if (style !== "skeleton" || !math || !move) {
-            return missing(style === "skeleton" ? `no gadget adds a popped distance to ${register2}` : `the shellcode's address on the stack, so this dword needs a write before the pushad: bp ${pick2("pushad") ? hex6(gadgetAddress(pick2("pushad").gadget)) : "<pushad gadget>"} ; g ; s -b esp L400${" 90".repeat(16)}`);
-          }
-          if (!math.sub && badchars.indexOf(0) >= 0)
-            return missing(`no sub into ${register2}: the shellcode is a few hundred bytes up the stack, so an add would pop 00 bytes`);
-          return [...move, { line: "c.patches.append((len(c) + 1 + c.skip // 4, field))" }, { call: math.pop, values: [computed("0")] }, { call: math.op, values: [] }];
+          const fieldBase = `FRAME_AT + 4 * (field - 1)${writeOffset ? ` - ${hex6(writeOffset)}` : ""}`;
+          const via = cheapest([register2, ...REGISTERS3.filter((r) => r !== register2 && keep.indexOf(r) < 0)].map((at) => {
+            const there = moveOps(field, at, keep);
+            const sled = there ? sledOps(at, keep, fieldBase) : void 0;
+            const back = sled ? moveOps(at, register2, keep) : void 0;
+            return there && sled && back ? { there, sled, back } : void 0;
+          }));
+          if (via)
+            return [...via.there, ...via.sled.ops, ...via.back];
+          return (_c2 = recapture()) != null ? _c2 : missing(`no gadget adds a popped distance to ${register2} or to a register that can hand it over, either from the field address in ${field} or from a second capture of ESP`);
         }
       }
     };
-    let sledSub;
+    const SLED = [
+      { line: "chain_end = OFFSET + 4 * len(c)" },
+      { line: "def to_sled(base, gap, negated):    # what the pops need, so the value lands on the NOPs" },
+      { line: "    distance = chain_end + gap - base" },
+      { line: "    return neg(distance) if negated else distance" },
+      { line: "def parts(v, n):                    # n dwords free of bad chars that add up to v" },
+      { line: "    if n == 1: return [v] if clean(v) else None" },
+      { line: "    for a in range(0x01010101, 0x100000000, 0x01010101):" },
+      { line: "        if clean(a) and clean(v - a): return [a, (v - a) & 0xFFFFFFFF]" },
+      { line: "gap = 0x40" },
+      { line: "while not all(parts(to_sled(b, gap, n), len(ats)) for ats, b, n in c.patches):" },
+      { line: "    gap += 1" },
+      { line: '    if gap > 0x1000: hole("a distance to the sled that holds no bad char")' },
+      { line: "for ats, b, n in c.patches:" },
+      { line: "    words = parts(to_sled(b, gap, n), len(ats))" },
+      { line: "    for i in range(len(ats)): c[ats[i]] = words[i]" }
+    ];
     const loaders = [];
     const defineLoader = (slot2, register2, keep) => {
       const fn = `load_${ident(slot2.name)}`;
@@ -16882,14 +16946,13 @@ the chain can only send it negated while 00 is a bad char: dx @$osed().palette("
           chain.push(...hole("pivot_value", why != null ? why : `no way to move the field address into ${target}`));
         }
         chain.push({ call: entry(pivot.gadget, "pivot ESP onto field 1"), values: [] });
-        const sub = sledSub != null ? sledSub : ((_m = arithmetic(valueRegister, [field])) == null ? void 0 : _m.sub) !== false;
-        chain.push({ line: "" }, group("the shellcode address, into the fields the loaders marked"), { line: "chain_end = OFFSET + 4 * len(c)" }, { line: `def to_sled(field, gap):        # what the pop before the ${sub ? "sub" : "add"} needs, so the value lands on the NOPs` }, { line: `    distance = chain_end + gap - (FRAME_AT + 4 * (field - 1)${writeOffset ? ` - ${hex6(writeOffset)}` : ""})` }, { line: `    return ${sub ? "neg(distance)" : "distance"}` }, { line: "gap = 0x40" }, { line: "while not all(clean(to_sled(f, gap)) for _, f in c.patches):" }, { line: "    gap += 1" }, { line: '    if gap > 0x1000: hole("a distance to the sled that holds no bad char")' }, { line: "for at, f in c.patches: c[at] = to_sled(f, gap)" }, { line: "" }, { line: 'payload  = PAD * FRAME_AT + frame + b"".join(p32(w) for w in c)' }, { line: "payload += PAD * gap + nops + shellcode" });
+        chain.push({ line: "" }, group("the shellcode address, into the fields the loaders marked"), ...SLED, { line: "" }, { line: 'payload  = PAD * FRAME_AT + frame + b"".join(p32(w) for w in c)' }, { line: "payload += PAD * gap + nops + shellcode" });
       }
     } else if (style === "staged") {
       const frame = FRAMES[api];
       const staging = input.staging;
       const span = 4 * frame.length;
-      const addrRegister = (_n = write2 == null ? void 0 : write2.at.address) != null ? _n : "";
+      const addrRegister = (_m = write2 == null ? void 0 : write2.at.address) != null ? _m : "";
       frameBlock = staging === void 0 ? [] : [
         `STAGING = ${hex6(staging)}      # the frame is laid here: ${span} writable bytes in ${input.module}`,
         ...frame.map((slot2, i) => `#   ${stagingText(4 * i).padEnd(22)}${slot2.name}${i === 0 ? "   <- the pivot's ret enters the call here" : ""}`),
@@ -16923,13 +16986,13 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
           routes.push(`${addrRegister} = each field address: ${route}. ${frame.length} constants, ${stagingText(-writeOffset)} to ${stagingText(span - 4 - writeOffset)}`);
         }
         const pops = popsAfterPivot(pivot.gadget);
-        const target = (_o = pivot.at.source) != null ? _o : "";
+        const target = (_n = pivot.at.source) != null ? _n : "";
         chain.push(group("pivot: ESP onto the frame"));
         chain.push({ line: `# ${target} = ${stagingText(-4 * pops)}, so the ret after the pivot lands on field 1` });
         const pivotOps = reachOps(target, constVal(staging - 4 * pops >>> 0, stagingText(-4 * pops)), [], "the pivot");
         chain.push(..."missing" in pivotOps ? hole("pivot_value", pivotOps.missing) : pivotOps);
         chain.push({ call: entry(pivot.gadget, "pivot ESP onto the frame"), values: [] });
-        chain.push({ line: "" }, group("the shellcode address, into the slot the loader marked"), { line: `def to_sled(here, gap):        # what the pop before the ${sledSub ? "sub" : "add"} needs, so the value lands on the NOPs` }, { line: "    distance = 4 * (len(c) - here) + gap" }, { line: `    return ${sledSub ? "neg(distance)" : "distance"}` }, { line: "gap = 0x40" }, { line: "while not all(clean(to_sled(h, gap)) for _, h in c.patches):" }, { line: "    gap += 1" }, { line: '    if gap > 0x1000: hole("a distance to the sled that holds no bad char")' }, { line: "for at, h in c.patches: c[at] = to_sled(h, gap)" }, { line: "" }, { line: 'payload  = PAD * OFFSET + b"".join(p32(w) for w in c)' }, { line: "payload += PAD * gap + nops + shellcode" });
+        chain.push({ line: "" }, group("the shellcode address, into the slot the loader marked"), ...SLED, { line: "" }, { line: 'payload  = PAD * OFFSET + b"".join(p32(w) for w in c)' }, { line: "payload += PAD * gap + nops + shellcode" });
       }
     } else {
       let slots = PUSHAD_FRAMES[api].slice();
@@ -16958,7 +17021,7 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
       const dispatch = pick2("pushad");
       chain.push(group("the seven registers, in the order [6/7] fixes"));
       for (const fn of order)
-        chain.push({ line: `# ${(_p = briefs[fn]) != null ? _p : fn}` });
+        chain.push({ line: `# ${(_o = briefs[fn]) != null ? _o : fn}` });
       chain.push({ line: "for load in PUSHAD_ORDER: load(c)" });
       chain.push(group("dispatch: pushad writes the whole frame at once"));
       if (dispatch && sequence(dispatch.gadget) !== "pushad ; ret") {
@@ -28040,6 +28103,7 @@ ${INDENT}`)]);
         }))
       };
     };
+    const slotWritable = (slot) => slot !== void 0 && memoryRegion(__bi(slot)).writable === true;
     const solveStyles = (scanned, modules, badchars, exclude, depApi, facts = {}, stagingFor = () => void 0) => {
       const api2 = depApi != null ? depApi : "VirtualAlloc";
       const span = 4 * FRAMES[api2].length;
@@ -28048,7 +28112,7 @@ ${INDENT}`)]);
         return {
           plans: {
             skeleton: skeleton.plans,
-            pushad: planJobs(index, "pushad", exclude, depApi),
+            pushad: planJobs(index, "pushad", exclude, depApi, void 0, {}, facts.slotWritable),
             staged: planWrites(index, exclude, api2, facts, badchars, "staged").plans
           },
           tried: skeleton.tried
@@ -28200,7 +28264,7 @@ ${INDENT}`)]);
       const scanned = loadedCorpusCovers(modules, badchars) ? currentRopCorpus : mergeCapabilityIndexes(discoverLiveIndexes(modules, { badchars }).indexes);
       const route = routeFor(depApi, modules, badchars, gadgetModules(new Set(badchars)).filter((entry) => entry.info.aslr === "disabled").map((entry) => entry.label));
       const addresses = frameAddresses(modules, badText, depApi);
-      const solved = solveStyles(scanned, modules, badchars, [], depApi, { iatSlot: route == null ? void 0 : route.slot, delta: (_a2 = route == null ? void 0 : route.delta) == null ? void 0 : _a2.value, writable: addresses.writable, cave: addresses.cave }, addresses.stagingFor);
+      const solved = solveStyles(scanned, modules, badchars, [], depApi, { iatSlot: route == null ? void 0 : route.slot, slotWritable: slotWritable(route == null ? void 0 : route.slot), delta: (_a2 = route == null ? void 0 : route.delta) == null ? void 0 : _a2.value, writable: addresses.writable, cave: addresses.cave }, addresses.stagingFor);
       if (styleText === "staged" && solved.styles.indexOf("staged") < 0)
         for (const line of solved.unavailable)
           warn(line);
@@ -28304,8 +28368,11 @@ ${INDENT}`)]);
       };
       if (!autoApi && !requestedApi)
         return fail3(`api must be one of ${DEP_PLAN_APIS.join(", ")}, or "" to let the tool choose.`);
-      if (styleText !== "auto" && !DEP_PLAN_STYLES.includes(styleText))
-        return fail3(`style must be one of ${DEP_PLAN_STYLES.join(", ")}, or "auto".`);
+      if (styleText !== "auto" && styleText !== "none" && !DEP_PLAN_STYLES.includes(styleText)) {
+        return fail3(`style must be one of ${DEP_PLAN_STYLES.join(", ")}, "auto", or "none" for a process without DEP.`);
+      }
+      if (styleText === "none" && anyway)
+        return fail3('style "none" builds no chain, and anyway asks for one: pass "auto" with anyway.');
       if (!Number.isFinite(stage) || stage < 1)
         return fail3("firstStage must be the number of the next free payloadN() in your file, 1 or more.");
       if (exclude.some((address) => !Number.isFinite(address) || address === 0))
@@ -28337,6 +28404,9 @@ ${INDENT}`)]);
         ...force ? [true] : []
       ];
       const dep = depVerdict();
+      if (styleText === "none" && dep.enforced !== false) {
+        return fail3(`style "none" is the answer for a process without DEP, and ${dep.name} ${dep.enforced ? "has DEP on" : "may have it"}: pass "auto" to build the chain.`);
+      }
       const buildsChain = dep.enforced !== false || anyway;
       const moduleFailed = chosen.length === 0 || chosen.some((entry) => entry.why !== void 0);
       const scan = capture(() => {
@@ -28357,11 +28427,12 @@ ${INDENT}`)]);
       const scanned = scan.value;
       const iatSlot = route == null ? void 0 : route.slot;
       const { writable, cave, caveBytes, stagingFor, roomBelow } = frameAddresses(modules, badText, depApi, moduleFailed);
-      const frameFacts = { iatSlot, delta: (_d = route == null ? void 0 : route.delta) == null ? void 0 : _d.value, writable, cave, caveBytes };
+      const frameFacts = { iatSlot, slotWritable: slotWritable(iatSlot), delta: (_d = route == null ? void 0 : route.delta) == null ? void 0 : _d.value, writable, cave, caveBytes };
       const solved = moduleFailed || !buildsChain ? void 0 : solveStyles(scanned, modules, badchars, exclude, depApi, frameFacts, stagingFor);
       const staging = solved == null ? void 0 : solved.staging;
-      const style = styleText === "auto" ? solved ? chooseStyle(solved) : "skeleton" : styleText;
-      section(dxCall("dep_plan", callArgs(solved ? style : styleText, anyway)));
+      const style = styleText === "auto" || styleText === "none" ? solved ? chooseStyle(solved) : "skeleton" : styleText;
+      const noChain = dep.enforced === false && !anyway;
+      section(dxCall("dep_plan", callArgs(solved ? style : noChain ? "none" : styleText, anyway)));
       const n = DEP_PLAN_SECTIONS;
       const summary = [];
       const SEPARATOR = COPY_SEPARATOR;
@@ -28387,7 +28458,7 @@ ${INDENT}`)]);
         }
         error(jumps.length > 0 ? `Jump straight to your shellcode: payload = b"A" * OFFSET + p32(${hex325(jumps[0])}) + b"\\x90" * 16 + shellcode    (${hex325(jumps[0])} is jmp esp, no bad byte)` : `No jmp esp without a bad byte in ${modulesLabel}. dx @$osed().find_bytes("", "FF E4", 20, "${badText}") searches every module.`);
         if (!anyway) {
-          error(`The chain sections are skipped: they solve a problem this process does not have. To build the chain anyway, as an exercise: ${dxCall("dep_plan", callArgs(styleText, true))}`);
+          error(`The chain sections are skipped: they solve a problem this process does not have. To build the chain anyway, as an exercise: ${dxCall("dep_plan", callArgs(styleText === "none" ? "auto" : styleText, true))}`);
           setResult({ command: "dep_plan", args: { badchars: badText }, success: true, findings: [{ dep: "off", why: dep.why, jmpEsp: jumps[0] }], warnings: [], errors: [] });
           return toDxResult("DEP Plan", [{ Section: "DEP", Result: `off: ${dep.why}` }]);
         }
@@ -28416,8 +28487,8 @@ ${INDENT}`)]);
       ];
       const usableNext = () => usable.length > 0 ? [`Next: dx @$osed().dep_plan(${JSON.stringify(badText)})    builds from the modules that can give gadgets: ${usable.map((entry) => entry.label).join(", ")}.`] : [];
       section(`[1/${n}] Module protections for ${modulesLabel}`);
-      echo("modules", named2.length === 1 ? [named2[0]] : []);
-      invoke("modules", named2.length === 1 ? [named2[0]] : []);
+      echo("modules", named2.length === 1 ? [named2[0]] : ["", true]);
+      invoke("modules", named2.length === 1 ? [named2[0]] : ["", true]);
       const moduleWarnings = [];
       for (const entry of chosen) {
         const info2 = entry.info;
@@ -28522,6 +28593,7 @@ ${INDENT}`)]);
         index: corpus,
         plans,
         iatSlot,
+        slotWritable: frameFacts.slotWritable,
         delta: route == null ? void 0 : route.delta,
         writable,
         cave,
@@ -28948,7 +29020,7 @@ ${INDENT}`)]);
       case "findmsp":
         return { patternLength: args[0], stackBytes: args[1], probeBytes: args[2] };
       case "modules":
-        return { filter: args[0] };
+        return { filter: args[0], fixed: args[1] };
       case "code_caves":
         return { module: args[0], minSize: args[1], maxResults: args[2], badChars: args[3], capability: args[4] };
       case "math":
