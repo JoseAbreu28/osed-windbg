@@ -3243,19 +3243,18 @@ function bindApi(): OsedApi {
   const frameAddresses = (modules: string[], badText: string, depApi: DepApi, moduleFailed = false): { writable?: number; cave?: number; caveBytes?: number; caveWritable?: boolean | null; stagingFor: StagingFor; roomBelow: () => number | undefined } => {
     const bad = (parseHexByteList(badText) || []) as number[];
     let stagingBelow: number | undefined;
-    // Clean address first, then the largest. A cave whose own address holds a bad char is usable only from
-    // some dword inside it, and what made the run look like a cave need not hold that far in: on T06 the
-    // largest was a 0x1000 byte padding run whose shifted address took the chain into the module's first
-    // instructions. Among caves the chain can pop as they are, the largest, because how many bytes the
-    // copy may move is the size of the cave it lands in.
     // What WriteProcessMemory copies over, once the cave is known. Every other address the frame needs is
     // then taken clear of it; `clearOfCopy` says why that matters.
     let copied: { at: number; size: number } | undefined;
     const clearOf = (at: number, size: number): boolean => clearOfCopy(at, size, copied);
-    // Among caves the chain can pop as they are, a writable one before a wider read-only one: a shellcode
-    // that decodes itself writes over its own bytes, and msfvenom emits that form for most bad char sets.
-    // The tie-break sits under the clean-address rule, so a shifted writable cave never displaces a clean
-    // read-only one; nothing then changes for a plain shellcode, which runs in either.
+    // The order the sort reads in. Clean address first: a cave whose own address holds a bad char is
+    // usable only from some dword inside it, and what made the run look like a cave need not hold that
+    // far in: on T06 the largest was a 0x1000 byte padding run whose shifted address took the chain into
+    // the module's first instructions. Then writable before read-only, because a shellcode that decodes
+    // itself writes over its own bytes and msfvenom emits that form for most bad char sets; this sits
+    // under the clean-address rule, so a shifted writable cave never displaces a clean read-only one and
+    // nothing changes for a plain shellcode, which runs in either. Then the largest, because how many
+    // bytes the copy may move is the size of the cave it lands in.
     const pickCave = (minSize: number, capability: string): { address: number; size: number; writable: boolean | null } | undefined => {
       const shifted = (cave: { addrSafe: boolean | null }): number => (cave.addrSafe !== false ? 0 : 1);
       const readOnly = (cave: { writable: boolean | null }): number => (cave.writable === true ? 0 : 1);
