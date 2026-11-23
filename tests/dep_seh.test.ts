@@ -121,7 +121,11 @@ describe("a crash that looks like an SEH delivery and cannot be one", () => {
     expect(frame).toContain("The overflow reached an SEH record as well: EIP 0x00401010 is in vuln.exe");
     expect(frame).toContain("No handler lands between the faulting ESP 0x0019E3F4 and the record, so the chain goes on the saved EIP instead.");
     expect(frame).toContain("one gadget that adds between 0x4F4 and 0xD00 to ESP and returns");
-    expect(frame).toContain("ESP after the crashing ret");
+    // EIP is inside vuln.exe: the crash is a fault, so no ret ran and no ret gap or crash re-run is offered.
+    expect(frame).toContain("No return gap to read: EIP 0x00401010 faulted inside vuln.exe, so no ret ran. RET_GAP is assumed 0, a plain ret.");
+    expect(frame).toContain("If the function the overflow returns from ends in ret N, set RET_GAP = N.");
+    expect(frame).not.toMatch(/crashing ret|Run dep_plan at the crash|dds esp-10/);
+    expect(section(output, "=== [6/7]")).toContain("# not measured, the crash is a fault in vuln.exe, not a ret: assumed 0, a plain ret");
     // There is no seh_pivot in the file on this path, so nothing says how one would choose.
     expect(frame).not.toContain("seh_pivot takes the lowest landing");
     expect(section(prose(), "=== Verdict")).not.toContain("delivered through the SEH handler");

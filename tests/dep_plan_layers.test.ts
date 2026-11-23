@@ -420,6 +420,21 @@ describe("dep_plan builds what it sends", () => {
     for (const bad of BAD) expect(sent.indexOf(bad), `${style}: 0x${bad.toString(16)} at ${sent.indexOf(bad)}`).toBe(-1);
   });
 
+  // The block he pastes and photographs is a claim about the chain: a gadget it names is one the chain calls.
+  test.each(["skeleton", "pushad"])("every gadget the %s style's [4/7] block names is called, and so is every name COST holds", (style) => {
+    const all = blocks(plan(style));
+    const at = all.findIndex((block) => block.some((line) => line.startsWith("COST = {")));
+    const gadgets = all[at];
+    const code = all.slice(at + 1).flat().map((line) => line.split("#")[0]).join("\n");
+    const named = gadgets.map((line) => /^([A-Z][A-Z0-9_]*)\s*= 0x[0-9A-F]{8}/.exec(line)?.[1]).filter((name): name is string => !!name);
+    expect(named.length, style).toBeGreaterThan(0);
+    // Called, or sent as a value the way `c.rop(POP_EDI, RET)` sends a ROP NOP.
+    const calls = code.split("\n").filter((line) => line.includes("c.rop("));
+    for (const name of named) expect(calls.some((line) => new RegExp(`\\b${name}\\b`).test(line)), `${style}: ${name}`).toBe(true);
+    const dict = gadgets.join("\n");
+    for (const name of dict.slice(dict.indexOf("COST = {")).match(/\b[A-Z][A-Z0-9_]+(?=:)/g) ?? []) expect(named, `${style}: COST ${name}`).toContain(name);
+  });
+
   test("the skeleton pivot's distance is built when the pop would send a bad byte", () => {
     const pivot = section(plan("skeleton"), "=== [7/7]");
     expect(pivot).not.toMatch(/c\.rop\(POP_ECX, 0x00000014\)|neg\(-20\)/);
@@ -460,6 +475,18 @@ describe("dep_plan builds what it sends", () => {
     flat.stack.bytes.fill(0x41);
     expect(measureLanding(0x41414141, flat.esp, stack(flat))).toMatchObject({ gap: 0, measured: false });
     expect(measureLanding(undefined, undefined, () => undefined).how).toContain("not measured, no registers to read");
+    // A fault inside a module is no ret, even when a call just before it left that EIP below ESP.
+    const faulted = crashOf(516, 4);
+    const inModule = measureLanding(faulted.eip, faulted.esp, stack(faulted), "vuln.exe");
+    expect(inModule).toMatchObject({ gap: 0, measured: false });
+    expect(inModule.line).toBe(`No return gap to read: EIP 0x${faulted.eip.toString(16).toUpperCase().padStart(8, "0")} faulted inside vuln.exe, so no ret ran. RET_GAP is assumed 0, a plain ret.`);
+    // Each advice line asks only for something the reader can still do from where the line says the run is.
+    const gone = crashOf(516, 0);
+    gone.stack.bytes.fill(0x43);
+    expect(measureLanding(gone.eip, gone.esp, stack(gone)).line).toContain("is not on the stack below ESP, so no ret popped it");
+    for (const read of [inModule, measureLanding(gone.eip, gone.esp, stack(gone))]) expect(read.advice).toBe("If the function the overflow returns from ends in ret N, set RET_GAP = N.");
+    expect(measureLanding(0x41414141, flat.esp, stack(flat)).advice).toContain("repeats that dword");
+    expect(measureLanding(undefined, undefined, () => undefined).advice).toContain("Run dep_plan at the crash");
   });
 
   // T10's shape: the field address sits in ecx and the only way out of it is `xchg eax, ecx`, which takes

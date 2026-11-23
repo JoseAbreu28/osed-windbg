@@ -3951,10 +3951,11 @@ function bindApi(): OsedApi {
     // Where ESP landed after the crashing ret, read off the stack now, while it is the crash: a `ret 4`
     // puts the chain's second dword one further on, and nothing in the crash input says so but this.
     const regs = readRegisters(4);
+    const eipAt = regs.ip === undefined ? undefined : findModuleByAddress(BigInt(Number(regs.ip) >>> 0));
     const landing = measureLanding(regs.ip === undefined ? undefined : Number(regs.ip) >>> 0, regs.sp === undefined ? undefined : Number(regs.sp) >>> 0, (address) => {
       const bytes = tryReadMemory(BigInt(address), 4);
       return bytes && bytes.length === 4 ? (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24)) >>> 0 : undefined;
-    });
+    }, eipAt ? shortName(eipAt.name) : undefined);
     // An SEH crash is read now too, and measured last of all: measuring lets the exception through once.
     //
     // Looking like an SEH crash is not the same as being delivered through one. Any overflow long enough
@@ -4041,9 +4042,8 @@ function bindApi(): OsedApi {
       // The skeleton lays its call frame under the chain; the other two keep nothing below it.
       if (seh) printSehDelivery(seh, sehCrash!, delivery.kind === "seh", style === "skeleton" ? 4 * FRAMES[depApi].length : 0, style);
       if (delivery.kind !== "seh") {
-        out[landing.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing.how}.`);
-        out[landing.measured ? "info" : "warn"](!landing.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP."
-          : landing.gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + landing.gap}: RET_GAP puts ${landing.gap} junk bytes after the first gadget.`);
+        out[landing.measured ? "info" : "warn"](landing.line);
+        out[landing.measured ? "info" : "warn"](landing.advice);
       }
       printBlock(build.blocks[6]);
     }
