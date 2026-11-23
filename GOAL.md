@@ -257,7 +257,7 @@ section of every other target is inside 40 rows and 130 columns.
 
 ## Corpus run, 2026-11-23, measured at `2038a47`
 
-`dist/osed-legacy.js` sha256 `1e914b42d519975984619edb3c4b767fab907d6c708e8c0d9cd2225f4e97cdc2` (the file the
+`dist/osed-legacy.js` sha256 `1e914b42d519975984619edb3c4b767fab907d6c708e8c0d9cd2225f4e97cdc2 (the file the corpus ran against). The build shipped to the VMs and to Notion is bfe1a9df88b8340bab898df7f0dc65e533a4cde648c04db940e76de9be6742b0, rebuilt by the parent from the same committed source and verified by it; the two differ only in the build stamp` (the file the
 corpus ran against), on the lab clone. The three holdout targets were not run, opened or read. Every class A target
 was given only its bad chars and stage 1. A run at `482ab7a` gave the same eleven passes and one width violation,
 which `2038a47` fixes; this table is the second run.
