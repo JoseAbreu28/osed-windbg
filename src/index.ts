@@ -3903,7 +3903,12 @@ function bindApi(): OsedApi {
     }
     printBlock(HELPER_BLOCK);
     const unusable = chosen.find((entry) => entry.why !== undefined);
-    if (chosen.length === 0) {
+    if (candidates.length === 0) {
+      // No candidates at all is not "every one has ASLR": nothing was weighed. The debugger listed no
+      // module for this process, which it does when the attach caught it before the loader ran or after
+      // it died, so the sentence has to say that it is the session's view and not a fact about the target.
+      stop("module", `This session lists no loaded module for the process, so nothing was searched and no conclusion about the target follows. That is what a debugger shows when the attach caught the process before its loader ran, or after it died. Check with dx @$osed().modules() and attach again.`);
+    } else if (chosen.length === 0) {
       const fixedOut = candidates.filter((entry) => entry.info.aslr !== "enabled");
       stop("module", `no loaded module can give gadgets: ${fixedOut.length > 0 ? fixedOut.map((entry) => `${entry.label} (${entry.why})`).join(", ") : "every one has ASLR"}${fixedOut.length > 0 ? ", and the rest have ASLR" : ""}.`,
         ...(candidates.some((entry) => entry.info.aslr === "enabled") ? leakNext() : []));

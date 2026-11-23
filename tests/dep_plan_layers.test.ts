@@ -207,6 +207,22 @@ describe("dep_plan, reproduced Sync Breeze shape", () => {
   });
 });
 
+describe("dep_plan when the session lists no module at all", () => {
+  // A debugger that lists nothing has weighed nothing, so a reason naming ASLR is a claim about the
+  // target made from an empty set. It happened on the clone: an attach that caught the process at the
+  // wrong moment printed "every one has ASLR" beside "Not usable: 0 with ASLR".
+  test("the refusal says the session listed nothing, and blames neither ASLR nor the bad chars", () => {
+    const api = load([], { policy: 3 });
+    api.dep_plan("00");
+    const output = prose();
+    const stop = output.slice(output.lastIndexOf("=== STOP"));
+    expect(stop).toContain("This session lists no loaded module for the process");
+    expect(stop).toContain("dx @$osed().modules()");
+    expect(stop).not.toContain("every one has ASLR");
+    expect(stop).not.toContain("The missing piece is a leak");
+  });
+});
+
 describe("dep_plan on a target with nothing at a fixed base", () => {
   test("the refusal names the leak as the missing piece and the command that starts it", () => {
     const api = load([
