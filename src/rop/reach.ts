@@ -26,6 +26,8 @@ export type Effect = {
   /** Ids of the mem nodes the gadget reads. Each must be one the search pinned to an address. */
   reads: number[];
   stores: Array<{ at: Expr; value: Expr }>;
+  /** Reads whose dword the same instruction overwrites, as `xchg dword [ecx], eax` does. */
+  swaps: number[];
   /** Dwords the gadget takes from the chain after itself, before its ret. */
   slots: number;
   retn: number;
@@ -44,6 +46,8 @@ export type Hop = {
   values: Array<{ value: number; text: string } | undefined>;
   /** What the gadget does to the registers the load needs, and what they hold after it. */
   notes: string[];
+  /** Addresses the gadget overwrites after reading them. */
+  clobbers: number[];
   kind: string;
   /** Same effect, ranked lower. Each is a drop-in for this hop and nothing else in the path moves. */
   alts: Alternative[];
@@ -60,6 +64,8 @@ export type ReachOptions = {
   keep: string[];
   /** A writable dword without bad bytes, for the route through memory. */
   scratch?: { at: number; text: string };
+  /** Addresses other than the scratch dword that the run showed writable. A swap reads only from these. */
+  writable?: number[];
   maxHops?: number;
   maxNodes?: number;
 };
@@ -151,6 +157,7 @@ export function effectOf(gadget: RopGadget): Effect | undefined {
   const pushed: Record<number, Expr> = {};
   const reads: number[] = [];
   const stores: Array<{ at: Expr; value: Expr }> = [];
+  const swaps: number[] = [];
   let sp = 0;
   let deepest = 0;
   const value = (s: string): Expr | undefined => {
@@ -230,6 +237,18 @@ export function effectOf(gadget: RopGadget): Effect | undefined {
       pushed[sp] = v;
       continue;
     }
+    // `xchg dword [ecx], eax` reads the dword into eax and leaves the old eax in its place. That is a
+    // read when the chain pinned the address and the dword is writable, and the chain never needs it
+    // again, so it counts as one only when it is the gadget's sole memory access.
+    if (mnemonic === "xchg" && ((dm && typeof dm === "object" && s && isReg(s)) || (sm && typeof sm === "object" && isReg(d)))) {
+      const m = (dm && typeof dm === "object" ? dm : sm) as { base: string; off: number; size: string };
+      const r = (dm && typeof dm === "object" ? s : d) as Reg;
+      if (m.size !== "dword" || m.base === "esp") return undefined;
+      const node = read(m) as Expr & { id: number };
+      swaps.push(node.id);
+      set(r, node);
+      continue;
+    }
     if (dm && typeof dm === "object") {
       // A write to memory. Only a dword store of a register or constant is a transition, and the search
       // decides whether its address is the scratch dword. Anything else writes somewhere nobody chose.
@@ -291,6 +310,7 @@ export function effectOf(gadget: RopGadget): Effect | undefined {
   // `mov eax, [esp] ; ret` reads the dword the ret then jumps to: taking it as a value the chain supplies
   // would load the register correctly and send execution to that value. It is not a transition.
   if (deepest > sp / 4) return undefined;
+  if (swaps.length > 0 && (reads.length !== 1 || stores.length > 0)) return undefined;
   const writes: Partial<Record<Reg, Expr>> = {};
   written.forEach((r) => {
     const e = regs[r];
@@ -298,7 +318,7 @@ export function effectOf(gadget: RopGadget): Effect | undefined {
   });
   const retOperand = last.operands[0];
   const retn = retOperand ? (imm(retOperand.trim().toLowerCase()) ?? 0) : 0;
-  return { gadget, writes, reads, stores, slots: Math.max(deepest, sp / 4), retn };
+  return { gadget, writes, reads, stores, swaps, slots: Math.max(deepest, sp / 4), retn };
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -341,7 +361,8 @@ function cleanPairs(c: number, combine: (c: number, x: number) => number, bad: n
 // ---------------------------------------------------------------------------------------------------------
 // Regression: what must hold before a gadget so that `e` equals `g` after it.
 
-type Need = { regs: Array<[Reg, Val]>; slots: Array<[number, number, string]>; pinned: number[]; scratch?: Val; fail?: boolean };
+/** `pinned` holds each read the need fixes, as its mem node id and the address it must read. */
+type Need = { regs: Array<[Reg, Val]>; slots: Array<[number, number, string]>; pinned: Array<[number, number]>; scratch?: Val; fail?: boolean };
 
 const join = (a: Need, b: Need): Need => ({
   regs: a.regs.concat(b.regs), slots: a.slots.concat(b.slots), pinned: a.pinned.concat(b.pinned),
@@ -361,11 +382,11 @@ function solve(e: Expr, g: Val, opts: ReachOptions, depth = 0): Need[] {
     case "mem": {
       const out: Need[] = [];
       if (g.mem && g.k === 0) {
-        for (const need of solve(e.a, constVal(g.mem.at, g.mem.text), opts, depth + 1)) out.push(join(need, { regs: [], slots: [], pinned: [e.id] }));
+        for (const need of solve(e.a, constVal(g.mem.at, g.mem.text), opts, depth + 1)) out.push(join(need, { regs: [], slots: [], pinned: [[e.id, g.mem.at]] }));
       }
       if (opts.scratch && !(g.mem && g.k === 0)) {
         for (const need of solve(e.a, constVal(opts.scratch.at, opts.scratch.text), opts, depth + 1)) {
-          out.push(join(need, { regs: [], slots: [], pinned: [e.id], scratch: g }));
+          out.push(join(need, { regs: [], slots: [], pinned: [[e.id, opts.scratch.at]], scratch: g }));
         }
       }
       return out;
@@ -683,7 +704,10 @@ export class ReachIndex {
     }
     const out: Node[] = [];
     for (const alt of alternatives) {
-      if (effect.reads.some((id) => alt.pinned.indexOf(id) < 0)) continue;
+      const pinnedAt = new Map(alt.pinned);
+      if (effect.reads.some((id) => !pinnedAt.has(id))) continue;
+      const clobbers = effect.swaps.map((id) => pinnedAt.get(id) as number);
+      if (clobbers.some((at) => at !== opts.scratch?.at && (opts.writable ?? []).indexOf(at) < 0)) continue;
       const regs = new Map<Reg, Val>();
       node.regs.forEach((v, r) => { if (!effect.writes[r]) regs.set(r, v); });
       let ok = true;
@@ -709,6 +733,7 @@ export class ReachIndex {
       }
       const notes = needed.map(([r, v, e]) => (e.op === "slot" ? `${r} = ${slots.get(e.i)}` : `${r} = ${show(e, slots)}, now ${describe(v)}`));
       if (storeNote) notes.push(storeNote);
+      if (clobbers.length > 0) notes.push("the old value is left in that dword");
       const kind = storeNote ? "store" : needed.length > 0 ? kindOf(needed[0][2]) : "set";
       const cost = node.cost + 1000 + clobbered * 10 + stackCost(effect, values.length) + effect.retn + effect.gadget.instructions.length;
       // `values` was filled by slot index, so a gadget that wants its value in its second dword leaves the
@@ -716,7 +741,7 @@ export class ReachIndex {
       // the pasted file then fails to parse, so the gaps are made explicit before the hop carries them.
       const dense: Array<{ value: number; text: string } | undefined> = [];
       for (let i = 0; i < values.length; i += 1) dense.push(values[i]);
-      out.push({ regs, scratch, cost, hops: node.hops + 1, prev: node, hop: { gadget: effect.gadget, values: dense, notes, kind, alts } });
+      out.push({ regs, scratch, cost, hops: node.hops + 1, prev: node, hop: { gadget: effect.gadget, values: dense, notes, clobbers, kind, alts } });
     }
     return out;
   }

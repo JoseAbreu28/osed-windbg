@@ -218,3 +218,23 @@ describe("where a staged frame can be laid", () => {
     expect(stagedPops("VirtualProtect", 0, 0)).toEqual([0, 4, 8, 0xc, 0x10, 0x14, 0]);
   });
 });
+
+// T08's only memory read is `xchg dword [ecx], eax`. It reads the IAT slot and writes the old eax back in
+// the same instruction, and on the clone that slot's page is PAGE_READONLY, so the read faults. The job
+// list and the value search have to give the same answer about it, and the answer turns on the page.
+describe("a read that writes back is a read only where the slot is writable", () => {
+  const SWAP_ONLY = NO_COPY.map((line) => (line === "mov eax, dword [eax] ; ret" ? "xchg dword [ecx], eax ; ret" : line));
+  const read = (slotWritable: boolean) =>
+    planWrites(corpus(...SWAP_ONLY), [], "WriteProcessMemory", { iatSlot: IAT_SLOT, slotWritable, writable: 0x11224444, cave: 0x11114444 }, BAD, "staged")
+      .plans.filter((plan) => plan.job.key === "read")[0];
+
+  test("a read-only slot leaves the read job open, with the reason on the screen", () => {
+    const plan = read(false);
+    expect(met(plan)).toBe(false);
+    expect(plan.verdicts[0].reason).toContain("read-only");
+  });
+
+  test("a writable slot lets the same gadget do it", () => {
+    expect(read(true).pick && sequence(read(true).pick!.gadget)).toBe("xchg dword [ecx], eax ; ret");
+  });
+});

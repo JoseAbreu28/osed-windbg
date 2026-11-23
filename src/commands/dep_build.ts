@@ -62,6 +62,7 @@ export type BuildInput = {
   /** Gadget addresses the chain must not use, from the exclude argument. */
   exclude: number[];
   iatSlot?: number;
+  slotWritable?: boolean;
   /** Set when no fixed module imports the API itself: the slot holds another export of the same DLL,
    * and the API is that pointer plus this distance. */
   delta?: Delta;
@@ -359,6 +360,7 @@ export function buildExploit(input: BuildInput): Build {
 
   // One search per load. The scratch dword lets a value go through memory when no register route exists.
   const reachIndex = new ReachIndex(gadgets);
+  const slotWritable = input.slotWritable && input.iatSlot !== undefined ? [input.iatSlot] : [];
   const scratch = input.writable !== undefined && isClean(input.writable, badchars) ? { at: input.writable, text: "WRITABLE" } : undefined;
 
   // The gadget shapes the unreachable sentence tries, one at a time, to name the single one that would
@@ -434,7 +436,7 @@ export function buildExploit(input: BuildInput): Build {
   const answers: Record<string, Path | Unreached> = {};
   const reachPath = (register: string, goal: Val, keep: string[]): Path | Unreached => {
     const key = `${register}|${goal.mem?.at ?? ""}|${goal.k}|${goal.text}|${keep.slice().sort().join(",")}`;
-    if (!answers[key]) answers[key] = reachIndex.reach(register as Reg, goal, { bad: badchars, keep, scratch });
+    if (!answers[key]) answers[key] = reachIndex.reach(register as Reg, goal, { bad: badchars, keep, scratch, writable: slotWritable });
     return answers[key];
   };
 
@@ -527,7 +529,7 @@ export function buildExploit(input: BuildInput): Build {
   // other slot's goal comes from `frameGoal`, the same function the method layer weighs a write gadget
   // with, so the value a loader searches for and the value the choice of register was made against
   // cannot differ.
-  const facts: FrameFacts = { iatSlot: input.iatSlot, delta: input.delta?.value, writable: input.writable, cave: input.cave, caveBytes: input.caveBytes };
+  const facts: FrameFacts = { iatSlot: input.iatSlot, slotWritable: input.slotWritable, delta: input.delta?.value, writable: input.writable, cave: input.cave, caveBytes: input.caveBytes };
   const goalOf = (slot: Slot): Val | undefined => {
     switch (slot.source.kind) {
       case "ropnop": { const ret = lone(); return ret ? constVal(gadgetAddress(ret), "RET") : undefined; }

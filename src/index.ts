@@ -71,6 +71,7 @@ import { DxResult, toDxResult } from "./core/dx_result";
 import { executeDebuggerCommand, getPointerSize, tryReadMemory } from "./core/memory";
 import { findHelpEntry, helpRows } from "./core/help_catalog";
 import { createMemoryCommand } from "./commands/memory";
+import { memoryRegion } from "./analysis/memory";
 import { createLandingCommand, landingDxRows } from "./commands/landing";
 import { createMathCommand } from "./commands/math";
 import { createVersionCommand } from "./commands/version";
@@ -3324,6 +3325,7 @@ function bindApi(): OsedApi {
     corpus: CapabilityIndex | undefined; plans: Record<DepPlanStyle, JobPlan[]>; settled: Record<string, Settled>;
     tried: WriteTrial[]; styles: DepPlanStyle[]; unavailable: string[]; staging?: number;
   };
+  const slotWritable = (slot: number | undefined): boolean => slot !== undefined && memoryRegion(BigInt(slot)).writable === true;
   const solveStyles = (scanned: CapabilityIndex | undefined, modules: string[], badchars: number[], exclude: number[], depApi?: DepApi, facts: FrameFacts = {}, stagingFor: StagingFor = () => undefined): Solved => {
     const api = depApi ?? "VirtualAlloc";
     const span = 4 * FRAMES[api].length;
@@ -3335,7 +3337,7 @@ function bindApi(): OsedApi {
       return {
         plans: {
           skeleton: skeleton.plans,
-          pushad: planJobs(index, "pushad", exclude, depApi),
+          pushad: planJobs(index, "pushad", exclude, depApi, undefined, {}, facts.slotWritable),
           staged: planWrites(index, exclude, api, facts, badchars, "staged").plans,
         },
         tried: skeleton.tried,
@@ -3534,7 +3536,7 @@ function bindApi(): OsedApi {
     const route = routeFor(depApi, modules, badchars as number[], gadgetModules(new Set(badchars as number[])).filter((entry) => entry.info.aslr === "disabled").map((entry) => entry.label));
     const addresses = frameAddresses(modules, badText, depApi);
     const solved = solveStyles(scanned, modules, badchars as number[], [], depApi,
-      { iatSlot: route?.slot, delta: route?.delta?.value, writable: addresses.writable, cave: addresses.cave }, addresses.stagingFor);
+      { iatSlot: route?.slot, slotWritable: slotWritable(route?.slot), delta: route?.delta?.value, writable: addresses.writable, cave: addresses.cave }, addresses.stagingFor);
     if (styleText === "staged" && solved.styles.indexOf("staged") < 0) for (const line of solved.unavailable) out.warn(line);
     const style = styleText === "auto" ? chooseStyle(solved) : styleText as DepPlanStyle;
     const { plans, missing } = printDepCandidates(solved, modules, new Set(badchars as number[]), style, depApi);
@@ -3693,7 +3695,7 @@ function bindApi(): OsedApi {
     // found and [4/7]'s block names them.
     const iatSlot = route?.slot;
     const { writable, cave, caveBytes, stagingFor, roomBelow } = frameAddresses(modules, badText, depApi, moduleFailed);
-    const frameFacts: FrameFacts = { iatSlot, delta: route?.delta?.value, writable, cave, caveBytes };
+    const frameFacts: FrameFacts = { iatSlot, slotWritable: slotWritable(iatSlot), delta: route?.delta?.value, writable, cave, caveBytes };
     // Where a staged frame can go depends on the write and pivot gadgets, so solveStyles settles it while
     // it solves and hands the base back.
     const solved = moduleFailed || !buildsChain ? undefined
@@ -3872,7 +3874,7 @@ function bindApi(): OsedApi {
     // The loaders search the corpus without the excluded gadgets, so one cannot come back under another name.
     const build = buildExploit({
       api: depApi, style, module: modulesLabel, badchars: badchars as number[], index: corpus, plans,
-      iatSlot, delta: route?.delta, writable, cave, caveBytes, staging, jmpEsp, stage, exclude, landing,
+      iatSlot, slotWritable: frameFacts.slotWritable, delta: route?.delta, writable, cave, caveBytes, staging, jmpEsp, stage, exclude, landing,
     });
     if (solved) printBlock(build.blocks[4]);
     summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });

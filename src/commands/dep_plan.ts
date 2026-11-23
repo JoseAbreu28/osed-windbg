@@ -357,8 +357,11 @@ export function fieldRegister(plans: JobPlan[]): string | undefined {
 }
 
 // Rejections no register move can fix: the gadget destroys a value the chain still needs, or it cannot do the job.
-function rejection(gadget: RopGadget, job: Job, at: Ports, live: Array<{ role: Role; register: string }>, bound: Partial<Record<Role, string>>): string | undefined {
+function rejection(gadget: RopGadget, job: Job, at: Ports, live: Array<{ role: Role; register: string }>, bound: Partial<Record<Role, string>>, slotWritable: boolean): string | undefined {
   const capability = jobCapability(gadget, job);
+  if (job.key === "read" && !slotWritable && /^xchg\b/.test(capability?.evidence[0] ?? "")) {
+    return "writes the slot as it reads it, and the IAT slot's page is read-only, so it faults";
+  }
   if (job.key === "add") {
     // A staged chain's distance runs forward, to the shellcode, and says nothing here: whether its own
     // sign can be sent depends on a negate of the distance register, which is a question about the
@@ -429,7 +432,7 @@ function moves(job: Job, at: Ports, bound: Partial<Record<Role, string>>): strin
 // Walk the jobs in chain order. Each pick binds the role it sets to its register; later jobs must keep
 // that register and read their inputs from it. The pick is the first candidate in the old ranking that
 // does both, else the first that keeps every live register and only needs a move first.
-export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle, exclude: number[] = [], api: DepApi = "VirtualAlloc", copiedTo?: string, preferred: Record<string, number> = {}): JobPlan[] {
+export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle, exclude: number[] = [], api: DepApi = "VirtualAlloc", copiedTo?: string, preferred: Record<string, number> = {}, slotWritable = false): JobPlan[] {
   const jobs = jobsFor(style, api);
   const bound: Partial<Record<Role, string>> = {};
   const firstField = fieldSetter(jobs.map((job) => ({ job })))?.job;
@@ -451,7 +454,7 @@ export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle
       const note = (uncontrolled.length > 0
         ? `; reads through ${uncontrolled.join(", ")}, which nothing in the chain has pointed anywhere yet`
         : "") + (far ? `; 0x${(stackMove(gadget) ?? 0).toString(16)} bytes of stack, all junk` : "");
-      const rejected = rejection(gadget, job, at, live, bound);
+      const rejected = rejection(gadget, job, at, live, bound, slotWritable);
       if (rejected) return { gadget, at, usable: false, far, uncontrolled, leads, reason: rejected };
       const needed = moves(job, at, bound);
       if (needed.length > 0) {
@@ -495,13 +498,13 @@ export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle
   const setter = fieldSetter(plans);
   if (writeAt && setter && preferred[setter.job.key] === undefined && setter.pick && setter.pick.at.dest !== writeAt) {
     const better = setter.verdicts.filter((verdict) => verdict.usable && verdict.at.dest === writeAt)[0];
-    if (better) return planJobs(index, style, exclude, api, copiedTo, { ...preferred, [setter.job.key]: gadgetAddress(better.gadget) });
+    if (better) return planJobs(index, style, exclude, api, copiedTo, { ...preferred, [setter.job.key]: gadgetAddress(better.gadget) }, slotWritable);
   }
   const done = withPaths(plans, index, exclude);
   const copied = fieldSetter(done)?.path?.to;
   // The jobs after the field setter were picked not knowing where the field address is. Now that the
   // path says, they are picked again keeping it, once.
-  return copied && copied !== copiedTo ? withPaths(planJobs(index, style, exclude, api, copied, preferred), index, exclude) : done;
+  return copied && copied !== copiedTo ? withPaths(planJobs(index, style, exclude, api, copied, preferred, slotWritable), index, exclude) : done;
 }
 
 /** One write candidate weighed against the frame: where it takes its two operands, and how many of the
@@ -534,7 +537,7 @@ export function planWrites(
   badchars: number[],
   style: DepPlanStyle = "skeleton",
 ): { plans: JobPlan[]; tried: WriteTrial[] } {
-  const base = planJobs(index, style, exclude, api);
+  const base = planJobs(index, style, exclude, api, undefined, {}, facts.slotWritable);
   const goals = FRAMES[api].map((slot) => frameGoal(slot, facts)).filter((goal): goal is Val => goal !== undefined);
   const write = base.filter((plan) => plan.job.key === "write")[0];
   // The capture is the first job and nothing is bound when it is picked, so no choice of write register
@@ -562,19 +565,20 @@ export function planWrites(
   const search = new ReachIndex(index.gadgets.filter((gadget) => exclude.indexOf(gadgetAddress(gadget)) < 0 && !movesEsp(gadget)));
   const clean = (value: number): boolean => [0, 8, 16, 24].every((shift) => badchars.indexOf((value >>> shift) & 0xff) < 0);
   const scratch = facts.writable !== undefined && clean(facts.writable) ? { at: facts.writable, text: "WRITABLE" } : undefined;
+  const writable = facts.slotWritable && facts.iatSlot !== undefined ? [facts.iatSlot] : [];
   const answers: Record<string, boolean> = {};
   const reaches = (register: string, goal: Val, keep: string[]): boolean => {
     const key = `${register}|${goal.mem?.at ?? ""}|${goal.k}|${keep.join(",")}`;
     if (answers[key] === undefined) {
       answers[key] = (REACH_REGS as string[]).indexOf(register) >= 0
-        && isPath(search.reach(register as Reg, goal, { bad: badchars, keep, scratch }));
+        && isPath(search.reach(register as Reg, goal, { bad: badchars, keep, scratch, writable }));
     }
     return answers[key];
   };
 
   const tried: WriteTrial[] = pairs.map((candidate) => {
     const address = gadgetAddress(candidate.gadget);
-    const plans = candidate === write.pick ? base : planJobs(index, style, exclude, api, undefined, { write: address });
+    const plans = candidate === write.pick ? base : planJobs(index, style, exclude, api, undefined, { write: address }, facts.slotWritable);
     const chosen = plans.filter((plan) => plan.job.key === "write")[0]?.pick;
     const field = fieldRegister(plans) ?? "";
     const value = chosen?.at.source ?? "";
@@ -590,7 +594,7 @@ export function planWrites(
   // candidate that fills no more of the frame than the ranking's own pick never displaces it.
   const best = tried.slice().sort((a, b) => a.unmet - b.unmet || b.filled - a.filled || tried.indexOf(a) - tried.indexOf(b))[0];
   const plans = best.address === gadgetAddress(write.pick?.gadget ?? pairs[0].gadget)
-    ? base : planJobs(index, style, exclude, api, undefined, { write: best.address });
+    ? base : planJobs(index, style, exclude, api, undefined, { write: best.address }, facts.slotWritable);
   return { plans, tried };
 }
 
@@ -731,7 +735,8 @@ export function planLines(plan: JobPlan, shown = SHOWN_ABOVE): string[] {
   }
   if (!pick && plan.path) {
     lines.push(`    ${pathText(plan.path)}`);
-  } else if (!pick) lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
+  } else if (!pick && live.length > 0) lines.push(`    none of the ${verdicts.length} keeps ${live.map((entry) => entry.register).join(", ")}`);
+  else if (!pick) lines.push(`    none of the ${verdicts.length} is usable`);
   return lines;
 }
 

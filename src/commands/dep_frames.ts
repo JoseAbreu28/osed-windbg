@@ -91,7 +91,9 @@ export const PUSHAD_TAIL: Record<DepApi, Slot[]> = {
 /** The addresses a frame needs, each measured by the run and none of them guessable: the first four are
  * what its slots hold, `staging` is where a staged frame is laid, and `caveBytes` is how wide the cave
  * the copy lands in turned out to be. */
-export type FrameFacts = { iatSlot?: number; delta?: number; writable?: number; cave?: number; caveBytes?: number; staging?: number };
+/** `slotWritable` is what the run saw of the IAT slot's page. Most IATs are read-only once loaded, and a
+ * read that writes back, `xchg dword [ecx], eax`, faults on one. */
+export type FrameFacts = { iatSlot?: number; slotWritable?: boolean; delta?: number; writable?: number; cave?: number; caveBytes?: number; staging?: number };
 
 /** How many bytes the copy moves, given what the module's cave holds. */
 export const copyBytes = (facts: FrameFacts): number => Math.min(WPM_COPY, facts.caveBytes ?? WPM_COPY);

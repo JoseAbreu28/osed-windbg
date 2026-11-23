@@ -99,6 +99,30 @@ describe("reach", () => {
     expect(path.hops[0].values[0]?.text).toBe("IAT_SLOT - 0x00000004");
   });
 
+  describe("a read that writes the old value back, as xchg dword [ecx], eax does", () => {
+    const SWAP = ["pop ecx ; ret", "xchg dword [ecx], eax ; pop ebp ; ret"];
+    const slot: Val = { mem: { at: 0x11223344, text: "IAT_SLOT" }, k: 0, text: "0" };
+
+    test("faults on a read-only slot, so the search refuses it there", () => {
+      expect(seek(index(...SWAP), "eax", slot)).toBeUndefined();
+    });
+
+    test("reads a slot the run showed writable, and says the old value is left in it", () => {
+      const result = index(...SWAP).reach("eax", slot, { bad: [0x00], keep: [], writable: [0x11223344] });
+      expect(isPath(result)).toBe(true);
+      const path = result as Path;
+      expect(walk(path)).toEqual(SWAP);
+      expect(path.hops[1].clobbers).toEqual([0x11223344]);
+      expect(path.hops[1].notes.join("; ")).toContain("the old value is left in that dword");
+    });
+
+    test("is one only when the swap is the gadget's sole memory access", () => {
+      expect(effectOf(corpus("xchg dword [ecx], eax ; mov edx, dword [ecx] ; ret")[0])).toBeUndefined();
+      expect(effectOf(corpus("xchg dword [ecx], eax ; mov dword [edx], ecx ; ret")[0])).toBeUndefined();
+      expect(effectOf(corpus("xchg dword [ecx], eax ; ret")[0])?.swaps).toHaveLength(1);
+    });
+  });
+
   test("no hop writes a register the chain still needs", () => {
     // pop eax ; pop esi ; ret would load eax and destroy esi with it. With esi kept, it is out, and the
     // lone pop eax is the only route left.
