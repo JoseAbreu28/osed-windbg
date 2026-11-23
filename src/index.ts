@@ -48,8 +48,8 @@ import { findEncodings } from "./core/backward_scanner";
 import { badcharAddressFilter } from "./logic/pointer_filter_logic";
 import { COPY_SEPARATOR, CORPUS_BLOCK, HELPER_BLOCK, buildExploit, measureLanding, slotBlock, type Block, type Delta } from "./commands/dep_build";
 import { GROUPS as PALETTE_GROUPS, SHAPES as PALETTE_SHAPES, extrasOf as paletteExtras, paletteLines, pickShape, shapeEncodings } from "./commands/palette";
-import { CONSTANTS, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planSkeleton, settledLines, type DepPlanStyle, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
-import { type FrameFacts } from "./commands/dep_frames";
+import { constantsFor, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planSkeleton, settledLines, type DepPlanStyle, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
+import { copyBytes, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
 import { createDepFunctionCommand } from "./commands/dep_function";
 import { createScBuilderCommand, createScCallFrameCommand, createScPushStringCommand, createScTemplateCommand, splitBadToken } from "./commands/sc_writer";
 import { addressBadBytes, createCodeCavesCommand, findCodeCaves } from "./commands/code_caves";
@@ -3234,18 +3234,27 @@ function bindApi(): OsedApi {
   // and an executable cave for WriteProcessMemory's copy. dep_plan and dep_candidates both weigh their
   // write gadget against the frame, so both have to see the same two, or the command [4/7] prints as the
   // one that reproduces it would reproduce something else.
-  const frameAddresses = (modules: string[], badText: string, depApi: DepApi, moduleFailed = false): { writable?: number; cave?: number } => {
-    const pickCave = (minSize: number, capability: string): number | undefined => {
+  const frameAddresses = (modules: string[], badText: string, depApi: DepApi, moduleFailed = false): { writable?: number; cave?: number; caveBytes?: number } => {
+    // The largest, not the first: how many bytes the copy may move is the size of the cave it lands in,
+    // so a bigger cave is strictly a better answer and the biggest one is the honest offer.
+    const pickCave = (minSize: number, capability: string): { address: number; size: number } | undefined => {
       for (const module of modules) {
         const { caves } = findCodeCaves(module, minSize, 25, badText, capability);
-        const found = caves.find((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null);
-        if (found) return Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address);
+        const found = caves.filter((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null)
+          .sort((left, right) => right.size - left.size)[0];
+        if (found) return { address: Number(found.addrSafe === false && found.safeVa !== null ? found.safeVa : found.address), size: found.size };
       }
       return undefined;
     };
+    // WriteProcessMemory copies into the cave, so a module with nothing WPM_COPY bytes wide is not out of
+    // the game: it copies as much as its largest cave holds, and WPM_MIN_COPY is where that stops being
+    // worth doing. Every other API wants four bytes for an out-parameter and nothing more.
+    const cave = depApi === "WriteProcessMemory" && !moduleFailed
+      ? out.quietly(() => pickCave(WPM_COPY, "EXEC")) ?? out.quietly(() => pickCave(WPM_MIN_COPY, "EXEC")) : undefined;
     return {
-      writable: depApi === "VirtualAlloc" || moduleFailed ? undefined : out.quietly(() => pickCave(4, "STAGING")),
-      cave: depApi === "WriteProcessMemory" && !moduleFailed ? out.quietly(() => pickCave(0x210, "EXEC")) : undefined,
+      writable: depApi === "VirtualAlloc" || moduleFailed ? undefined : out.quietly(() => pickCave(4, "STAGING"))?.address,
+      cave: cave?.address,
+      caveBytes: cave?.size,
     };
   };
 
@@ -3689,10 +3698,13 @@ function bindApi(): OsedApi {
     summary.push({ Section: `[3/${n}] corpus`, Result: moduleFailed ? "skipped" : `${gadgetCount} gadgets` });
 
     // The caves are found here so the [4/7] block can name them; [5/7] prints what this found.
-    const { writable, cave } = frameAddresses(modules, badText, depApi, moduleFailed);
+    const { writable, cave, caveBytes } = frameAddresses(modules, badText, depApi, moduleFailed);
+    // One set of facts about this target, so the jobs, the register choice, the printed recipes and the
+    // loaders all answer to the same numbers.
+    const frameFacts: FrameFacts = { iatSlot, delta: route?.delta?.value, writable, cave, caveBytes };
 
     const solved = moduleFailed ? undefined
-      : solveStyles(scanned, modules, badchars as number[], exclude, depApi, { iatSlot, delta: route?.delta?.value, writable, cave });
+      : solveStyles(scanned, modules, badchars as number[], exclude, depApi, frameFacts);
     const style: DepPlanStyle = styleText === "auto" ? (solved ? chooseStyle(solved) : "skeleton") : styleText as DepPlanStyle;
     const corpus = solved?.corpus;
     const otherBlocked = solved ? titles(solved.plans[otherStyle(style)].filter((plan) => !met(plan))) : "";
@@ -3715,14 +3727,14 @@ function bindApi(): OsedApi {
     // The loaders search the corpus without the excluded gadgets, so one cannot come back under another name.
     const build = buildExploit({
       api: depApi, style, module: modulesLabel, badchars: badchars as number[], index: corpus, plans,
-      iatSlot, delta: route?.delta, writable, cave, jmpEsp, stage, exclude, landing,
+      iatSlot, delta: route?.delta, writable, cave, caveBytes, jmpEsp, stage, exclude, landing,
     });
     if (solved) printBlock(build.blocks[4]);
     summary.push({ Section: `[4/${n}] candidates`, Result: !solved ? "skipped" : missing.length === 0 ? "every job has one" : `missing ${missing.length}` });
 
     out.section(`[5/${n}] Clean recipes for the constants`);
     if (blocker) out.error(`Skipped: these are the arguments of a ${depApi} call this chain cannot make. See the STOP above.`);
-    for (const constant of blocker ? [] : CONSTANTS[depApi]) {
+    for (const constant of blocker ? [] : constantsFor(depApi, frameFacts)) {
       out.info(`${constant.field} = ${dwordHex(constant.value)}`);
       out.echo("rop.construct", ["eax", out.hex(constant.value), badText]);
       executeRopConstruct("eax", constant.value, badText);
@@ -3740,9 +3752,15 @@ function bindApi(): OsedApi {
       else out.info(`${field} = ${dwordHex(writable)}, a writable cave with no bad byte (code_caves STAGING).`);
     }
     if (depApi === "WriteProcessMemory" && !blocker) {
-      out.echo("code_caves", [modules[0], out.hex(0x210), 25, badText, "EXEC"]);
-      if (cave === undefined) out.warn(`Code cave: none of 0x210 bytes with a clean address in ${modulesLabel}. Try dx @$osed().code_caves("", 0x210, 25, "${badText}", "EXEC").`);
-      else out.info(`Code cave (return address and lpBaseAddress) = ${dwordHex(cave)}, executable (code_caves EXEC).`);
+      out.echo("code_caves", [modules[0], out.hex(WPM_COPY), 25, badText, "EXEC"]);
+      const copy = copyBytes(frameFacts);
+      if (cave === undefined) out.warn(`Code cave: none of 0x${WPM_MIN_COPY.toString(16)} bytes or more with a clean address in ${modulesLabel}. Try dx @$osed().code_caves("", 0x${WPM_MIN_COPY.toString(16)}, 25, "${badText}", "EXEC").`);
+      else out.info(`Code cave (return address and lpBaseAddress) = ${dwordHex(cave)}, executable (code_caves EXEC), 0x${(caveBytes ?? 0).toString(16)} bytes.`);
+      // The copy size is not the design's: it is what this cave holds. A chain that copied more would
+      // write past the end of it, so the shellcode has to fit, and that is a constraint on him.
+      if (cave !== undefined && copy < WPM_COPY) {
+        out.warn(`nSize = 0x${copy.toString(16)}, not the usual 0x${WPM_COPY.toString(16)}: that is all this cave holds. Your shellcode and its NOP sled must fit in 0x${copy.toString(16)} bytes, or the copy runs past the cave.`);
+      }
     }
     // One line per loader before the loaders themselves: which gadgets the search chose, in order, and
     // why that route and not a shorter one. Their addresses and disassembly are the [4/7] table, so this
@@ -3753,7 +3771,7 @@ function bindApi(): OsedApi {
       for (const route of build.routes) out.info(`  ${route}`);
     }
     if (!blocker) printBlock(build.blocks[5]);
-    summary.push({ Section: `[5/${n}] constants`, Result: blocker ? "skipped" : `${CONSTANTS[depApi].length} recipes` });
+    summary.push({ Section: `[5/${n}] constants`, Result: blocker ? "skipped" : `${constantsFor(depApi, frameFacts).length} recipes` });
 
     out.section(`[6/${n}] ${style === "pushad" ? "PUSHAD register map" : "Call frame"} for ${depApi}`);
     if (blocker) {

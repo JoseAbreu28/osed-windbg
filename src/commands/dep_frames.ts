@@ -12,6 +12,7 @@ export type Source =
   | { kind: "shellcode" }
   | { kind: "size" }
   | { kind: "const"; value: number }
+  | { kind: "copy" }
   | { kind: "named"; name: "WRITABLE" | "CAVE" }
   | { kind: "ropnop" }
   | { kind: "jmpesp" }
@@ -26,6 +27,14 @@ const WRITABLE: Source = { kind: "named", name: "WRITABLE" };
 const CAVE: Source = { kind: "named", name: "CAVE" };
 const c = (value: number): Source => ({ kind: "const", value });
 
+/** The bytes WriteProcessMemory copies into the cave. `WPM_COPY` is the frame's design size and is what
+ * the run asks the module for first. A module whose largest clean executable cave is smaller copies that
+ * much instead: a chain that copies more than the cave holds writes past the end of it. Below
+ * `WPM_MIN_COPY` there is no point: no shellcode worth sending fits, and the run says the cave is the
+ * missing piece rather than emitting a frame that cannot carry one. */
+export const WPM_COPY = 0x210;
+export const WPM_MIN_COPY = 0x100;
+
 export const FRAMES: Record<DepApi, Slot[]> = {
   VirtualAlloc: [
     { name: "VirtualAlloc", source: API }, { name: "return", source: SHELLCODE }, { name: "lpAddress", source: SHELLCODE },
@@ -37,7 +46,7 @@ export const FRAMES: Record<DepApi, Slot[]> = {
   ],
   WriteProcessMemory: [
     { name: "WriteProcessMemory", source: API }, { name: "return", source: CAVE }, { name: "hProcess", source: c(0xffffffff) },
-    { name: "lpBaseAddress", source: CAVE }, { name: "lpBuffer", source: SHELLCODE }, { name: "nSize", source: c(0x210) },
+    { name: "lpBaseAddress", source: CAVE }, { name: "lpBuffer", source: SHELLCODE }, { name: "nSize", source: { kind: "copy" } },
     { name: "lpNumberOfBytesWritten", source: WRITABLE },
   ],
 };
@@ -75,12 +84,15 @@ export const PUSHAD_FRAMES: Record<DepApi, Slot[]> = {
 export const PUSHAD_TAIL: Record<DepApi, Slot[]> = {
   VirtualAlloc: [],
   VirtualProtect: [],
-  WriteProcessMemory: [{ name: "lpBuffer", source: SHELLCODE }, { name: "nSize", source: c(0x210) }, { name: "lpNumberOfBytesWritten", source: WRITABLE },
+  WriteProcessMemory: [{ name: "lpBuffer", source: SHELLCODE }, { name: "nSize", source: { kind: "copy" } }, { name: "lpNumberOfBytesWritten", source: WRITABLE },
   ],
 };
 
 /** The addresses a frame's slots need, each measured by the run and none of them guessable. */
-export type FrameFacts = { iatSlot?: number; delta?: number; writable?: number; cave?: number };
+export type FrameFacts = { iatSlot?: number; delta?: number; writable?: number; cave?: number; caveBytes?: number };
+
+/** How many bytes the copy moves, given what the module's cave holds. */
+export const copyBytes = (facts: FrameFacts): number => Math.min(WPM_COPY, facts.caveBytes ?? WPM_COPY);
 
 /** What a slot asks the search to leave in a register, for the slots whose value is a number or a dword in
  * memory. A slot whose value is frame arithmetic (the shellcode's address on the stack), one the emitted
@@ -94,6 +106,8 @@ export function frameGoal(slot: Slot, facts: FrameFacts): Val | undefined {
         : { mem: { at: facts.iatSlot, text: "IAT_SLOT" }, k: facts.delta ?? 0, text: facts.delta === undefined ? "0" : "API_DELTA" };
     case "const":
       return constVal(slot.source.value);
+    case "copy":
+      return constVal(copyBytes(facts));
     case "named": {
       const value = slot.source.name === "WRITABLE" ? facts.writable : facts.cave;
       return value === undefined ? undefined : constVal(value, slot.source.name);

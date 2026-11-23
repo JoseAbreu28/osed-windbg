@@ -3,7 +3,7 @@ import { rankCandidates } from "../rop/emitter";
 import { RopGadget } from "../rop/types";
 import { buildRopIndexFromRpPlusText } from "../rop";
 import { MAX_HOPS, Path, ReachIndex, Reg, Unreached, Val, constVal, describe, effectOf, isPath } from "../rop/reach";
-import { FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, PUSHAD_TAIL, Slot } from "./dep_frames";
+import { copyBytes, FRAMES, FrameFacts, frameGoal, PUSHAD_FRAMES, PUSHAD_TAIL, Slot, WPM_MIN_COPY } from "./dep_frames";
 import { DepPlanStyle, JobPlan, LARGE_STACK_MOVE, Verdict, gadgetAddress, hex32, holds, memoryWrites, movesEsp, sequence, sideEffects, stackMove, writtenRegisters } from "./dep_plan";
 import { DepApi } from "./rop_template";
 
@@ -66,6 +66,8 @@ export type BuildInput = {
   delta?: Delta;
   writable?: number;
   cave?: number;
+  /** How many bytes the cave holds, which is how many WriteProcessMemory may copy into it. */
+  caveBytes?: number;
   jmpEsp?: number;
   /** The next free payloadN() in the student's file. A block whose content is a sendable payload arrives
    * as that complete function, so his file grows by appending and every function is one thing he sends. */
@@ -496,7 +498,7 @@ export function buildExploit(input: BuildInput): Build {
   // other slot's goal comes from `frameGoal`, the same function the method layer weighs a write gadget
   // with, so the value a loader searches for and the value the choice of register was made against
   // cannot differ.
-  const facts: FrameFacts = { iatSlot: input.iatSlot, delta: input.delta?.value, writable: input.writable, cave: input.cave };
+  const facts: FrameFacts = { iatSlot: input.iatSlot, delta: input.delta?.value, writable: input.writable, cave: input.cave, caveBytes: input.caveBytes };
   const goalOf = (slot: Slot): Val | undefined => {
     switch (slot.source.kind) {
       case "ropnop": { const ret = lone(); return ret ? constVal(gadgetAddress(ret), "RET") : undefined; }
@@ -550,6 +552,8 @@ export function buildExploit(input: BuildInput): Build {
         return to(goalOf(slot), "no IAT slot to read: see [2/7]");
       case "const":
         return to(constVal(source.value), "");
+      case "copy":
+        return to(frameGoal(slot, facts), `no executable cave of at least 0x${WPM_MIN_COPY.toString(16)} bytes in ${input.module}: dx @$osed().code_caves("", 0x${WPM_MIN_COPY.toString(16)}, 25, "${badSpaced}", "EXEC")`);
       case "named": {
         const value = source.name === "WRITABLE" ? input.writable : input.cave;
         return to(value === undefined ? undefined : constVal(value, source.name),
@@ -630,7 +634,8 @@ export function buildExploit(input: BuildInput): Build {
   if (style === "skeleton") {
     const frame = FRAMES[api];
     const literal = (slot: Slot): string | undefined => {
-      if (slot.source.kind === "const" && isClean(slot.source.value, badchars)) return hex(slot.source.value);
+      const fixed = slot.source.kind === "copy" ? copyBytes(facts) : slot.source.kind === "const" ? slot.source.value : undefined;
+      if (fixed !== undefined && isClean(fixed, badchars)) return hex(fixed);
       if (slot.source.kind !== "named") return undefined;
       const value = slot.source.name === "WRITABLE" ? input.writable : input.cave;
       return value !== undefined && isClean(value, badchars) ? slot.source.name : undefined;
@@ -761,9 +766,10 @@ export function buildExploit(input: BuildInput): Build {
     const tail: string[] = [];
     for (const slot of PUSHAD_TAIL[api]) {
       const known = slot.source.kind === "named" && (slot.source.name === "WRITABLE" ? input.writable : input.cave) !== undefined;
-      if (slot.source.kind === "const" && isClean(slot.source.value, badchars)) tail.push(hex(slot.source.value));
-      else if (slot.source.kind === "const") {
-        chain.push(...hole(`${ident(slot.name)}_value`, `${hex(slot.source.value)} holds a bad byte and sits after the pushad gadget, where no gadget can build it`));
+      const fixed = slot.source.kind === "copy" ? copyBytes(facts) : slot.source.kind === "const" ? slot.source.value : undefined;
+      if (fixed !== undefined && isClean(fixed, badchars)) tail.push(hex(fixed));
+      else if (fixed !== undefined) {
+        chain.push(...hole(`${ident(slot.name)}_value`, `${hex(fixed)} holds a bad byte and sits after the pushad gadget, where no gadget can build it`));
         tail.push(`${ident(slot.name)}_value`);
       }
       else if (slot.source.kind === "named" && known) tail.push(slot.source.name);

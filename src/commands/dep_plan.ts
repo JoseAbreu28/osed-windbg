@@ -16,7 +16,10 @@ export const DEP_PLAN_SECTIONS = 7;
 export type Constant = { field: string; value: number };
 
 // The argument values the chain has to produce, per API. Addresses known only at run time
-// (shellcode, the API itself) are not constants and are measured in the draft instead.
+// (shellcode, the API itself) are not constants and are measured in the draft instead. A value the run
+// works out rather than the design fixing it, such as how many bytes the copy moves, is listed here with
+// its design value and replaced by `constantsFor`, so a printed recipe cannot show one number while the
+// loaders below it build another.
 export const CONSTANTS: Record<DepApi, Constant[]> = {
   VirtualAlloc: [
     { field: "dwSize", value: 0x1 },
@@ -88,6 +91,15 @@ const pushadRegisters = (api: DepApi): Role[] =>
  * was seven pops for every API, so a WriteProcessMemory target was refused for having no `pop esi` when
  * its frame leaves ESI alone. Both now come off `FRAMES` and `PUSHAD_FRAMES`, so a job can only be
  * required by a slot that exists. */
+/** The constants of this API's frame, with every value the run settled rather than the design. */
+export function constantsFor(api: DepApi, facts: FrameFacts = {}): Constant[] {
+  return CONSTANTS[api].map((constant) => {
+    const slot = FRAMES[api].find((entry) => entry.name === constant.field);
+    const goal = slot ? frameGoal(slot, facts) : undefined;
+    return slot?.source.kind === "copy" && goal ? { ...constant, value: goal.k } : constant;
+  });
+}
+
 export function jobsFor(style: DepPlanStyle, api: DepApi = "VirtualAlloc"): Job[] {
   if (style === "pushad") {
     const registers = pushadRegisters(api);
