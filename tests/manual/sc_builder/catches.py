@@ -23,13 +23,14 @@ HERE = pathlib.Path(__file__).resolve().parent
 REPO = (HERE / "../../..").resolve()
 CONFIG = re.compile(r"(# >>> CONFIG\n).*?(# <<< CONFIG\n)", re.S)
 
-# The commit before the buffer, register, encoder, cdecl and DEBUG work.
-BASE = "b38da38"
+# The commit before the buffer, register, encoder, cdecl, DEBUG and pop work.
+BASE = "8b05365"
 
 # The cases that must fail on BASE, and the defect each one holds shut.
 GUARDS = {
     "buffers": "every use of a buf() allocated a fresh frame offset",
     "lab_badchars": "the resolver kept the module base on ebx, whose ModRM byte is 5c",
+    "pop_badchar": "the resolver's two pop esi had one form only, so a bad 5e failed the build",
     "xor_needed": "the plain body's bad bytes failed a build the encoder had made clean",
     "cdecl": "every call assumed the API drops its own arguments",
     "debug": "a lookup that came back 0 was only found when the shellcode called address 0",
