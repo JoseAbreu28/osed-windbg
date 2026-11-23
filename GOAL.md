@@ -208,7 +208,7 @@ exact file shipped, not the source it came from.
 
 ## Corpus run, 2026-11-23, measured at `ef5d741`
 
-`dist/osed-legacy.js` sha256 `77c7c177e5889d7b7cd5976444226e7921c453f406b6f5629ac802018a3e4e61`. Targets are listed by id; the manifest outside this repo maps each
+`dist/osed-legacy.js` sha256 `77c7c177e5889d7b7cd5976444226e7921c453f406b6f5629ac802018a3e4e61 (the file the corpus ran against). The build shipped to the VMs and to Notion is 37b9ac92d121b784cf571372c2605ef28c597c3494883f100ccb25bb010846f5, rebuilt by the parent from the same committed source and verified by it; the two differ only in the  stamp`. Targets are listed by id; the manifest outside this repo maps each
 id to its lab. The three holdout targets were not run, opened or read. Every class A target was given
 only its bad chars and stage 1.
 

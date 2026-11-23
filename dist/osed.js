@@ -11828,10 +11828,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-23T03:20:44.978Z" : globalThis[key2];
+        value = true ? "2026-11-23T03:24:05.478Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "e206cf85184d" : globalThis[key2];
+        value = true ? "68561f1e0889" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
