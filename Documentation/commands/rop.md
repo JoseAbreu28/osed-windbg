@@ -13,6 +13,7 @@ Run each command as `dx @$osed().<command>` in WinDbg. The [command index](../CO
 | [`rop.find`](#ropfind) | Run the older ROP helper that scans one module and prints a module summary. |
 | [`rop_template`](#rop_template) | Print a commented chain skeleton for one API in the skeleton or PUSHAD style, with the `dx` commands that find each address it needs. |
 | [`dep_function`](#dep_function) | Print a Python call-frame skeleton, or the PUSHAD register map, for VirtualAlloc, VirtualProtect, or WriteProcessMemory. |
+| [`dep_plan_manual`](#dep_plan_manual) | Scan x86 gadgets and fill the manual WriteProcessMemory ROP skeleton. |
 | [`dep_plan`](#dep_plan) | Run the whole DEP bypass discovery for one API and module, each step under its own `[n/7]` header, ending in a Python draft to verify. |
 | [`dep_candidates`](#dep_candidates) | Rank the 3 gadgets with the fewest side effects for each job of a DEP chain, as step 4 of `dep_plan`. |
 | [`rop.scan_live`](#ropscan_live) | Find gadgets in one or more loaded modules and load them into the corpus that the other `rop.*` commands use. |
@@ -170,6 +171,22 @@ dx @$osed().dep_function("VirtualProtect", "pushad")
 ```
 
 `VA`, `VP`, and `WPM` work as short aliases, in any case. The frame follows the order the API reads the stack: the API address, the return address, then each argument. `VirtualAlloc` uses `shellcodeAddr` for `lpAddress`. `VirtualProtect` uses `0x40` for `flNewProtect` and a writable address for `lpflOldProtect`. `WriteProcessMemory` uses `0xFFFFFFFF` as the pseudo process handle and a code cave as the destination. Fill in the remaining addresses and argument values in the printed skeleton before using it.
+
+### dep_plan_manual
+
+Scan executable code in a 32-bit target and print the manual WriteProcessMemory chain. An empty module searches all loaded modules.
+
+```text
+dx @$osed().dep_plan_manual("WPM", "", "00 0A 0D 25 26 2B 3D")
+dx @$osed().dep_plan_manual("WPM", "libspp", "00 0A 0D", "89 E5 81 C4 F0 F9", "45 45 45 45")
+dx @$osed().dep_plan_manual("WPM", "libspp", "00 0A 0D", "89 E5 81 C4 F0 F9", "45 45 45 45", 0x300)
+```
+
+The output has the six steps of the manual WPM skeleton. It assigns safe gadget addresses where found. A missing match is `None  # No direct GADGET, DO IT MANNUALLY`. When the best match has an extra `pop` or `retn N`, it is labeled `Optional Gadget` and the chain includes the extra pop DWORD or exactly N padding bytes after the next gadget address. A gadget with an extra `inc` or `dec` on a register the fixed chain no longer uses is labeled `NEED TO BE CHECKED, ROP PERFORMS MORE TASKS`; review its effect while stepping. Direct gadgets take priority. The final `xchg eax, esp` must end in a plain `ret`, since a `retn N` there would skip bytes in the WPM frame. The command also filters IAT slots by badchars. Both generated Python functions check their complete output bytes and raise `ValueError` if a supplied code cave, constant, `restoreRop`, or placeholder introduces a badchar.
+
+The command reads the current ESP, finds the WPM dummy marker (`45 45 45 45` by default) near it, evaluates the `GetLastErrorStub` to `WriteProcessMemoryStub` offset with WinDbg, and looks for a unique GetLastErrorStub IAT slot. To calculate the shellcode delta, pass its current address (`"0x01BC74F0"`) or a unique byte signature as argument 4. Argument 5 may replace the default frame marker with its address or another four-byte marker. Ambiguous or unavailable values stay `None`, with the WinDbg command needed to resolve them. Step 4 contains the original `4.2.2.1` reminder: recalculate `negative_shellcode_delta` if generating the shellcode or decoder changes its address. Run at the crash before the first gadget; the ESP calculation assumes that ESP is the one `push esp` will capture. Check all values and register side effects while stepping the chain. `restoreRop` is opaque and must already compensate its own final gadget.
+
+The output begins with `GetWriteProcessMemoryTemplate()`. It fills `codeCaveAd` only from a committed cave whose current `!vprot` protection is exactly `PAGE_EXECUTE_READ (0x20)`. It reserves four bytes at each edge of the detected padding run, checks all four bytes of the chosen address against the badchars, and requires at least `minCaveSize` usable bytes after that reservation (argument 6, default `0x210`). For example, a detected run at `0x10167018` of `0xFE8` bytes yields `0x1016701C` and `0xFE0` usable bytes when the address is clean. The Python `GetROP` function rejects a `shellcode_size` larger than that cave. Set `minCaveSize` to at least the size of the shellcode you will copy; if no cave qualifies, the address remains `None` for manual selection. ASLR may change the selected address on a later run. For `lpNumberOfBytesWritten`, the command calculates `.data` virtual address plus virtual size plus 4 (the method in the notes). It fills that pointer only if exactly one candidate is zero, writable, mapped, and its address has no badchars. Pass the module name to narrow the search if multiple modules qualify. `PAGE_EXECUTE_READ` does not permit this output write, so that result stays `None` for manual selection.
 
 ### dep_plan
 

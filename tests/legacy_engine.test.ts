@@ -117,5 +117,15 @@ describe("legacy engine surface", () => {
       expect(leakLog).not.toMatch(/matchAll|is not a function/);
       expect(leakLog).toContain("0x73371040");
     });
+
+    it("runs dep_plan_manual from the legacy bundle", () => {
+      const bundle = loadBundle(source);
+      bundle.take();
+      expect(bundle.osed.dep_plan_manual("WPM", "", "00 0A 0D 25 26 2B 3D"))
+        .toMatchObject({ success: true });
+      const planLog = bundle.take();
+      expect(planLog).toContain("GADGET_POP_EAX = None  # No direct GADGET");
+      expect(planLog).not.toMatch(/BigInt|is not a function/);
+    });
   });
 });

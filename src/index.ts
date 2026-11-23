@@ -51,6 +51,7 @@ import { GROUPS as PALETTE_GROUPS, SHAPES as PALETTE_SHAPES, extrasOf as palette
 import { constantsFor, DEP_PLAN_APIS, DEP_PLAN_SECTIONS, DEP_PLAN_STYLES, NX_POLICIES, NX_POLICY_ADDRESS, depPlanArgs, depState, encodingsFor, gadgetAddress as depPlanAddress, hex32 as dwordHex, jobsFor, met, planJobs, planLines, planWrites, settledLines, SHOWN_ABOVE, type DepPlanStyle, type Hit, type Job, type JobPlan, type Settled, type WriteTrial } from "./commands/dep_plan";
 import { clearOfCopy, copyBytes, FRAMES, stackSlot, stagedPops, stagingBase, stagingRoom, WPM_COPY, WPM_MIN_COPY, type FrameFacts } from "./commands/dep_frames";
 import { createDepFunctionCommand } from "./commands/dep_function";
+import { createDepPlanManualCommand } from "./commands/dep_plan_manual";
 import { handlerCandidates, landingPivots, measureTail, type Delivery } from "./commands/dep_delivery";
 import { measureHandlerEsp, readByte, sehAtCrash, type SehCrash } from "./commands/dep_delivery_live";
 import { takesSehHandler } from "./analysis/seh";
@@ -462,6 +463,7 @@ function registerAll(): void {
     createNopCommand(),
     createRopTemplateCommand(),
     createDepFunctionCommand(),
+    createDepPlanManualCommand(),
     createScPushStringCommand(),
     createScCallFrameCommand(),
     createScTemplateCommand(),
@@ -4510,6 +4512,8 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
       return { api: args[0], module: args[1], style: args[2] };
     case "dep_function":
       return { method: args[0], style: args[1] };
+    case "dep_plan_manual":
+      return { method: args[0], module: args[1], badchars: args[2], shellcode: args[3], frame: args[4], minCaveSize: args[5] };
     case "sc_push_string":
       return { text: args[0], badchars: args[1], register: args[2] };
     case "sc_call_frame": {

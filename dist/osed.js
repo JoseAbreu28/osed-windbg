@@ -1388,14 +1388,14 @@ var osed_bundle = (() => {
   // src/analysis/pattern_evidence.ts
   function analyzePatternEvidence(address, bytes, maxWindow = 32) {
     const text = String.fromCharCode(...bytes);
-    for (const candidate of [
+    for (const candidate2 of [
       { family: "msf", value: generateMsfPattern(20280) },
       { family: "cyclic", value: generateCyclicPattern(2e4) }
     ]) {
       for (let length = Math.min(bytes.length, maxWindow); length >= 8; length -= 1) {
         for (let offset = 0; offset <= text.length - length; offset += 1) {
-          const patternOffset = candidate.value.indexOf(text.slice(offset, offset + length));
-          if (patternOffset >= 0) return { address: address + BigInt(offset), patternFamily: candidate.family, matched: true, matchLength: length, patternOffset, confidence: 0.9, source: "sampled-memory" };
+          const patternOffset = candidate2.value.indexOf(text.slice(offset, offset + length));
+          if (patternOffset >= 0) return { address: address + BigInt(offset), patternFamily: candidate2.family, matched: true, matchLength: length, patternOffset, confidence: 0.9, source: "sampled-memory" };
         }
       }
     }
@@ -1819,7 +1819,7 @@ var osed_bundle = (() => {
     if (fromEnvironment !== BigInt(0)) return fromEnvironment;
     const teb = debuggerTeb();
     if (teb !== void 0) {
-      const fromPseudoRegister = [teb, teb + WOW64_TEB_DISTANCE].find((candidate) => looksLikeTeb32(candidate, reader));
+      const fromPseudoRegister = [teb, teb + WOW64_TEB_DISTANCE].find((candidate2) => looksLikeTeb32(candidate2, reader));
       if (fromPseudoRegister !== void 0) return fromPseudoRegister;
     }
     for (const key2 of ["Teb", "Teb32", "TebAddress", "Wow64Teb", "Wow64Teb32"]) {
@@ -1832,7 +1832,7 @@ var osed_bundle = (() => {
         if (parsed !== BigInt(0)) return parsed;
       }
     }
-    return candidates(thread).find((candidate) => looksLikeTeb32(candidate, reader));
+    return candidates(thread).find((candidate2) => looksLikeTeb32(candidate2, reader));
   }
   function walkSehRecords(teb, maxRecords = 64, reader = readPointer) {
     const records = [];
@@ -2043,8 +2043,8 @@ var osed_bundle = (() => {
       }
     }
     const pick2 = (...names) => {
-      for (const candidate of names) {
-        const found = all.find((entry) => entry.name.toLowerCase() === candidate.toLowerCase());
+      for (const candidate2 of names) {
+        const found = all.find((entry) => entry.name.toLowerCase() === candidate2.toLowerCase());
         if (found) {
           return found;
         }
@@ -2072,11 +2072,11 @@ var osed_bundle = (() => {
       { kind: "msf", haystack: generateMsfPattern(Math.min(maxLen, 20280)) },
       { kind: "cyclic", haystack: generateCyclicPattern(Math.max(maxLen, 2e4)) }
     ];
-    for (const candidate of candidates2) {
+    for (const candidate2 of candidates2) {
       const needle = decodeOffsetNeedle(low);
-      const offset = candidate.haystack.indexOf(needle);
+      const offset = candidate2.haystack.indexOf(needle);
       if (offset >= 0) {
-        return { kind: candidate.kind, offset };
+        return { kind: candidate2.kind, offset };
       }
     }
     return void 0;
@@ -2322,8 +2322,8 @@ var osed_bundle = (() => {
         }
         if (shellcode.length > 0) {
           print("Shellcode candidates:");
-          for (const candidate of shellcode) {
-            print(`  ${formatAddress(candidate, pointerSize)}`);
+          for (const candidate2 of shellcode) {
+            print(`  ${formatAddress(candidate2, pointerSize)}`);
           }
         } else {
           print("Shellcode candidates: none");
@@ -3268,10 +3268,10 @@ var osed_bundle = (() => {
           const brokenNext = depth === records.length - 1 && walk.warning !== void 0;
           const end = next === BigInt(4294967295);
           const integrity = brokenNext ? "BROKEN NEXT" : !module || executable === false ? "BAD HANDLER" : end ? "END" : "OK";
-          const candidate = Boolean(
+          const candidate2 = Boolean(
             module && executable === true && module.safeseh === "disabled" && module.aslr === "disabled"
           );
-          const assessment = candidate ? "CANDIDATE" : !module || executable === false ? "INVALID" : module.safeseh === "enabled" ? "PROTECTED" : module.aslr === "enabled" ? "ASLR" : "REVIEW";
+          const assessment = candidate2 ? "CANDIDATE" : !module || executable === false ? "INVALID" : module.safeseh === "enabled" ? "PROTECTED" : module.aslr === "enabled" ? "ASLR" : "REVIEW";
           const moduleName = module ? shortModuleName(module.name) : "<unmapped>";
           const target = module ? `${moduleName}+0x${(handler - module.base).toString(16).toUpperCase()}` : "<unmapped>";
           rows.push({
@@ -3301,7 +3301,7 @@ var osed_bundle = (() => {
             end,
             brokenNext,
             integrity,
-            candidate,
+            candidate: candidate2,
             assessment
           });
         }
@@ -3380,11 +3380,11 @@ var osed_bundle = (() => {
     }
   }
   function encodeInstructionSearch(text) {
-    const parts = text.trim().toLowerCase().split(/\s+/);
-    if (parts.length !== 2) {
+    const parts2 = text.trim().toLowerCase().split(/\s+/);
+    if (parts2.length !== 2) {
       return void 0;
     }
-    const [mnemonic, register2] = parts;
+    const [mnemonic, register2] = parts2;
     if (mnemonic === "jmp" || mnemonic === "call") {
       return encodeJumpToRegister(mnemonic, register2);
     }
@@ -3412,7 +3412,7 @@ var osed_bundle = (() => {
   function badcharAddressFilter(badchars, pointerSize) {
     return {
       name: "badchar-free-address",
-      predicate: (candidate) => !addressHasBadchar(candidate.address, pointerSize, badchars)
+      predicate: (candidate2) => !addressHasBadchar(candidate2.address, pointerSize, badchars)
     };
   }
   function applyFilters(addresses, filters) {
@@ -3687,7 +3687,7 @@ var osed_bundle = (() => {
         });
       }
     }
-    for (const reg of regs.filter((candidate) => candidate.code !== 0)) {
+    for (const reg of regs.filter((candidate2) => candidate2.code !== 0)) {
       patterns.push({
         name: `xchg_eax_${reg.name}_short_ret`,
         bytes: [144 | reg.code, 195],
@@ -4687,14 +4687,14 @@ var osed_bundle = (() => {
     while (progressed) {
       progressed = false;
       let best;
-      for (const candidate of popSequences) {
-        const { registers } = candidate.info;
+      for (const candidate2 of popSequences) {
+        const { registers } = candidate2.info;
         const distinct = new Set(registers).size === registers.length;
         if (!distinct || !registers.every((register2) => remaining.has(register2))) {
           continue;
         }
-        if (!best || candidate.info.retImm < best.info.retImm || candidate.info.retImm === best.info.retImm && registers.length > best.info.registers.length || candidate.info.retImm === best.info.retImm && registers.length === best.info.registers.length && candidate.gadget.score > best.gadget.score) {
-          best = candidate;
+        if (!best || candidate2.info.retImm < best.info.retImm || candidate2.info.retImm === best.info.retImm && registers.length > best.info.registers.length || candidate2.info.retImm === best.info.retImm && registers.length === best.info.registers.length && candidate2.gadget.score > best.gadget.score) {
+          best = candidate2;
         }
       }
       if (best) {
@@ -5360,7 +5360,7 @@ var osed_bundle = (() => {
   }
   function operationEvidence(gadget, kind, register2, target) {
     var _a2;
-    const capability2 = gadget.capabilities.find((candidate) => candidate.kind === kind && candidate.register === register2 && (target === void 0 || candidate.targetRegister === target));
+    const capability2 = gadget.capabilities.find((candidate2) => candidate2.kind === kind && candidate2.register === register2 && (target === void 0 || candidate2.targetRegister === target));
     return (_a2 = capability2 == null ? void 0 : capability2.evidence[0]) != null ? _a2 : "";
   }
   function findUnaryGadget(index, kind, reg, preserve) {
@@ -5748,10 +5748,10 @@ var osed_bundle = (() => {
     while (pending.size > 0) {
       let best;
       let bestKey;
-      for (const candidate of candidates2) {
-        if (!addressBadcharFree(candidate.address, bc)) continue;
+      for (const candidate2 of candidates2) {
+        if (!addressBadcharFree(candidate2.address, bc)) continue;
         let corrupts = false;
-        for (const reg of candidate.shape.writes) {
+        for (const reg of candidate2.shape.writes) {
           if (done.has(reg)) {
             corrupts = true;
             break;
@@ -5759,36 +5759,36 @@ var osed_bundle = (() => {
         }
         if (corrupts) continue;
         const cover = /* @__PURE__ */ new Set();
-        for (const reg of candidate.shape.cleanPops) {
+        for (const reg of candidate2.shape.cleanPops) {
           if (!pending.has(reg)) continue;
           if (!isBadcharFree2(targetValues.get(reg), bc)) continue;
           cover.add(reg);
         }
         if (cover.size === 0) continue;
-        const waste = candidate.shape.writes.size - cover.size + candidate.shape.espFillers.length;
+        const waste = candidate2.shape.writes.size - cover.size + candidate2.shape.espFillers.length;
         let deferSum = 0;
         for (const reg of cover) deferSum += (_b = clobberFrequency.get(reg)) != null ? _b : 0;
-        const stable = isAddressStable(candidate.address) ? 1 : 0;
-        const key2 = [stable, cover.size, -deferSum, -waste, candidate.score, -candidate.retImm];
+        const stable = isAddressStable(candidate2.address) ? 1 : 0;
+        const key2 = [stable, cover.size, -deferSum, -waste, candidate2.score, -candidate2.retImm];
         if (keyGreater(key2, bestKey)) {
           bestKey = key2;
-          best = { candidate, cover };
+          best = { candidate: candidate2, cover };
         }
       }
       if (best) {
-        const { candidate, cover } = best;
-        steps.push({ kind: "gadget", address: candidate.address, comment: describeGadget(candidate.gadget) });
+        const { candidate: candidate2, cover } = best;
+        steps.push({ kind: "gadget", address: candidate2.address, comment: describeGadget(candidate2.gadget) });
         const lastIndexOf = /* @__PURE__ */ new Map();
-        candidate.shape.popRegs.forEach((reg, idx) => lastIndexOf.set(reg, idx));
-        candidate.shape.popRegs.forEach((reg, idx) => {
+        candidate2.shape.popRegs.forEach((reg, idx) => lastIndexOf.set(reg, idx));
+        candidate2.shape.popRegs.forEach((reg, idx) => {
           if (cover.has(reg) && lastIndexOf.get(reg) === idx) {
             steps.push({ kind: "value", value: targetValues.get(reg) >>> 0, comment: `${reg} = ${hex32(targetValues.get(reg))}` });
           } else {
             steps.push({ kind: "value", value: 1094795585, comment: `junk (${reg})` });
           }
         });
-        steps.push(...candidate.shape.espFillers);
-        steps.push(...retImmPadding(candidate.retImm));
+        steps.push(...candidate2.shape.espFillers);
+        steps.push(...retImmPadding(candidate2.retImm));
         for (const reg of cover) {
           pending.delete(reg);
           done.add(reg);
@@ -6309,7 +6309,7 @@ var osed_bundle = (() => {
     }
     return void 0;
   }
-  function buildApiResolution(index, candidate, options = {}) {
+  function buildApiResolution(index, candidate2, options = {}) {
     var _a2, _b, _c, _d;
     const output = ((_a2 = options.output) != null ? _a2 : "eax").toLowerCase();
     const preserve = new Set(((_b = options.preserve) != null ? _b : []).map((reg) => reg.toLowerCase()));
@@ -6317,9 +6317,9 @@ var osed_bundle = (() => {
     const maxGadgets = (_d = options.maxGadgets) != null ? _d : 12;
     const unsatisfied = [];
     const notes = [];
-    if (output !== "eax") return { state: "UNSATISFIED", strategy: candidate.strategy, steps: [], gadgetCount: 0, stackBytes: 0, clobbers: [], unsatisfied: ["Phase 2 currently supports EAX output only."], notes };
-    if (!candidate.exportRvaVerified || !candidate.pointerResolved || !candidate.targetModuleVerified) {
-      return { state: "UNSATISFIED", strategy: candidate.strategy, steps: [], gadgetCount: 0, stackBytes: 0, clobbers: [], unsatisfied: ["Phase 1 address evidence is incomplete; rebuild from a validated candidate."], notes };
+    if (output !== "eax") return { state: "UNSATISFIED", strategy: candidate2.strategy, steps: [], gadgetCount: 0, stackBytes: 0, clobbers: [], unsatisfied: ["Phase 2 currently supports EAX output only."], notes };
+    if (!candidate2.exportRvaVerified || !candidate2.pointerResolved || !candidate2.targetModuleVerified) {
+      return { state: "UNSATISFIED", strategy: candidate2.strategy, steps: [], gadgetCount: 0, stackBytes: 0, clobbers: [], unsatisfied: ["Phase 1 address evidence is incomplete; rebuild from a validated candidate."], notes };
     }
     if (options.continuation === void 0) unsatisfied.push("A concrete continuation address is required after the final RET.");
     if (options.continuation !== void 0 && !dwordIsByteSafe(BigInt(options.continuation), badchars)) unsatisfied.push("Continuation address contains a forbidden byte.");
@@ -6329,14 +6329,14 @@ var osed_bundle = (() => {
     if (!loadEax) unsatisfied.push("No exact `mov eax, [eax] ; ret` gadget satisfies preservation constraints.");
     const operations = [];
     if (popEax && loadEax) {
-      if (!candidate.slotPayloadSafe) unsatisfied.push("IAT slot contains a forbidden byte; dynamic slot-address construction is not implemented in this milestone.");
+      if (!candidate2.slotPayloadSafe) unsatisfied.push("IAT slot contains a forbidden byte; dynamic slot-address construction is not implemented in this milestone.");
       else {
-        operations.push({ gadget: popEax, operand: Number(candidate.slot), comment: `pop eax = IAT slot 0x${candidate.slot.toString(16).toUpperCase()}` });
+        operations.push({ gadget: popEax, operand: Number(candidate2.slot), comment: `pop eax = IAT slot 0x${candidate2.slot.toString(16).toUpperCase()}` });
         operations.push({ gadget: loadEax, comment: "mov eax, [eax] (live IAT target)" });
       }
     }
-    if (candidate.strategy === "derived-address") {
-      const components = candidate.anchor ? addends(candidate.anchor.delta, badchars) : void 0;
+    if (candidate2.strategy === "derived-address") {
+      const components = candidate2.anchor ? addends(candidate2.anchor.delta, badchars) : void 0;
       if (!components) unsatisfied.push("No one- or two-addend byte-safe displacement decomposition was found.");
       const popEbp = pickPop(index, "ebp", preserve, output);
       const addEaxEbp = pickAdd(index, output, "ebp", preserve);
@@ -6359,7 +6359,7 @@ var osed_bundle = (() => {
         unsatisfied.push(`Operand 0x${operation.operand.toString(16).toUpperCase()} contains a forbidden byte.`);
       }
     }
-    if (unsatisfied.length > 0) return { state: "UNSATISFIED", strategy: candidate.strategy, steps: [], gadgetCount: operations.length, stackBytes: 0, clobbers: [], unsatisfied, notes };
+    if (unsatisfied.length > 0) return { state: "UNSATISFIED", strategy: candidate2.strategy, steps: [], gadgetCount: operations.length, stackBytes: 0, clobbers: [], unsatisfied, notes };
     const steps = [];
     const clobbers = /* @__PURE__ */ new Set();
     let pendingPadding = 0;
@@ -6374,24 +6374,24 @@ var osed_bundle = (() => {
     for (let word = 0; word < pendingPadding; word += 1) steps.push({ kind: "value", value: 1094795585, comment: "ret immediate padding" });
     return {
       state: "CHAIN_CONSTRUCTED",
-      strategy: candidate.strategy,
+      strategy: candidate2.strategy,
       steps,
       gadgetCount: operations.length,
       stackBytes: steps.length * 4,
       clobbers: [...clobbers].sort(),
-      expectedOutput: candidate.target.address,
+      expectedOutput: candidate2.target.address,
       unsatisfied: [],
       notes
     };
   }
   function buildBestApiResolution(index, candidates2, options = {}) {
     var _a2;
-    const attempts = candidates2.map((candidate) => {
-      if (!candidate.exportRvaVerified || !candidate.pointerResolved || !candidate.targetModuleVerified) {
-        return { candidate, rejectionReasons: ["Phase 1 address evidence is incomplete."] };
+    const attempts = candidates2.map((candidate2) => {
+      if (!candidate2.exportRvaVerified || !candidate2.pointerResolved || !candidate2.targetModuleVerified) {
+        return { candidate: candidate2, rejectionReasons: ["Phase 1 address evidence is incomplete."] };
       }
-      const plan = buildApiResolution(index, candidate, options);
-      return { candidate, plan, rejectionReasons: plan.state === "CHAIN_CONSTRUCTED" ? [] : plan.unsatisfied };
+      const plan = buildApiResolution(index, candidate2, options);
+      return { candidate: candidate2, plan, rejectionReasons: plan.state === "CHAIN_CONSTRUCTED" ? [] : plan.unsatisfied };
     });
     const successful = attempts.filter((attempt) => {
       var _a3;
@@ -6586,7 +6586,7 @@ var osed_bundle = (() => {
   // src/rop/emitter.ts
   function knownAddress(gadget) {
     var _a2;
-    const location = gadget.locations.find((candidate) => candidate.virtualAddress !== void 0);
+    const location = gadget.locations.find((candidate2) => candidate2.virtualAddress !== void 0);
     return (location == null ? void 0 : location.virtualAddress) === void 0 ? void 0 : { address: BigInt(location.virtualAddress), module: (_a2 = location.module) != null ? _a2 : "unknown" };
   }
   function exactStackDelta(gadget) {
@@ -6610,7 +6610,7 @@ var osed_bundle = (() => {
   }
   var RankedSemanticEmitter = class {
     emit(index, plan, strategyId) {
-      const strategy = strategyId === void 0 ? plan.strategies.find((candidate) => candidate.recommended) : plan.strategies.find((candidate) => candidate.id === strategyId);
+      const strategy = strategyId === void 0 ? plan.strategies.find((candidate2) => candidate2.recommended) : plan.strategies.find((candidate2) => candidate2.id === strategyId);
       if (!strategy) {
         return {
           planId: plan.id,
@@ -8727,15 +8727,15 @@ var osed_bundle = (() => {
 
   // src/semantics/live-provider.ts
   function sequenceFromLiveHit(hit) {
-    const parts = hit.mnemonic.split(";").map((part) => part.trim()).filter((part) => part.length > 0);
-    const instructions = parts.map((part) => parseInstruction(part));
-    const canonical = canonicalizeTextSequence(parts.join(" ; "));
+    const parts2 = hit.mnemonic.split(";").map((part) => part.trim()).filter((part) => part.length > 0);
+    const instructions = parts2.map((part) => parseInstruction(part));
+    const canonical = canonicalizeTextSequence(parts2.join(" ; "));
     const addressNumber = Number(hit.address);
     return {
       schemaVersion: SEMANTIC_SCHEMA_VERSION,
       id: `live:${hit.address.toString(16)}:${canonical}`,
       source: { kind: "source-adapter", name: "live", format: "windbg-memory", version: "v1" },
-      originalText: `0x${hit.address.toString(16)}: ${parts.join(" ; ")} ;`,
+      originalText: `0x${hit.address.toString(16)}: ${parts2.join(" ; ")} ;`,
       instructions,
       provenance: {
         module: hit.module,
@@ -10194,8 +10194,8 @@ var osed_bundle = (() => {
   }
   function isFingerprint(value) {
     if (!value || typeof value !== "object") return false;
-    const candidate = value;
-    return Array.isArray(candidate.modules) && Array.isArray(candidate.samples) && candidate.modules.every((module) => module && typeof module.name === "string" && typeof module.path === "string" && typeof module.base === "number" && typeof module.size === "number") && candidate.samples.every((sample) => sample && typeof sample.address === "number" && Array.isArray(sample.bytes) && sample.bytes.every((byte) => typeof byte === "number"));
+    const candidate2 = value;
+    return Array.isArray(candidate2.modules) && Array.isArray(candidate2.samples) && candidate2.modules.every((module) => module && typeof module.name === "string" && typeof module.path === "string" && typeof module.base === "number" && typeof module.size === "number") && candidate2.samples.every((sample) => sample && typeof sample.address === "number" && Array.isArray(sample.bytes) && sample.bytes.every((byte) => typeof byte === "number"));
   }
   function isCompactGadget(value) {
     if (!value || typeof value !== "object") return false;
@@ -10366,12 +10366,12 @@ var osed_bundle = (() => {
       if (address === void 0) {
         continue;
       }
-      const parts = splitInstructionParts(line);
-      if (parts.length === 0) {
+      const parts2 = splitInstructionParts(line);
+      if (parts2.length === 0) {
         continue;
       }
-      const instructions = parts.map((part) => parseInstruction(part));
-      const canonical = canonicalizeTextSequence(parts.join(" ; "));
+      const instructions = parts2.map((part) => parseInstruction(part));
+      const canonical = canonicalizeTextSequence(parts2.join(" ; "));
       sequences.push({
         schemaVersion: SEMANTIC_SCHEMA_VERSION,
         id: `rp++:${address.toString(16).padStart(8, "0")}:${canonical}`,
@@ -10524,11 +10524,11 @@ var osed_bundle = (() => {
     );
     const hits = [];
     for (const hit of scan.hits) {
-      const candidate = readCandidate(hit, pattern.bytes.length);
-      if (!candidate) {
+      const candidate2 = readCandidate(hit, pattern.bytes.length);
+      if (!candidate2) {
         continue;
       }
-      const validated = validateInstructionCandidateForPointerSize(candidate, true, true, pointerSize);
+      const validated = validateInstructionCandidateForPointerSize(candidate2, true, true, pointerSize);
       if (!validationPass(validated.flags)) {
         continue;
       }
@@ -11123,8 +11123,8 @@ var osed_bundle = (() => {
           dropped += scan.dropped;
           warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
           for (const hit of scan.hits) {
-            const candidate = readMemory(hit, pivot.bytes.length);
-            const validated = validateInstructionCandidateForPointerSize(candidate, true, true, pointerSize);
+            const candidate2 = readMemory(hit, pivot.bytes.length);
+            const validated = validateInstructionCandidateForPointerSize(candidate2, true, true, pointerSize);
             if (!validated.flags.decoded || !validated.flags.mnemonicMatch || !validated.flags.executable) {
               continue;
             }
@@ -11842,10 +11842,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-23T12:54:22.138Z" : globalThis[key2];
+        value = true ? "2026-11-23T14:28:06.958Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "b80bc17a2e0e" : globalThis[key2];
+        value = true ? "220d798eca12" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12049,7 +12049,7 @@ var osed_bundle = (() => {
   var SHELLCODE_WRITERS = ["sc.push_string", "sc.call_frame", "sc.template", "sc.builder"];
   var categoryForName = (name) => {
     if (SHELLCODE_WRITERS.includes(name)) return "shellcode";
-    if (name.startsWith("rop") || name === "dep_function" || name === "dep_plan" || name === "dep_candidates" || name === "palette" || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
+    if (name.startsWith("rop") || name === "dep_function" || name === "dep_plan" || name === "dep_plan_manual" || name === "dep_candidates" || name === "palette" || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
     if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
     if (name.startsWith("sc.")) return "pe-api";
     if (name.startsWith("str.")) return "strings";
@@ -12112,6 +12112,7 @@ var osed_bundle = (() => {
     rop_suggest: "Suggest exploit-friendly gadget patterns",
     rop_template: "Print a commented ROP chain skeleton (skeleton or PUSHAD style)",
     dep_function: "Print a VirtualAlloc, VirtualProtect or WriteProcessMemory call frame or PUSHAD map",
+    dep_plan_manual: "Fill a manual WPM chain with clean x86 gadgets",
     dep_plan: "Run the whole DEP bypass discovery in seven sections",
     dep_candidates: "Rank the best 3 gadgets per DEP chain job, as dep_plan step 4",
     palette: "Every gadget shape a hand-written chain uses, as GADGET_ names, None where absent",
@@ -12443,11 +12444,11 @@ var osed_bundle = (() => {
               continue;
             }
             seen.add(key2);
-            const candidate = tryReadMemory(hit, 3);
-            if (!candidate) {
+            const candidate2 = tryReadMemory(hit, 3);
+            if (!candidate2) {
               continue;
             }
-            const validated = validateInstructionCandidate(candidate, true, true);
+            const validated = validateInstructionCandidate(candidate2, true, true);
             if (!validated.flags.decoded || !validated.flags.mnemonicMatch || !validated.flags.executable) {
               continue;
             }
@@ -14095,9 +14096,9 @@ var osed_bundle = (() => {
             const key2 = addr.toString();
             if (seen.has(key2)) continue;
             seen.add(key2);
-            const parts = insns.map((insn) => insn.mnemonic);
-            parts.push(retMnemonic);
-            gadgets.push({ address: addr, mnemonic: parts.join(" ; "), retImm, kind: "RET_CHAIN" });
+            const parts2 = insns.map((insn) => insn.mnemonic);
+            parts2.push(retMnemonic);
+            gadgets.push({ address: addr, mnemonic: parts2.join(" ; "), retImm, kind: "RET_CHAIN" });
             if (gadgets.length >= maxResults) {
               return {
                 gadgets,
@@ -14571,11 +14572,11 @@ var osed_bundle = (() => {
     return a.k === b.k && ((_b = (_a2 = a.mem) == null ? void 0 : _a2.at) != null ? _b : -1) === ((_d = (_c = b.mem) == null ? void 0 : _c.at) != null ? _d : -1);
   };
   var keyOf = (node) => {
-    const parts = [];
-    node.regs.forEach((v, r) => parts.push(`${r}=${v.mem ? `[${v.mem.at}]` : ""}${v.k}`));
-    parts.sort();
-    if (node.scratch) parts.push(`M=${node.scratch.mem ? `[${node.scratch.mem.at}]` : ""}${node.scratch.k}`);
-    return parts.join(",");
+    const parts2 = [];
+    node.regs.forEach((v, r) => parts2.push(`${r}=${v.mem ? `[${v.mem.at}]` : ""}${v.k}`));
+    parts2.sort();
+    if (node.scratch) parts2.push(`M=${node.scratch.mem ? `[${node.scratch.mem.at}]` : ""}${node.scratch.k}`);
+    return parts2.join(",");
   };
   function show(e, slots) {
     var _a2;
@@ -15291,12 +15292,12 @@ var osed_bundle = (() => {
     const takes = Object.keys(reads).filter((port) => bound[reads[port]] !== void 0 && at[port] !== void 0).map((port) => `${roleName(reads[port])} from ${at[port]}`);
     const named2 = takes.join(" ");
     const keeps = live.map((entry) => entry.register).filter((register2) => named2.indexOf(register2) < 0);
-    const parts = [
+    const parts2 = [
       takes.length > 0 ? `takes ${takes.join(" and ")}` : "",
       keeps.length > 0 ? `keeps ${keeps.join(", ")}` : "",
       sideNote(gadget, job, at)
     ].filter(Boolean);
-    return parts.length > 0 ? parts.join("; ") : "nothing to keep yet, so the first in the ranking";
+    return parts2.length > 0 ? parts2.join("; ") : "nothing to keep yet, so the first in the ranking";
   }
   function moves(job, at, bound) {
     var _a2;
@@ -15379,7 +15380,7 @@ var osed_bundle = (() => {
     if (!index || !write2 || goals.length === 0 || capture2 && !met(capture2)) return { plans: base, tried: [] };
     const pairs3 = [];
     const ordered = write2.pick ? [write2.pick, ...write2.verdicts.filter((verdict) => verdict !== write2.pick)] : write2.verdicts;
-    for (const verdict of ordered.filter((candidate) => candidate.usable && candidate.uncontrolled.length === 0 && !candidate.far)) {
+    for (const verdict of ordered.filter((candidate2) => candidate2.usable && candidate2.uncontrolled.length === 0 && !candidate2.far)) {
       const key2 = (at) => {
         var _a3;
         return `${at.source}|${at.address}|${(_a3 = at.offset) != null ? _a3 : 0}`;
@@ -15401,16 +15402,16 @@ var osed_bundle = (() => {
       }
       return answers[key2];
     };
-    const tried = pairs3.map((candidate) => {
+    const tried = pairs3.map((candidate2) => {
       var _a3, _b2, _c;
-      const address = gadgetAddress(candidate.gadget);
-      const plans2 = candidate === write2.pick ? base : planJobs(index, style, exclude, api, void 0, { write: address }, facts.slotWritable);
+      const address = gadgetAddress(candidate2.gadget);
+      const plans2 = candidate2 === write2.pick ? base : planJobs(index, style, exclude, api, void 0, { write: address }, facts.slotWritable);
       const chosen = (_a3 = plans2.filter((plan) => plan.job.key === "write")[0]) == null ? void 0 : _a3.pick;
       const field = (_b2 = fieldRegister(plans2)) != null ? _b2 : "";
       const value = (_c = chosen == null ? void 0 : chosen.at.source) != null ? _c : "";
       return {
         address,
-        sequence: sequence(candidate.gadget),
+        sequence: sequence(candidate2.gadget),
         value,
         field,
         filled: goals.filter((goal) => reaches(value, goal, field ? [field] : [])).length,
@@ -15713,8 +15714,8 @@ var osed_bundle = (() => {
     const raw = (bytes) => bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
     for (const form of forms) {
       if ([...form.pre, ...form.post, ...address].some((b) => bad.indexOf(b) >= 0)) continue;
-      const parts = [`bytes.fromhex("${raw(form.pre)}")`, `p32(${text})`, ...form.post.length ? [`bytes.fromhex("${raw(form.post)}")`] : []];
-      return { expr: parts.join(" + "), asm: form.asm };
+      const parts2 = [`bytes.fromhex("${raw(form.pre)}")`, `p32(${text})`, ...form.post.length ? [`bytes.fromhex("${raw(form.post)}")`] : []];
+      return { expr: parts2.join(" + "), asm: form.asm };
     }
     return void 0;
   }
@@ -15759,9 +15760,9 @@ var osed_bundle = (() => {
     return pops;
   }
   function gadgetName(sequenceText) {
-    const parts = sequenceText.split(" ; ");
-    const pop = parts.findIndex((part, i) => i > 0 && part.indexOf("pop ") === 0);
-    const used = parts[0].indexOf("push ") === 0 && pop > 0 ? [parts[0], parts[pop]] : parts[0].indexOf("push ") === 0 && parts.length > 1 ? parts.slice(0, 2) : parts.slice(0, 1);
+    const parts2 = sequenceText.split(" ; ");
+    const pop = parts2.findIndex((part, i) => i > 0 && part.indexOf("pop ") === 0);
+    const used = parts2[0].indexOf("push ") === 0 && pop > 0 ? [parts2[0], parts2[pop]] : parts2[0].indexOf("push ") === 0 && parts2.length > 1 ? parts2.slice(0, 2) : parts2.slice(0, 1);
     return used.join(" ").replace(/\b(dword|word|byte)\b ?/g, "").replace(/\[\s*(e[a-z]{2})[^\]]*\]/g, "mem $1").replace(/0x/g, "").replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "").toUpperCase();
   }
   function assignNames(table2) {
@@ -15843,7 +15844,7 @@ var osed_bundle = (() => {
     const swapsFor = (address, loads) => {
       var _a3;
       const fromSearch = ((_a3 = searchSwaps[address]) != null ? _a3 : []).filter((swap, i, all) => all.findIndex((other) => other.address === swap.address) === i).slice(0, 2);
-      const plan = input.plans.filter((candidate) => candidate.pick && gadgetAddress(candidate.pick.gadget) === address)[0];
+      const plan = input.plans.filter((candidate2) => candidate2.pick && gadgetAddress(candidate2.pick.gadget) === address)[0];
       if (!plan || !plan.pick) return fromSearch;
       const chosen = plan.pick;
       const sameAt = (verdict) => {
@@ -16722,70 +16723,451 @@ forms of that instruction carry a bad byte here. Lay the frame elsewhere, or wri
     };
   }
 
-  // src/commands/dep_delivery_live.ts
-  var dword = (address) => {
-    const bytes = tryReadMemory(BigInt(address >>> 0), 4);
-    return bytes && bytes.length === 4 ? (bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24) >>> 0 : void 0;
-  };
-  var readByte = (address) => {
-    var _a2;
-    return (_a2 = tryReadMemory(BigInt(address >>> 0), 1)) == null ? void 0 : _a2[0];
-  };
-  function sehAtCrash() {
-    var _a2;
-    if (getPointerSize() !== 4) return void 0;
-    const regs = readRegisters(4);
-    if (regs.ip === void 0 || regs.sp === void 0) return void 0;
-    const eip = Number(regs.ip) >>> 0;
-    const eipModule = findModuleByAddress(BigInt(eip));
-    if (!eipModule) return void 0;
-    const teb = resolveTeb32Address(host.currentThread);
-    if (!teb) return void 0;
-    const first = walkSehRecords(teb, 1).records[0];
-    if (!first || findModuleByAddress(first.handler)) return void 0;
-    const file = (_a2 = eipModule.name.split(/[\\/]/).pop()) != null ? _a2 : eipModule.name;
-    return { record: Number(first.node) >>> 0, handler: Number(first.handler) >>> 0, eip, esp: Number(regs.sp) >>> 0, teb: Number(teb) >>> 0, eipModule: file };
+  // src/commands/code_caves.ts
+  var IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE2 = 64;
+  var ROP_WORKSPACE_MIN_BYTES = 128;
+  function classifyRun(nullCount, int3Count, nopCount) {
+    const total = nullCount + int3Count + nopCount;
+    if (total === nullCount) return "NULL";
+    if (total === int3Count) return "INT3";
+    if (total === nopCount) return "NOP";
+    return "PADDING";
   }
-  var GPRS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "eip", "efl"];
-  var BP_ID = 77;
-  function measureHandlerEsp(crash, handler) {
-    const slot = crash.record + 4 >>> 0;
-    const original = dword(slot);
-    const head = dword(crash.teb);
-    if (original === void 0 || head === void 0) return { how: `the record at ${hex325(crash.record)} or the SEH head is unreadable` };
-    const saved = readRegisters(4).all.filter((entry) => GPRS.indexOf(entry.name.toLowerCase()) >= 0);
-    const run = (command2) => {
-      try {
-        return executeDebuggerCommand(command2);
-      } catch (_error) {
-        return [];
-      }
-    };
-    let esp;
-    let stopped;
+  function isCaveByte(byte) {
+    return byte === 0 || byte === 204 || byte === 144;
+  }
+  function alignUp(value, alignment) {
+    if (alignment <= 0) return value;
+    return Math.ceil(value / alignment) * alignment;
+  }
+  function readSectionAlignment(moduleBase) {
     try {
-      run(`ed ${hex325(slot)} ${hex325(handler)}`);
-      run(`bp${BP_ID} ${hex325(handler)}`);
-      for (let tries = 0; tries < 2; tries += 1) {
-        run("g");
-        const after = readRegisters(4);
-        stopped = after.ip === void 0 ? void 0 : Number(after.ip) >>> 0;
-        if (stopped === handler && after.sp !== void 0) esp = Number(after.sp) >>> 0;
-        if (stopped !== crash.eip) break;
+      const mz = readUint16LE(moduleBase);
+      if (mz !== 23117) return 0;
+      const peOffset = readUint32LE(moduleBase + BigInt(60));
+      const pe = moduleBase + BigInt(peOffset);
+      if (readUint32LE(pe) !== 17744) return 0;
+      return readUint32LE(pe + BigInt(56));
+    } catch (e) {
+      return 0;
+    }
+  }
+  function readModuleAslr(moduleBase) {
+    try {
+      const mz = readUint16LE(moduleBase);
+      if (mz !== 23117) return "unknown";
+      const peOffset = readUint32LE(moduleBase + BigInt(60));
+      const pe = moduleBase + BigInt(peOffset);
+      if (readUint32LE(pe) !== 17744) return "unknown";
+      const dllChars = readUint16LE(pe + BigInt(94));
+      return (dllChars & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE2) !== 0 ? "enabled" : "disabled";
+    } catch (e) {
+      return "unknown";
+    }
+  }
+  function computeEffectiveSizes(sections) {
+    var _a2;
+    if (sections.length === 0) return [];
+    const grouped = /* @__PURE__ */ new Map();
+    for (const section2 of sections) {
+      const key2 = `${section2.module.base.toString(16)}`;
+      const list = (_a2 = grouped.get(key2)) != null ? _a2 : [];
+      list.push(section2);
+      grouped.set(key2, list);
+    }
+    const effectiveSizes = new Array(sections.length);
+    for (const moduleSections of grouped.values()) {
+      const moduleBase = moduleSections[0].module.base;
+      const moduleEnd = moduleBase + moduleSections[0].module.size;
+      const sectionAlignment = readSectionAlignment(moduleBase);
+      const sorted = [...moduleSections].sort((a, b) => a.start < b.start ? -1 : 1);
+      for (let i = 0; i < sorted.length; i++) {
+        const section2 = sorted[i];
+        const idx = sections.indexOf(section2);
+        if (sectionAlignment > 0) {
+          const alignedSize = alignUp(section2.size, sectionAlignment);
+          const nextStart = i + 1 < sorted.length ? sorted[i + 1].start : moduleEnd;
+          const maxSize = Number(nextStart - section2.start);
+          effectiveSizes[idx] = Math.min(alignedSize, maxSize > 0 ? maxSize : alignedSize);
+        } else {
+          effectiveSizes[idx] = section2.size;
+        }
       }
-    } finally {
-      run(`bc ${BP_ID}`);
-      run(`ed ${hex325(slot)} ${hex325(original)}`);
-      run(`ed ${hex325(crash.teb)} ${hex325(head)}`);
-      for (const entry of saved) run(`r ${entry.name.toLowerCase()}=${hex325(Number(entry.value) >>> 0)}`);
     }
-    if (esp === void 0) {
-      return { how: `not measured: with ${hex325(handler)} as the handler, g stopped at ${stopped === void 0 ? "nothing readable" : hex325(stopped)}, not on it` };
+    return effectiveSizes;
+  }
+  function scanForCaves(section2, scanSize, minSize, chunkSize) {
+    const caves = [];
+    let runStart;
+    let runLength = 0;
+    let nullCount = 0;
+    let int3Count = 0;
+    let nopCount = 0;
+    const moduleName = section2.module.name.replace(/^.*[\\\/]/, "");
+    const flush = () => {
+      if (runStart !== void 0 && runLength >= minSize) {
+        caves.push({
+          address: runStart,
+          size: runLength,
+          pattern: classifyRun(nullCount, int3Count, nopCount),
+          module: moduleName,
+          modulePath: section2.module.path,
+          moduleBase: section2.module.base,
+          section: section2.name,
+          sectionExecutable: section2.executable,
+          rva: Number(runStart - section2.module.base),
+          aslr: "unknown",
+          readable: null,
+          writable: null,
+          executable: null,
+          capabilities: [],
+          addrSafe: null,
+          badBytes: [],
+          safeOffset: null,
+          safeVa: null
+        });
+      }
+      runStart = void 0;
+      runLength = 0;
+      nullCount = 0;
+      int3Count = 0;
+      nopCount = 0;
+    };
+    for (let offset = 0; offset < scanSize; offset += chunkSize) {
+      const chunkStart = section2.start + BigInt(offset);
+      const remaining = scanSize - offset;
+      const size = Math.min(remaining, chunkSize);
+      const bytes = tryReadMemory(chunkStart, size);
+      if (!bytes) {
+        flush();
+        continue;
+      }
+      for (let i = 0; i < bytes.length; i++) {
+        if (isCaveByte(bytes[i])) {
+          if (runStart === void 0) {
+            runStart = chunkStart + BigInt(i);
+          }
+          runLength++;
+          if (bytes[i] === 0) nullCount++;
+          else if (bytes[i] === 204) int3Count++;
+          else nopCount++;
+        } else {
+          flush();
+        }
+      }
     }
+    flush();
+    return caves;
+  }
+  function classifyCapabilities(readable, writable, executable, size) {
+    const r = readable === true;
+    const w = writable === true;
+    const x = executable === true;
+    if (!r && !w && !x) return ["UNUSABLE"];
+    const caps = [];
+    if (r && w && x) caps.push("RWX");
+    if (x) caps.push("EXEC");
+    if (w) {
+      caps.push("STAGING");
+      if (size >= ROP_WORKSPACE_MIN_BYTES) caps.push("ROP_WORKSPACE");
+    }
+    if (r && !w && !x) caps.push("READ_ONLY");
+    return caps.length > 0 ? caps : ["UNUSABLE"];
+  }
+  function displayCapabilities(caps) {
+    if (caps.includes("RWX")) return "RWX";
+    if (caps.includes("UNUSABLE")) return "UNUSABLE";
+    if (caps.includes("READ_ONLY")) return "READ_ONLY";
+    const parts2 = [];
+    if (caps.includes("EXEC")) parts2.push("EXEC");
+    if (caps.includes("STAGING")) parts2.push("STAGING");
+    if (caps.includes("ROP_WORKSPACE")) parts2.push("ROP");
+    return parts2.join(",");
+  }
+  function protectionLabel(r, w, x) {
+    if (r === null && w === null && x === null) return "?";
+    const parts2 = [];
+    if (r) parts2.push("R");
+    if (w) parts2.push("W");
+    if (x) parts2.push("X");
+    return parts2.length > 0 ? parts2.join("") : "-";
+  }
+  function enrichAndSplit(caves, minSize) {
+    const result3 = [];
+    const regions = [];
+    const regionAt = (address) => {
+      const known2 = regions.find((region) => region.baseAddress !== void 0 && region.regionSize !== void 0 && region.baseAddress <= address && address < region.baseAddress + region.regionSize);
+      if (known2) return known2;
+      const fresh = memoryRegion(address);
+      regions.push(fresh);
+      return fresh;
+    };
+    for (const cave of caves) {
+      let pos = cave.address;
+      const end = cave.address + BigInt(cave.size);
+      while (pos < end) {
+        const region = regionAt(pos);
+        let segEnd;
+        if (region.baseAddress !== void 0 && region.regionSize !== void 0 && region.regionSize > BigInt(0) && region.baseAddress <= pos && region.baseAddress + region.regionSize > pos) {
+          segEnd = region.baseAddress + region.regionSize;
+          if (segEnd > end) segEnd = end;
+        } else {
+          segEnd = end;
+        }
+        const segSize = Number(segEnd - pos);
+        if (segSize >= minSize) {
+          let r = region.readable;
+          let w = region.writable;
+          let x = region.executable;
+          if (region.guarded === true || region.noAccess === true || region.committed !== null && !region.committed) {
+            r = false;
+            w = false;
+            x = false;
+          }
+          const offsetFromOriginal = Number(pos - cave.address);
+          result3.push(__spreadProps(__spreadValues({}, cave), {
+            address: pos,
+            size: segSize,
+            rva: cave.rva + offsetFromOriginal,
+            readable: r,
+            writable: w,
+            executable: x,
+            capabilities: classifyCapabilities(r, w, x, segSize)
+          }));
+        }
+        pos = segEnd;
+      }
+    }
+    return result3;
+  }
+  function parseBadChars(input) {
+    const chars = /* @__PURE__ */ new Set();
+    const tokens = input.trim().split(/[\s,]+/);
+    for (const token of tokens) {
+      if (token.length === 0) continue;
+      const value = parseInt(token, 16);
+      if (!isNaN(value) && value >= 0 && value <= 255) {
+        chars.add(value);
+      }
+    }
+    return chars;
+  }
+  function addressBadBytes(address, pointerSize, badChars) {
+    const bad = [];
+    let addr = address;
+    for (let i = 0; i < pointerSize; i++) {
+      const byte = Number(addr & BigInt(255));
+      if (badChars.has(byte)) bad.push(byte);
+      addr >>= BigInt(8);
+    }
+    return [...new Set(bad)];
+  }
+  function findSafeOffset(caveAddress, caveSize, pointerSize, badChars) {
+    for (let delta = 0; delta < caveSize; delta++) {
+      const addr = caveAddress + BigInt(delta);
+      if (addressBadBytes(addr, pointerSize, badChars).length === 0) {
+        return { offset: delta, va: addr };
+      }
+    }
+    return null;
+  }
+  function rankCaves(caves) {
+    return [...caves].sort((a, b) => {
+      const aslrRank = (c2) => c2.aslr === "disabled" ? 0 : c2.aslr === "unknown" ? 1 : 2;
+      const aslrDiff = aslrRank(a) - aslrRank(b);
+      if (aslrDiff !== 0) return aslrDiff;
+      if (a.addrSafe !== null && b.addrSafe !== null) {
+        const safeDiff = (a.addrSafe ? 0 : 1) - (b.addrSafe ? 0 : 1);
+        if (safeDiff !== 0) return safeDiff;
+      }
+      const usability = (c2) => {
+        if (c2.capabilities.includes("UNUSABLE")) return 2;
+        if (c2.capabilities.includes("READ_ONLY")) return 1;
+        return 0;
+      };
+      const useDiff = usability(a) - usability(b);
+      if (useDiff !== 0) return useDiff;
+      return b.size - a.size;
+    });
+  }
+  function findCodeCaves(module, minSize, maxResults, badChars, capability2) {
+    const scope = forEachSection({
+      module,
+      executableOnly: false,
+      maxResults: 200,
+      chunkSize: 4096
+    });
+    const effectiveSizes = computeEffectiveSizes(scope.sections);
+    let pointerSize;
+    try {
+      pointerSize = getPointerSize();
+    } catch (e) {
+      pointerSize = 4;
+    }
+    const rawCaves = [];
+    for (let s = 0; s < scope.sections.length; s++) {
+      const section2 = scope.sections[s];
+      const scanSize = effectiveSizes[s];
+      const found = scanForCaves(section2, scanSize, minSize, 4096);
+      for (const cave of found) {
+        rawCaves.push(cave);
+      }
+    }
+    let caves = enrichAndSplit(rawCaves, minSize);
+    const aslrCache = /* @__PURE__ */ new Map();
+    for (const cave of caves) {
+      const key2 = cave.moduleBase.toString(16);
+      let aslr = aslrCache.get(key2);
+      if (aslr === void 0) {
+        aslr = readModuleAslr(cave.moduleBase);
+        aslrCache.set(key2, aslr);
+      }
+      cave.aslr = aslr;
+    }
+    if (capability2) {
+      const cap = capability2.toUpperCase();
+      caves = caves.filter((c2) => c2.capabilities.includes(cap));
+    }
+    if (badChars && badChars.trim().length > 0) {
+      const badSet = parseBadChars(badChars);
+      if (badSet.size > 0) {
+        for (const cave of caves) {
+          const bad = addressBadBytes(cave.address, pointerSize, badSet);
+          cave.addrSafe = bad.length === 0;
+          cave.badBytes = bad;
+          if (!cave.addrSafe) {
+            const safe = findSafeOffset(cave.address, cave.size, pointerSize, badSet);
+            if (safe) {
+              cave.safeOffset = safe.offset;
+              cave.safeVa = safe.va;
+            }
+          }
+        }
+      }
+    }
+    caves = rankCaves(caves);
+    caves = caves.slice(0, maxResults);
+    return { caves, warnings: scope.warnings };
+  }
+  function createCodeCavesCommand() {
     return {
-      esp,
-      how: `${hex325(handler)} written over the handler, bp on it, g; then the handler, the SEH head and the registers put back`,
-      reproduce: `ed ${hex325(slot)} ${hex325(handler)} ; bp ${hex325(handler)} ; g ; ? ${hex325(crash.record)} - esp`
+      name: "code_caves",
+      description: "Find contiguous null/int3/nop padding regions in PE sections suitable for shellcode placement. Inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
+      usage: "dx @$osed().code_caves(module?, minSize?, maxResults?, badChars?, capability?)",
+      examples: [
+        "dx @$osed().code_caves()",
+        'dx @$osed().code_caves("vulnserver")',
+        'dx @$osed().code_caves("essfunc", 100)',
+        'dx @$osed().code_caves("essfunc", 50, 25, "00 0A 0D")',
+        'dx @$osed().code_caves("", 50, 25, "", "EXEC")'
+      ],
+      schema: {
+        module: { type: "string" },
+        minSize: { type: "number", min: 1, default: 50 },
+        maxResults: { type: "number", min: 1, max: 100, default: 25 },
+        badChars: { type: "string" },
+        capability: { type: "string" }
+      },
+      execute(options) {
+        var _a2, _b;
+        const module = options.module;
+        const minSize = (_a2 = options.minSize) != null ? _a2 : 50;
+        const maxResults = (_b = options.maxResults) != null ? _b : 25;
+        const badChars = options.badChars;
+        const capability2 = options.capability;
+        const pointerSize = getPointerSize();
+        const hasBadChars = badChars !== void 0 && badChars.trim().length > 0;
+        const { caves, warnings } = findCodeCaves(module, minSize, maxResults, badChars, capability2);
+        section("Code Caves");
+        if (caves.length === 0) {
+          const parts2 = [`No caves >= ${minSize} bytes found`];
+          if (module) parts2.push(`in '${module}'`);
+          if (capability2) parts2.push(`with capability ${capability2}`);
+          info(parts2.join(" ") + ".");
+        } else {
+          const parts2 = [`Found ${caves.length} cave(s)`, `min ${minSize} bytes`];
+          if (module) parts2.push(`module: ${module}`);
+          if (capability2) parts2.push(`filter: ${capability2}`);
+          if (hasBadChars) parts2.push("bad chars applied");
+          info(parts2.join(", "));
+          const columns = [
+            { key: "va", header: "VA", width: pointerSize * 2 + 2 },
+            { key: "rva", header: "RVA", width: pointerSize * 2 + 2 },
+            { key: "size", header: "Size", width: 11 },
+            { key: "pattern", header: "Pattern", width: 7 },
+            { key: "module", header: "Module", width: 16 },
+            { key: "section", header: "Section", width: 8 },
+            { key: "aslr", header: "ASLR" },
+            { key: "prot", header: "Prot" },
+            { key: "capability", header: "Capability", width: 14 }
+          ];
+          if (hasBadChars) {
+            columns.push({ key: "addrSafe", header: "AddrSafe" });
+            columns.push({ key: "safeVa", header: "SafeVA", width: pointerSize * 2 + 2 });
+          }
+          table(
+            columns,
+            caves.map((cave) => {
+              const row = {
+                va: formatAddress(cave.address, pointerSize),
+                rva: formatAddress(BigInt(cave.rva), pointerSize),
+                size: `0x${cave.size.toString(16).toUpperCase()} (${cave.size})`,
+                pattern: cave.pattern,
+                module: cave.module,
+                section: cave.section,
+                aslr: cave.aslr === "enabled" ? "yes" : cave.aslr === "disabled" ? "no" : "?",
+                prot: protectionLabel(cave.readable, cave.writable, cave.executable),
+                capability: displayCapabilities(cave.capabilities)
+              };
+              if (hasBadChars) {
+                row.addrSafe = cave.addrSafe ? "yes" : "no";
+                row.safeVa = cave.addrSafe ? "-" : cave.safeVa !== null ? formatAddress(cave.safeVa, pointerSize) : "(none)";
+              }
+              return row;
+            })
+          );
+          if (hasBadChars) {
+            const unsafeCount = caves.filter((c2) => c2.addrSafe === false).length;
+            if (unsafeCount > 0) {
+              const aslrNote = caves.some((c2) => c2.aslr === "enabled") ? " (ASLR addresses valid for current mapping only)" : "";
+              info(`${unsafeCount} cave address(es) contain forbidden bytes${aslrNote}.`);
+            }
+          }
+        }
+        for (const warning of warnings) {
+          warn(warning);
+        }
+        whyItMatters(
+          "Code caves are unused regions within mapped images. Their suitability for execution, staging, or ROP workspaces depends on memory protection, address stability, and input constraints."
+        );
+        return {
+          command: "code_caves",
+          args: options,
+          success: true,
+          findings: caves.map((cave) => ({
+            address: formatAddress(cave.address, pointerSize),
+            rva: cave.rva,
+            size: cave.size,
+            pattern: cave.pattern,
+            module: cave.module,
+            modulePath: cave.modulePath,
+            moduleBase: formatAddress(cave.moduleBase, pointerSize),
+            section: cave.section,
+            sectionExecutable: cave.sectionExecutable,
+            aslr: cave.aslr,
+            readable: cave.readable,
+            writable: cave.writable,
+            executable: cave.executable,
+            capabilities: cave.capabilities,
+            addrSafe: cave.addrSafe,
+            badBytes: cave.badBytes.map((b) => formatHexByte(b)),
+            safeOffset: cave.safeOffset,
+            safeVa: cave.safeVa !== null ? formatAddress(cave.safeVa, pointerSize) : null
+          })),
+          warnings,
+          errors: []
+        };
+      }
     };
   }
 
@@ -17669,8 +18051,8 @@ forms of that instruction carry a bad byte here. Lay the frame elsewhere, or wri
         for (let i = 0; i < exportDir.numberOfNames; i += 1) {
           const candidateNameRva = readUint32LE(namesVa + BigInt(i * 4));
           const candidateOrdinal = readUint16LE(ordinalsVa + BigInt(i * 2));
-          const candidate = readAsciiString(lookup.module.base + BigInt(candidateNameRva), 512);
-          if (candidate.toLowerCase() === entry.name.toLowerCase()) {
+          const candidate2 = readAsciiString(lookup.module.base + BigInt(candidateNameRva), 512);
+          if (candidate2.toLowerCase() === entry.name.toLowerCase()) {
             nameRva = candidateNameRva;
             ordinalIndex = candidateOrdinal;
             break;
@@ -18245,8 +18627,8 @@ forms of that instruction carry a bad byte here. Lay the frame elsewhere, or wri
     if (!normalized) {
       return "<unknown>";
     }
-    const parts = normalized.split(/[\\/]+/);
-    return parts[parts.length - 1] || normalized;
+    const parts2 = normalized.split(/[\\/]+/);
+    return parts2[parts2.length - 1] || normalized;
   }
   function moduleNameMatches(name, requested) {
     const normalize = (value) => value.trim().toLowerCase().replace(/\.dll$/, "");
@@ -18255,10 +18637,10 @@ forms of that instruction carry a bad byte here. Lay the frame elsewhere, or wri
   function parseApiSpec(value) {
     const trimmed = value.trim();
     if (!trimmed) return void 0;
-    const parts = trimmed.split("!");
-    if (parts.length === 1) return { symbol: parts[0].trim() || "" };
-    if (parts.length === 2 && parts[0].trim() && parts[1].trim()) {
-      return { module: parts[0].trim(), symbol: parts[1].trim() };
+    const parts2 = trimmed.split("!");
+    if (parts2.length === 1) return { symbol: parts2[0].trim() || "" };
+    if (parts2.length === 2 && parts2[0].trim() && parts2[1].trim()) {
+      return { module: parts2[0].trim(), symbol: parts2[1].trim() };
     }
     return void 0;
   }
@@ -18308,6 +18690,455 @@ forms of that instruction carry a bad byte here. Lay the frame elsewhere, or wri
       iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
       iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
       api_plan: (target, badchars = [], owners) => helper.apiPlan(target, badchars, owners)
+    };
+  }
+
+  // src/commands/dep_plan_manual.ts
+  var requirements = [
+    { name: "PUSH_ESP_POP_ESI", body: ["push esp", "pop esi"] },
+    { name: "MOV_EAX_ESI", body: ["mov eax, esi"] },
+    { name: "POP_EBP", body: ["pop ebp"] },
+    { name: "ADD_EAX_EBP", body: ["add eax, ebp"] },
+    { name: "XCHG_EAX_EDX", body: ["xchg eax, edx"] },
+    { name: "POP_EAX", body: ["pop eax"] },
+    { name: "NEG_EAX", body: ["neg eax"] },
+    { name: "XCHG_EAX_EBP", body: ["xchg eax, ebp"] },
+    { name: "MOV_EAX_PTR_EAX", body: ["mov eax, dword [eax]"] },
+    { name: "MOV_PTR_EDX_EAX", body: ["mov dword [edx], eax"] },
+    { name: "INC_EDX", body: ["inc edx"] },
+    { name: "ADD_EAX_EDX", body: ["add eax, edx"] },
+    { name: "XCHG_EAX_ESP", body: ["xchg eax, esp"] }
+  ];
+  var safeExtraPops = {
+    PUSH_ESP_POP_ESI: /* @__PURE__ */ new Set(["eax", "ebx", "ecx", "edx", "ebp", "edi"]),
+    MOV_EAX_ESI: /* @__PURE__ */ new Set(["ebx", "ecx", "edx", "ebp", "esi", "edi"]),
+    POP_EBP: /* @__PURE__ */ new Set(["ebx", "ecx", "edx", "esi", "edi"]),
+    ADD_EAX_EBP: /* @__PURE__ */ new Set(["ebx", "ecx", "ebp", "esi", "edi"]),
+    XCHG_EAX_EDX: /* @__PURE__ */ new Set(["eax", "ebx", "ecx", "ebp", "esi", "edi"]),
+    POP_EAX: /* @__PURE__ */ new Set(["ebx", "ecx", "esi", "edi"]),
+    NEG_EAX: /* @__PURE__ */ new Set(["ebx", "ecx", "esi", "edi"]),
+    XCHG_EAX_EBP: /* @__PURE__ */ new Set(["eax", "ebx", "ecx", "esi", "edi"]),
+    MOV_EAX_PTR_EAX: /* @__PURE__ */ new Set(["ebx", "ecx", "esi", "edi"]),
+    MOV_PTR_EDX_EAX: /* @__PURE__ */ new Set(["eax", "ebx", "ecx", "esi", "edi"]),
+    INC_EDX: /* @__PURE__ */ new Set(["eax", "ebx", "ecx", "esi", "edi"]),
+    ADD_EAX_EDX: /* @__PURE__ */ new Set(["ebx", "ecx", "ebp", "esi", "edi"]),
+    XCHG_EAX_ESP: /* @__PURE__ */ new Set()
+  };
+  function normalizeInstruction(text) {
+    return text.toLowerCase().replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ").trim();
+  }
+  function parts(gadget) {
+    return gadget.mnemonic.split(";").map(normalizeInstruction).filter(Boolean);
+  }
+  function addressSafe(address, badchars) {
+    for (let i = 0; i < 4; i++) {
+      if (badchars.has(Number(address >> BigInt(i * 8) & BigInt(255)))) return false;
+    }
+    return true;
+  }
+  function candidate(gadget, body) {
+    var _a2;
+    if (gadget.kind !== "RET_CHAIN") return void 0;
+    const instructions = parts(gadget);
+    const terminal = (_a2 = instructions.pop()) != null ? _a2 : "";
+    if (!/^ret(?:n)?(?: 0x[0-9a-f]+)?$/.test(terminal)) return void 0;
+    if (instructions.length < body.length) return void 0;
+    if (!body.every((wanted, i) => instructions[i] === wanted)) return void 0;
+    const extra = instructions.slice(body.length);
+    if (!extra.every((instruction) => /^(?:pop|inc|dec) (?:eax|ebx|ecx|edx|ebp|esi|edi)$/.test(instruction))) return void 0;
+    return {
+      gadget,
+      extraPops: extra.filter((instruction) => instruction.startsWith("pop ")).map((instruction) => instruction.slice(4)),
+      extraEffects: extra.filter((instruction) => !instruction.startsWith("pop "))
+    };
+  }
+  function chooseManualWpmGadgets(gadgets, badchars) {
+    const excluded = new Set(badchars);
+    const selected = {};
+    for (const requirement of requirements) {
+      const choices = gadgets.filter((gadget) => gadget.address >= BigInt(0) && gadget.address <= BigInt(4294967295) && addressSafe(gadget.address, excluded)).map((gadget) => candidate(gadget, requirement.body)).filter((choice) => choice !== void 0).filter((choice) => choice.extraPops.every((register2) => safeExtraPops[requirement.name].has(register2))).filter((choice) => choice.extraEffects.every((instruction) => safeExtraPops[requirement.name].has(instruction.split(" ")[1]))).filter((choice) => requirement.name !== "XCHG_EAX_ESP" || choice.gadget.retImm === 0).sort((a, b) => a.extraEffects.length - b.extraEffects.length || a.extraPops.length - b.extraPops.length || Number(a.gadget.retImm > 0) - Number(b.gadget.retImm > 0) || a.gadget.retImm - b.gadget.retImm || Number(a.gadget.address - b.gadget.address));
+      selected[requirement.name] = choices[0];
+    }
+    return selected;
+  }
+  function parseBadchars(value) {
+    if (value === void 0 || value === "") return [];
+    if (Array.isArray(value) && value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) {
+      return [...new Set(value)];
+    }
+    if (typeof value !== "string") return void 0;
+    const tokens = value.trim().split(/[\s,]+/).filter(Boolean);
+    if (!tokens.every((token) => /^(?:0x)?[0-9a-fA-F]{2}$/.test(token))) return void 0;
+    return [...new Set(tokens.map((token) => parseInt(token.replace(/^0x/i, ""), 16)))];
+  }
+  function hex326(value) {
+    return `0x${value.toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+  function selectManualWpmCave(caves, minSize, badchars, isExecuteRead) {
+    const excluded = new Set(badchars);
+    for (const cave of caves) {
+      if (cave.executable !== true || cave.size < minSize + 8) continue;
+      const first = cave.address + BigInt(4);
+      const end = cave.address + BigInt(cave.size) - BigInt(4);
+      if (!isExecuteRead(first)) continue;
+      for (let address = first; address + BigInt(minSize) <= end && address <= BigInt(4294967295); address++) {
+        if (!addressSafe(address, excluded)) continue;
+        const bytes = Array.from({ length: 4 }, (_, i) => Number(address >> BigInt(i * 8) & BigInt(255)).toString(16).toUpperCase().padStart(2, "0")).join(" ");
+        return {
+          address: Number(address),
+          size: Number(end - address),
+          source: `${cave.module} ${cave.section} PAGE_EXECUTE_READ; address bytes ${bytes}`.replace(/[\r\n]/g, " ")
+        };
+      }
+    }
+    return void 0;
+  }
+  function calculateManualWpmValues(facts) {
+    return {
+      eipDelta: facts.esp === void 0 || facts.frame === void 0 ? void 0 : facts.frame - facts.esp >>> 0,
+      negativeWpmOffset: facts.wpmOffset,
+      iatAddress: facts.iat,
+      negativeShellcodeDelta: facts.frame === void 0 || facts.shellcode === void 0 ? void 0 : facts.frame + 16 - facts.shellcode >>> 0,
+      bytesWritten: facts.bytesWritten
+    };
+  }
+  function chooseBytesWrittenAddress(sections, badchars, usable) {
+    const excluded = new Set(badchars);
+    const candidates2 = sections.filter((section2) => section2.name.toLowerCase().startsWith(".data")).map((section2) => ({ section: section2, address: section2.start + BigInt(section2.size) + BigInt(4) })).filter(({ section: section2, address }) => address + BigInt(4) <= section2.module.base + section2.module.size && !sections.some((other) => other !== section2 && other.module.base === section2.module.base && address >= other.start && address < other.start + BigInt(other.size))).map(({ address }) => address).filter((address) => address >= BigInt(0) && address <= BigInt(4294967295)).filter((address) => addressSafe(address, excluded) && usable(address));
+    return candidates2.length === 1 ? Number(candidates2[0]) : void 0;
+  }
+  function selectSafeIatAddress(slots, badchars) {
+    const excluded = new Set(badchars);
+    const safe = [...new Set(slots.filter((address) => Number.isInteger(address) && address >= 0 && address <= 4294967295 && addressSafe(BigInt(address), excluded)))];
+    return safe.length === 1 ? safe[0] : void 0;
+  }
+  function liveBytesWrittenAddress(module, badchars) {
+    const sections = forEachSection({ module, executableOnly: false, maxResults: 1, chunkSize: 16384 }).sections;
+    return chooseBytesWrittenAddress(sections, badchars, (address) => {
+      const bytes = tryReadMemory(address, 4);
+      const protection = memoryRegion(address);
+      return (bytes == null ? void 0 : bytes.length) === 4 && bytes.every((byte) => byte === 0) && protection.writable === true && protection.committed !== false;
+    });
+  }
+  function moduleStem(name) {
+    var _a2, _b;
+    return (_b = (_a2 = name.replace(/\\/g, "/").split("/").pop()) == null ? void 0 : _a2.replace(/\.(?:dll|exe)$/i, "").toLowerCase()) != null ? _b : "";
+  }
+  function parseAddress2(text) {
+    const match = /\b0x([0-9a-f]{1,8})\b/i.exec(stripDml(text));
+    return match ? parseInt(match[1], 16) >>> 0 : void 0;
+  }
+  function parseBytePattern(text) {
+    const tokens = text.trim().split(/[\s,]+/).filter(Boolean);
+    if (tokens.length < 4 || !tokens.every((part) => /^(?:0x)?[0-9a-f]{2}$/i.test(part))) return void 0;
+    return tokens.map((part) => parseInt(part.replace(/^0x/i, ""), 16));
+  }
+  function uniquePatternNearEsp(esp, pattern, aligned) {
+    if (pattern.length < 4) return void 0;
+    const start = Math.max(0, esp - 8192);
+    const end = Math.min(4294967296, esp + 16384);
+    let found;
+    for (let address = start; address < end; address += 256) {
+      const size = Math.min(256 + pattern.length - 1, end - address);
+      const bytes = tryReadMemory(BigInt(address), size);
+      if (!bytes) continue;
+      for (let i = 0; i < Math.min(256, bytes.length - pattern.length + 1); i++) {
+        const hit = address + i;
+        if (aligned && hit % 4 !== 0) continue;
+        if (!pattern.every((byte, n) => bytes[i + n] === byte)) continue;
+        if (found !== void 0 && found !== hit) return void 0;
+        found = hit;
+      }
+    }
+    return found;
+  }
+  function liveManualWpmValues(shellcodeSpec, frameSpec, module, badchars) {
+    var _a2, _b, _c, _d;
+    const sp = readRegisters(4).sp;
+    const esp = sp !== void 0 && sp >= BigInt(0) && sp <= BigInt(4294967295) ? Number(sp) : void 0;
+    const frame = (_b = parseAddress2(frameSpec)) != null ? _b : esp === void 0 ? void 0 : uniquePatternNearEsp(esp, (_a2 = parseBytePattern(frameSpec)) != null ? _a2 : [], true);
+    const shellcode = (_d = parseAddress2(shellcodeSpec)) != null ? _d : esp === void 0 || !shellcodeSpec ? void 0 : uniquePatternNearEsp(esp, (_c = parseBytePattern(shellcodeSpec)) != null ? _c : [], false);
+    let wpmOffset;
+    try {
+      const lines = executeDebuggerCommand("? KERNEL32!GetLastErrorStub - KERNEL32!WriteProcessMemoryStub");
+      for (const line of lines) {
+        const match = /=\s*([0-9a-f`]{8,17})\b/i.exec(line);
+        if (match) {
+          wpmOffset = parseInt(match[1].replace(/`/g, ""), 16) >>> 0;
+          break;
+        }
+      }
+    } catch (_error) {
+    }
+    let iat;
+    try {
+      const rows = capture(() => createShellcodeNamespace().iat_find("GetLastErrorStub")).value.rows.toArray();
+      const slots = rows.filter((row) => {
+        var _a3, _b2;
+        const record = row;
+        return /GetLastErrorStub\b/i.test(stripDml(String((_a3 = record.Symbol) != null ? _a3 : ""))) && (!module || moduleStem(stripDml(String((_b2 = record.Owner) != null ? _b2 : ""))) === moduleStem(module));
+      }).map((row) => {
+        var _a3;
+        return parseAddress2(String((_a3 = row.Slot) != null ? _a3 : ""));
+      }).filter((value) => value !== void 0);
+      iat = selectSafeIatAddress(slots, badchars);
+    } catch (_error) {
+    }
+    return calculateManualWpmValues({ esp, frame, shellcode, wpmOffset, iat, bytesWritten: liveBytesWrittenAddress(module, badchars) });
+  }
+  function renderManualWpmPlan(selected, badchars, values = {}) {
+    var _a2;
+    const lines = [
+      "from struct import pack",
+      `badchars = bytes.fromhex("${badchars.map((byte) => byte.toString(16).padStart(2, "0")).join(" ")}")`,
+      "",
+      `codeCaveSize = ${values.codeCaveSize === void 0 ? "None" : hex326(BigInt(values.codeCaveSize))}  # usable bytes from selected cave address`,
+      "# WPM call frame. Check the cave against the actual shellcode size before use.",
+      "def GetWriteProcessMemoryTemplate() -> bytes:",
+      `    codeCaveAd = ${values.codeCave === void 0 ? "None  # No safe executable code cave found; choose manually" : `${hex326(BigInt(values.codeCave))}  # auto: ${(_a2 = values.codeCaveSource) != null ? _a2 : "executable cave"}; current mapping`}`,
+      `    lpNumberOfBytesWritten = ${values.bytesWritten === void 0 ? "None" : hex326(BigInt(values.bytesWritten))}  # .data VA + VirtualSize + 4; verified zero and writable`,
+      "    wpm  = pack('<L', 0x45454545)  # dummy WPM address",
+      "    wpm += pack('<L', codeCaveAd)  # shellcode return address",
+      "    wpm += pack('<L', 0xFFFFFFFF)  # current process pseudo handle",
+      "    wpm += pack('<L', codeCaveAd)  # lpBaseAddress: code cave",
+      "    wpm += pack('<L', 0x47474747)  # dummy lpBuffer",
+      "    wpm += pack('<L', 0x48484848)  # dummy nSize",
+      "    wpm += pack('<L', lpNumberOfBytesWritten)",
+      "    if any(byte in badchars for byte in wpm): raise ValueError('WPM frame contains badchars; review addresses and placeholders')",
+      "    return wpm",
+      "",
+      "# Six manual ROP steps; live values are filled only when unambiguous."
+    ];
+    const safeByte = [65, 144, 66, 67, ...Array.from({ length: 256 }, (_, i) => i)].find((byte) => !badchars.includes(byte));
+    if (safeByte === void 0) {
+      throw new Error("No padding byte is safe under the supplied badchars.");
+    }
+    const padding = `b"\\x${safeByte.toString(16).padStart(2, "0")}"`;
+    for (const { name } of requirements) {
+      const choice = selected[name];
+      const label = `GADGET_${name}`;
+      if (!choice) {
+        lines.push(`${label} = None  # No direct GADGET, DO IT MANNUALLY`);
+        continue;
+      }
+      const suffix = choice.extraEffects.length ? ` # NEED TO BE CHECKED, ROP PERFORMS MORE TASKS: ${choice.gadget.mnemonic}` : choice.extraPops.length || choice.gadget.retImm ? ` # No direct GADGET; Optional Gadget: ${choice.gadget.mnemonic}` : ` # ${choice.gadget.mnemonic}`;
+      lines.push(`${label} = ${hex326(choice.gadget.address)}${suffix}`);
+    }
+    lines.push(
+      "",
+      "# Live values are filled only when the debugger gives one unambiguous match.",
+      `eip_delta = ${values.eipDelta === void 0 ? "None" : hex326(BigInt(values.eipDelta))}  # WPM slot - ESP at the first gadget; verify: ? <WPM_slot> - @esp`,
+      `negative_wpm_offset = ${values.negativeWpmOffset === void 0 ? "None" : hex326(BigInt(values.negativeWpmOffset))}  # ? KERNEL32!GetLastErrorStub - KERNEL32!WriteProcessMemoryStub`,
+      `iat_address = ${values.iatAddress === void 0 ? "None" : hex326(BigInt(values.iatAddress))}  # dx @$osed().sc.iat_find("GetLastErrorStub")`,
+      `negative_shellcode_delta = ${values.negativeShellcodeDelta === void 0 ? "None" : hex326(BigInt(values.negativeShellcodeDelta))}  # ? <lpBuffer_slot> - <shellcode_address>`,
+      "difference = -20                # WPM slot - EDX nSize slot (five DWORDs)",
+      "",
+      "def GetROP(restoreRop: bytes, shellcode_size: int) -> bytes:",
+      "    if codeCaveSize is not None and shellcode_size > codeCaveSize: raise ValueError('Shellcode exceeds the selected code cave')",
+      '    rop = b""'
+    );
+    let pendingRet = 0;
+    let pendingRetWithoutDecoder = 0;
+    const emit = (name, value) => {
+      var _a3, _b;
+      const choice = selected[name];
+      lines.push(`    rop += pack("<L", GADGET_${name})`);
+      if (pendingRet) lines.push(`    rop += ${padding} * ${pendingRet}  # retn 0x${pendingRet.toString(16)} skips these bytes`);
+      if (pendingRetWithoutDecoder) {
+        lines.push(`    if not restoreRop: rop += ${padding} * ${pendingRetWithoutDecoder}  # preceding retn with no decoder`);
+        pendingRetWithoutDecoder = 0;
+      }
+      if (value !== void 0) lines.push(`    rop += pack("<L", ${value})  # value consumed by pop`);
+      for (const reg of (_a3 = choice == null ? void 0 : choice.extraPops) != null ? _a3 : []) {
+        lines.push(`    rop += ${padding} * 4  # extra pop ${reg}`);
+      }
+      pendingRet = (_b = choice == null ? void 0 : choice.gadget.retImm) != null ? _b : 0;
+    };
+    const section2 = (title) => {
+      lines.push("", `    # ${title}`);
+    };
+    section2("1. Get ESP: capture ESP in ESI");
+    emit("PUSH_ESP_POP_ESI");
+    section2("2. EIP calculation: locate the WPM slot");
+    emit("MOV_EAX_ESI");
+    emit("POP_EBP", "eip_delta & 0xFFFFFFFF");
+    emit("ADD_EAX_EBP");
+    emit("XCHG_EAX_EDX");
+    section2("3. Patch WriteProcessMemory in the WPM template");
+    emit("POP_EAX", "negative_wpm_offset & 0xFFFFFFFF");
+    emit("NEG_EAX");
+    emit("XCHG_EAX_EBP");
+    emit("POP_EAX", "iat_address");
+    emit("MOV_EAX_PTR_EAX");
+    emit("ADD_EAX_EBP");
+    emit("MOV_PTR_EDX_EAX");
+    section2("4. Get and patch lpBuffer");
+    for (let i = 0; i < 16; i++) emit("INC_EDX");
+    lines.push("    # 4.2.2.1: Recheck negative_shellcode_delta after generating the shellcode or decoder; its address may change.");
+    emit("POP_EAX", "negative_shellcode_delta & 0xFFFFFFFF");
+    emit("NEG_EAX");
+    emit("ADD_EAX_EDX");
+    emit("MOV_PTR_EDX_EAX");
+    for (let i = 0; i < 4; i++) emit("INC_EDX");
+    if (pendingRet) {
+      lines.push("    if restoreRop:");
+      lines.push("        if len(restoreRop) < 4: raise ValueError('restoreRop must contain a full gadget address')");
+      lines.push(`        rop += restoreRop[:4] + ${padding} * ${pendingRet} + restoreRop[4:]  # retn padding after decoder's first address`);
+      pendingRetWithoutDecoder = pendingRet;
+    } else {
+      lines.push("    rop += restoreRop  # optional shellcode decoder chain");
+    }
+    pendingRet = 0;
+    section2("5. Patch nSize in the WPM template");
+    emit("POP_EAX", "(-shellcode_size) & 0xFFFFFFFF");
+    emit("NEG_EAX");
+    emit("MOV_PTR_EDX_EAX");
+    section2("6. Execute WriteProcessMemory");
+    emit("POP_EAX", "difference & 0xFFFFFFFF");
+    emit("ADD_EAX_EDX");
+    emit("XCHG_EAX_ESP");
+    if (pendingRet) lines.push(`    # No safe automatic padding after ESP pivot: verify the selected gadget manually.`);
+    lines.push("    if any(byte in badchars for byte in rop): raise ValueError('ROP chain contains badchars; review gadgets, constants and restoreRop')");
+    lines.push("    return rop");
+    return lines;
+  }
+  function createDepPlanManualCommand() {
+    return {
+      name: "dep_plan_manual",
+      description: "Find x86 gadgets and print a manually completed WPM ROP skeleton.",
+      usage: 'dx @$osed().dep_plan_manual("WPM", module?, badchars?, shellcodeAddressOrBytes?, frameAddressOrMarker?, minCaveSize?)',
+      examples: ['dx @$osed().dep_plan_manual("WPM", "", "00 0A 0D 25 26 2B 3D")'],
+      schema: {
+        method: { type: "string", required: true },
+        module: { type: "string" },
+        badchars: { type: "string" },
+        shellcode: { type: "string" },
+        frame: { type: "string" },
+        minCaveSize: { type: "number", min: 1, default: 528 }
+      },
+      execute(options) {
+        var _a2, _b, _c, _d;
+        const method = String(options.method).trim().toLowerCase();
+        if (method !== "wpm" && method !== "writeprocessmemory") {
+          return { command: "dep_plan_manual", args: options, success: false, findings: [], warnings: [], errors: ['Use "WPM" or "WriteProcessMemory".'] };
+        }
+        if (getPointerSize() !== 4) {
+          return { command: "dep_plan_manual", args: options, success: false, findings: [], warnings: [], errors: ["The manual WPM plan requires a 32-bit target."] };
+        }
+        const badchars = parseBadchars(options.badchars);
+        if (!badchars) {
+          return { command: "dep_plan_manual", args: options, success: false, findings: [], warnings: [], errors: ["Badchars must be two-digit hexadecimal bytes separated by spaces or commas."] };
+        }
+        const module = String((_a2 = options.module) != null ? _a2 : "").trim() || void 0;
+        const minCaveSize = Number((_b = options.minCaveSize) != null ? _b : 528);
+        if (!Number.isInteger(minCaveSize) || minCaveSize < 1 || minCaveSize > 1048576) {
+          return { command: "dep_plan_manual", args: options, success: false, findings: [], warnings: [], errors: ["minCaveSize must be an integer from 1 to 0x100000 bytes."] };
+        }
+        const scan = scanBackward({ module, maxResults: 1e5, maxInstructionsPerGadget: 6, maxBackwardBytes: 12 });
+        const chosen = chooseManualWpmGadgets(scan.gadgets, badchars);
+        const values = liveManualWpmValues(String((_c = options.shellcode) != null ? _c : ""), String((_d = options.frame) != null ? _d : "45 45 45 45"), module, badchars);
+        const badText = badchars.map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
+        const caveScan = findCodeCaves(module, minCaveSize + 8, 1e4, badText, "EXEC");
+        const cave = selectManualWpmCave(caveScan.caves, minCaveSize, badchars, (address) => {
+          const region = memoryRegion(address);
+          return region.committed === true && region.raw.protection === 32;
+        });
+        if (cave) {
+          values.codeCave = cave.address;
+          values.codeCaveSize = cave.size;
+          values.codeCaveSource = cave.source;
+        }
+        const lines = renderManualWpmPlan(chosen, badchars, values);
+        section("Manual WPM ROP Plan");
+        for (const line of lines) print(line);
+        const missing = requirements.filter(({ name }) => !chosen[name]).map(({ name }) => name);
+        const warnings = [...scan.warnings, ...caveScan.warnings];
+        if (scan.stats.stoppedEarly === 1) warnings.push("Gadget scan reached its candidate limit; missing gadgets may exist later in the module.");
+        if (missing.length) warnings.push(`No direct gadget for: ${missing.join(", ")}.`);
+        if (values.eipDelta === void 0) warnings.push("eip_delta needs one WPM frame marker near ESP; pass the frame address or unique marker as argument 5.");
+        if (values.negativeWpmOffset === void 0) warnings.push("WPM symbol offset unavailable; check symbols with the ? command printed above.");
+        if (values.iatAddress === void 0) warnings.push("No unique badchar-safe GetLastErrorStub IAT slot; inspect sc.iat_find before choosing one.");
+        if (values.negativeShellcodeDelta === void 0) warnings.push("Shellcode delta needs a known address or unique byte signature as argument 4, plus the WPM frame address.");
+        if (values.bytesWritten === void 0) warnings.push("lpNumberOfBytesWritten needs one unambiguous .data section with a zero, writable DWORD at VA + VirtualSize + 4; pass the module name to narrow the search, then verify with !dh -a and !vprot.");
+        if (!cave) warnings.push(`No PAGE_EXECUTE_READ code cave of at least 0x${minCaveSize.toString(16)} usable bytes with a badchar-safe address; inspect code_caves and !vprot or choose one manually.`);
+        for (const warning of warnings) warn(warning);
+        return {
+          command: "dep_plan_manual",
+          args: { method: "WPM", module: module != null ? module : "", badchars },
+          success: true,
+          findings: [{ lines, missing, selected: chosen, values }],
+          warnings,
+          errors: [],
+          stats: scan.stats
+        };
+      }
+    };
+  }
+
+  // src/commands/dep_delivery_live.ts
+  var dword = (address) => {
+    const bytes = tryReadMemory(BigInt(address >>> 0), 4);
+    return bytes && bytes.length === 4 ? (bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24) >>> 0 : void 0;
+  };
+  var readByte = (address) => {
+    var _a2;
+    return (_a2 = tryReadMemory(BigInt(address >>> 0), 1)) == null ? void 0 : _a2[0];
+  };
+  function sehAtCrash() {
+    var _a2;
+    if (getPointerSize() !== 4) return void 0;
+    const regs = readRegisters(4);
+    if (regs.ip === void 0 || regs.sp === void 0) return void 0;
+    const eip = Number(regs.ip) >>> 0;
+    const eipModule = findModuleByAddress(BigInt(eip));
+    if (!eipModule) return void 0;
+    const teb = resolveTeb32Address(host.currentThread);
+    if (!teb) return void 0;
+    const first = walkSehRecords(teb, 1).records[0];
+    if (!first || findModuleByAddress(first.handler)) return void 0;
+    const file = (_a2 = eipModule.name.split(/[\\/]/).pop()) != null ? _a2 : eipModule.name;
+    return { record: Number(first.node) >>> 0, handler: Number(first.handler) >>> 0, eip, esp: Number(regs.sp) >>> 0, teb: Number(teb) >>> 0, eipModule: file };
+  }
+  var GPRS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "eip", "efl"];
+  var BP_ID = 77;
+  function measureHandlerEsp(crash, handler) {
+    const slot = crash.record + 4 >>> 0;
+    const original = dword(slot);
+    const head = dword(crash.teb);
+    if (original === void 0 || head === void 0) return { how: `the record at ${hex325(crash.record)} or the SEH head is unreadable` };
+    const saved = readRegisters(4).all.filter((entry) => GPRS.indexOf(entry.name.toLowerCase()) >= 0);
+    const run = (command2) => {
+      try {
+        return executeDebuggerCommand(command2);
+      } catch (_error) {
+        return [];
+      }
+    };
+    let esp;
+    let stopped;
+    try {
+      run(`ed ${hex325(slot)} ${hex325(handler)}`);
+      run(`bp${BP_ID} ${hex325(handler)}`);
+      for (let tries = 0; tries < 2; tries += 1) {
+        run("g");
+        const after = readRegisters(4);
+        stopped = after.ip === void 0 ? void 0 : Number(after.ip) >>> 0;
+        if (stopped === handler && after.sp !== void 0) esp = Number(after.sp) >>> 0;
+        if (stopped !== crash.eip) break;
+      }
+    } finally {
+      run(`bc ${BP_ID}`);
+      run(`ed ${hex325(slot)} ${hex325(original)}`);
+      run(`ed ${hex325(crash.teb)} ${hex325(head)}`);
+      for (const entry of saved) run(`r ${entry.name.toLowerCase()}=${hex325(Number(entry.value) >>> 0)}`);
+    }
+    if (esp === void 0) {
+      return { how: `not measured: with ${hex325(handler)} as the handler, g stopped at ${stopped === void 0 ? "nothing readable" : hex325(stopped)}, not on it` };
+    }
+    return {
+      esp,
+      how: `${hex325(handler)} written over the handler, bp on it, g; then the handler, the SEH head and the registers put back`,
+      reproduce: `ed ${hex325(slot)} ${hex325(handler)} ; bp ${hex325(handler)} ; g ; ? ${hex325(crash.record)} - esp`
     };
   }
 
@@ -19295,7 +20126,7 @@ if __name__ == "__main__":
   var regIndex = (reg) => REGS5.indexOf(reg);
   var isReg2 = (value) => REGS5.includes(value);
   var hex7 = (value) => `0x${(value >>> 0).toString(16)}`;
-  var hex326 = (value) => `0x${(value >>> 0).toString(16).padStart(8, "0")}`;
+  var hex327 = (value) => `0x${(value >>> 0).toString(16).padStart(8, "0")}`;
   var fitsImm8 = (value) => (value | 0) >= -128 && (value | 0) <= 127;
   function le32(value) {
     const v = value >>> 0;
@@ -19367,7 +20198,7 @@ if __name__ == "__main__":
     const direct = [x86.pushImm(v)];
     if (isClean2(direct, bad)) return direct;
     for (const reg of scratch) {
-      const plan = registerPlans(v, reg, bad).find((candidate) => isClean2(candidate, bad));
+      const plan = registerPlans(v, reg, bad).find((candidate2) => isClean2(candidate2, bad));
       if (plan) return plan;
     }
     return void 0;
@@ -19387,7 +20218,7 @@ if __name__ == "__main__":
       const chunk = padded.slice(offset, offset + 4);
       const value = (chunk[0] | chunk[1] << 8 | chunk[2] << 16 | chunk[3] << 24) >>> 0;
       const plan = pushValue(value, bad);
-      if (!plan) return { ok: false, error: `No encoding of dword ${hex326(value)} (${describeBytes(chunk)}) avoids the bad characters.` };
+      if (!plan) return { ok: false, error: `No encoding of dword ${hex327(value)} (${describeBytes(chunk)}) avoids the bad characters.` };
       lines.push(...withNote(plan, describeBytes(chunk)));
     }
     if (register2) {
@@ -19469,8 +20300,8 @@ if __name__ == "__main__":
     }
     const hash = ror13Hash(name);
     const hashPlan = pushValue(hash, bad, scratch);
-    if (!hashPlan) return { ok: false, error: `No encoding of hash ${hex326(hash)} avoids the bad characters.` };
-    lines.push(...withNote(hashPlan, `ROR13("${name}") = ${hex326(hash)}`));
+    if (!hashPlan) return { ok: false, error: `No encoding of hash ${hex327(hash)} avoids the bad characters.` };
+    lines.push(...withNote(hashPlan, `ROR13("${name}") = ${hex327(hash)}`));
     const kernel32 = module === "kernel32.dll";
     lines.push(
       __spreadProps(__spreadValues({}, x86.pushFrame(kernel32 ? SLOT.kernel32 : SLOT.module)), { note: kernel32 ? "kernel32 base" : `${module} base saved after LoadLibraryA` }),
@@ -19482,9 +20313,9 @@ if __name__ == "__main__":
       if (hits.length > 0) warnings.push(`"${line.asm}" holds bad byte(s) ${hexBytes(hits)}; rewrite that line by hand.`);
     }
     const params = prototype ? prototype.params.join(", ") : args.map((_, i) => `arg${i + 1}`).join(", ");
-    return { ok: true, api: name, module, hash, known: !!prototype, title: `${name}(${params}) in ${module}, ROR13 ${hex326(hash)}`, lines, warnings };
+    return { ok: true, api: name, module, hash, known: !!prototype, title: `${name}(${params}) in ${module}, ROR13 ${hex327(hash)}`, lines, warnings };
   }
-  function parseBadchars(value) {
+  function parseBadchars2(value) {
     if (value === void 0 || value === null || value === "") return [0];
     if (Array.isArray(value)) {
       const bytes2 = value.map(Number);
@@ -19538,7 +20369,7 @@ if __name__ == "__main__":
       const key2 = (eq < 0 ? token : token.slice(0, eq)).trim().toLowerCase();
       const value = eq < 0 ? "" : token.slice(eq + 1);
       if (key2 === "bad" || key2 === "badchars") {
-        const parsed = parseBadchars(value);
+        const parsed = parseBadchars2(value);
         if (!parsed) return { ok: false, error: `Cannot read the bad characters "${value}".` };
         badchars = parsed;
       } else if (key2 === "show") {
@@ -19879,7 +20710,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       schema: { text: { type: "string", required: true }, badchars: { type: ["string", "array"] }, register: { type: "string" } },
       execute(options) {
         const text = options.text;
-        const badchars = parseBadchars(options.badchars);
+        const badchars = parseBadchars2(options.badchars);
         if (!badchars) return fail2("sc_push_string", options, `Cannot read the bad characters "${String(options.badchars)}".`);
         const register2 = options.register === void 0 || options.register === "" ? void 0 : String(options.register).trim().toLowerCase();
         if (register2 !== void 0 && !REGISTERS4.includes(register2)) return fail2("sc_push_string", options, `Register must be one of ${REGISTERS4.join(", ")}.`);
@@ -19905,7 +20736,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       schema: { api: { type: "string", required: true }, args: { type: "array" }, badchars: { type: ["string", "array"] } },
       execute(options) {
         var _a2;
-        const badchars = parseBadchars(options.badchars);
+        const badchars = parseBadchars2(options.badchars);
         if (!badchars) return fail2("sc_call_frame", options, `Cannot read the bad characters "${String(options.badchars)}".`);
         const args = ((_a2 = options.args) != null ? _a2 : []).map(String);
         const result3 = callFrame(options.api, args, new Set(badchars));
@@ -19981,454 +20812,6 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
           success: true,
           findings: [{ script: result3.script }],
           warnings: [],
-          errors: []
-        };
-      }
-    };
-  }
-
-  // src/commands/code_caves.ts
-  var IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE2 = 64;
-  var ROP_WORKSPACE_MIN_BYTES = 128;
-  function classifyRun(nullCount, int3Count, nopCount) {
-    const total = nullCount + int3Count + nopCount;
-    if (total === nullCount) return "NULL";
-    if (total === int3Count) return "INT3";
-    if (total === nopCount) return "NOP";
-    return "PADDING";
-  }
-  function isCaveByte(byte) {
-    return byte === 0 || byte === 204 || byte === 144;
-  }
-  function alignUp(value, alignment) {
-    if (alignment <= 0) return value;
-    return Math.ceil(value / alignment) * alignment;
-  }
-  function readSectionAlignment(moduleBase) {
-    try {
-      const mz = readUint16LE(moduleBase);
-      if (mz !== 23117) return 0;
-      const peOffset = readUint32LE(moduleBase + BigInt(60));
-      const pe = moduleBase + BigInt(peOffset);
-      if (readUint32LE(pe) !== 17744) return 0;
-      return readUint32LE(pe + BigInt(56));
-    } catch (e) {
-      return 0;
-    }
-  }
-  function readModuleAslr(moduleBase) {
-    try {
-      const mz = readUint16LE(moduleBase);
-      if (mz !== 23117) return "unknown";
-      const peOffset = readUint32LE(moduleBase + BigInt(60));
-      const pe = moduleBase + BigInt(peOffset);
-      if (readUint32LE(pe) !== 17744) return "unknown";
-      const dllChars = readUint16LE(pe + BigInt(94));
-      return (dllChars & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE2) !== 0 ? "enabled" : "disabled";
-    } catch (e) {
-      return "unknown";
-    }
-  }
-  function computeEffectiveSizes(sections) {
-    var _a2;
-    if (sections.length === 0) return [];
-    const grouped = /* @__PURE__ */ new Map();
-    for (const section2 of sections) {
-      const key2 = `${section2.module.base.toString(16)}`;
-      const list = (_a2 = grouped.get(key2)) != null ? _a2 : [];
-      list.push(section2);
-      grouped.set(key2, list);
-    }
-    const effectiveSizes = new Array(sections.length);
-    for (const moduleSections of grouped.values()) {
-      const moduleBase = moduleSections[0].module.base;
-      const moduleEnd = moduleBase + moduleSections[0].module.size;
-      const sectionAlignment = readSectionAlignment(moduleBase);
-      const sorted = [...moduleSections].sort((a, b) => a.start < b.start ? -1 : 1);
-      for (let i = 0; i < sorted.length; i++) {
-        const section2 = sorted[i];
-        const idx = sections.indexOf(section2);
-        if (sectionAlignment > 0) {
-          const alignedSize = alignUp(section2.size, sectionAlignment);
-          const nextStart = i + 1 < sorted.length ? sorted[i + 1].start : moduleEnd;
-          const maxSize = Number(nextStart - section2.start);
-          effectiveSizes[idx] = Math.min(alignedSize, maxSize > 0 ? maxSize : alignedSize);
-        } else {
-          effectiveSizes[idx] = section2.size;
-        }
-      }
-    }
-    return effectiveSizes;
-  }
-  function scanForCaves(section2, scanSize, minSize, chunkSize) {
-    const caves = [];
-    let runStart;
-    let runLength = 0;
-    let nullCount = 0;
-    let int3Count = 0;
-    let nopCount = 0;
-    const moduleName = section2.module.name.replace(/^.*[\\\/]/, "");
-    const flush = () => {
-      if (runStart !== void 0 && runLength >= minSize) {
-        caves.push({
-          address: runStart,
-          size: runLength,
-          pattern: classifyRun(nullCount, int3Count, nopCount),
-          module: moduleName,
-          modulePath: section2.module.path,
-          moduleBase: section2.module.base,
-          section: section2.name,
-          sectionExecutable: section2.executable,
-          rva: Number(runStart - section2.module.base),
-          aslr: "unknown",
-          readable: null,
-          writable: null,
-          executable: null,
-          capabilities: [],
-          addrSafe: null,
-          badBytes: [],
-          safeOffset: null,
-          safeVa: null
-        });
-      }
-      runStart = void 0;
-      runLength = 0;
-      nullCount = 0;
-      int3Count = 0;
-      nopCount = 0;
-    };
-    for (let offset = 0; offset < scanSize; offset += chunkSize) {
-      const chunkStart = section2.start + BigInt(offset);
-      const remaining = scanSize - offset;
-      const size = Math.min(remaining, chunkSize);
-      const bytes = tryReadMemory(chunkStart, size);
-      if (!bytes) {
-        flush();
-        continue;
-      }
-      for (let i = 0; i < bytes.length; i++) {
-        if (isCaveByte(bytes[i])) {
-          if (runStart === void 0) {
-            runStart = chunkStart + BigInt(i);
-          }
-          runLength++;
-          if (bytes[i] === 0) nullCount++;
-          else if (bytes[i] === 204) int3Count++;
-          else nopCount++;
-        } else {
-          flush();
-        }
-      }
-    }
-    flush();
-    return caves;
-  }
-  function classifyCapabilities(readable, writable, executable, size) {
-    const r = readable === true;
-    const w = writable === true;
-    const x = executable === true;
-    if (!r && !w && !x) return ["UNUSABLE"];
-    const caps = [];
-    if (r && w && x) caps.push("RWX");
-    if (x) caps.push("EXEC");
-    if (w) {
-      caps.push("STAGING");
-      if (size >= ROP_WORKSPACE_MIN_BYTES) caps.push("ROP_WORKSPACE");
-    }
-    if (r && !w && !x) caps.push("READ_ONLY");
-    return caps.length > 0 ? caps : ["UNUSABLE"];
-  }
-  function displayCapabilities(caps) {
-    if (caps.includes("RWX")) return "RWX";
-    if (caps.includes("UNUSABLE")) return "UNUSABLE";
-    if (caps.includes("READ_ONLY")) return "READ_ONLY";
-    const parts = [];
-    if (caps.includes("EXEC")) parts.push("EXEC");
-    if (caps.includes("STAGING")) parts.push("STAGING");
-    if (caps.includes("ROP_WORKSPACE")) parts.push("ROP");
-    return parts.join(",");
-  }
-  function protectionLabel(r, w, x) {
-    if (r === null && w === null && x === null) return "?";
-    const parts = [];
-    if (r) parts.push("R");
-    if (w) parts.push("W");
-    if (x) parts.push("X");
-    return parts.length > 0 ? parts.join("") : "-";
-  }
-  function enrichAndSplit(caves, minSize) {
-    const result3 = [];
-    const regions = [];
-    const regionAt = (address) => {
-      const known2 = regions.find((region) => region.baseAddress !== void 0 && region.regionSize !== void 0 && region.baseAddress <= address && address < region.baseAddress + region.regionSize);
-      if (known2) return known2;
-      const fresh = memoryRegion(address);
-      regions.push(fresh);
-      return fresh;
-    };
-    for (const cave of caves) {
-      let pos = cave.address;
-      const end = cave.address + BigInt(cave.size);
-      while (pos < end) {
-        const region = regionAt(pos);
-        let segEnd;
-        if (region.baseAddress !== void 0 && region.regionSize !== void 0 && region.regionSize > BigInt(0) && region.baseAddress <= pos && region.baseAddress + region.regionSize > pos) {
-          segEnd = region.baseAddress + region.regionSize;
-          if (segEnd > end) segEnd = end;
-        } else {
-          segEnd = end;
-        }
-        const segSize = Number(segEnd - pos);
-        if (segSize >= minSize) {
-          let r = region.readable;
-          let w = region.writable;
-          let x = region.executable;
-          if (region.guarded === true || region.noAccess === true || region.committed !== null && !region.committed) {
-            r = false;
-            w = false;
-            x = false;
-          }
-          const offsetFromOriginal = Number(pos - cave.address);
-          result3.push(__spreadProps(__spreadValues({}, cave), {
-            address: pos,
-            size: segSize,
-            rva: cave.rva + offsetFromOriginal,
-            readable: r,
-            writable: w,
-            executable: x,
-            capabilities: classifyCapabilities(r, w, x, segSize)
-          }));
-        }
-        pos = segEnd;
-      }
-    }
-    return result3;
-  }
-  function parseBadChars(input) {
-    const chars = /* @__PURE__ */ new Set();
-    const tokens = input.trim().split(/[\s,]+/);
-    for (const token of tokens) {
-      if (token.length === 0) continue;
-      const value = parseInt(token, 16);
-      if (!isNaN(value) && value >= 0 && value <= 255) {
-        chars.add(value);
-      }
-    }
-    return chars;
-  }
-  function addressBadBytes(address, pointerSize, badChars) {
-    const bad = [];
-    let addr = address;
-    for (let i = 0; i < pointerSize; i++) {
-      const byte = Number(addr & BigInt(255));
-      if (badChars.has(byte)) bad.push(byte);
-      addr >>= BigInt(8);
-    }
-    return [...new Set(bad)];
-  }
-  function findSafeOffset(caveAddress, caveSize, pointerSize, badChars) {
-    for (let delta = 0; delta < caveSize; delta++) {
-      const addr = caveAddress + BigInt(delta);
-      if (addressBadBytes(addr, pointerSize, badChars).length === 0) {
-        return { offset: delta, va: addr };
-      }
-    }
-    return null;
-  }
-  function rankCaves(caves) {
-    return [...caves].sort((a, b) => {
-      const aslrRank = (c2) => c2.aslr === "disabled" ? 0 : c2.aslr === "unknown" ? 1 : 2;
-      const aslrDiff = aslrRank(a) - aslrRank(b);
-      if (aslrDiff !== 0) return aslrDiff;
-      if (a.addrSafe !== null && b.addrSafe !== null) {
-        const safeDiff = (a.addrSafe ? 0 : 1) - (b.addrSafe ? 0 : 1);
-        if (safeDiff !== 0) return safeDiff;
-      }
-      const usability = (c2) => {
-        if (c2.capabilities.includes("UNUSABLE")) return 2;
-        if (c2.capabilities.includes("READ_ONLY")) return 1;
-        return 0;
-      };
-      const useDiff = usability(a) - usability(b);
-      if (useDiff !== 0) return useDiff;
-      return b.size - a.size;
-    });
-  }
-  function findCodeCaves(module, minSize, maxResults, badChars, capability2) {
-    const scope = forEachSection({
-      module,
-      executableOnly: false,
-      maxResults: 200,
-      chunkSize: 4096
-    });
-    const effectiveSizes = computeEffectiveSizes(scope.sections);
-    let pointerSize;
-    try {
-      pointerSize = getPointerSize();
-    } catch (e) {
-      pointerSize = 4;
-    }
-    const rawCaves = [];
-    for (let s = 0; s < scope.sections.length; s++) {
-      const section2 = scope.sections[s];
-      const scanSize = effectiveSizes[s];
-      const found = scanForCaves(section2, scanSize, minSize, 4096);
-      for (const cave of found) {
-        rawCaves.push(cave);
-      }
-    }
-    let caves = enrichAndSplit(rawCaves, minSize);
-    const aslrCache = /* @__PURE__ */ new Map();
-    for (const cave of caves) {
-      const key2 = cave.moduleBase.toString(16);
-      let aslr = aslrCache.get(key2);
-      if (aslr === void 0) {
-        aslr = readModuleAslr(cave.moduleBase);
-        aslrCache.set(key2, aslr);
-      }
-      cave.aslr = aslr;
-    }
-    if (capability2) {
-      const cap = capability2.toUpperCase();
-      caves = caves.filter((c2) => c2.capabilities.includes(cap));
-    }
-    if (badChars && badChars.trim().length > 0) {
-      const badSet = parseBadChars(badChars);
-      if (badSet.size > 0) {
-        for (const cave of caves) {
-          const bad = addressBadBytes(cave.address, pointerSize, badSet);
-          cave.addrSafe = bad.length === 0;
-          cave.badBytes = bad;
-          if (!cave.addrSafe) {
-            const safe = findSafeOffset(cave.address, cave.size, pointerSize, badSet);
-            if (safe) {
-              cave.safeOffset = safe.offset;
-              cave.safeVa = safe.va;
-            }
-          }
-        }
-      }
-    }
-    caves = rankCaves(caves);
-    caves = caves.slice(0, maxResults);
-    return { caves, warnings: scope.warnings };
-  }
-  function createCodeCavesCommand() {
-    return {
-      name: "code_caves",
-      description: "Find contiguous null/int3/nop padding regions in PE sections suitable for shellcode placement. Inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
-      usage: "dx @$osed().code_caves(module?, minSize?, maxResults?, badChars?, capability?)",
-      examples: [
-        "dx @$osed().code_caves()",
-        'dx @$osed().code_caves("vulnserver")',
-        'dx @$osed().code_caves("essfunc", 100)',
-        'dx @$osed().code_caves("essfunc", 50, 25, "00 0A 0D")',
-        'dx @$osed().code_caves("", 50, 25, "", "EXEC")'
-      ],
-      schema: {
-        module: { type: "string" },
-        minSize: { type: "number", min: 1, default: 50 },
-        maxResults: { type: "number", min: 1, max: 100, default: 25 },
-        badChars: { type: "string" },
-        capability: { type: "string" }
-      },
-      execute(options) {
-        var _a2, _b;
-        const module = options.module;
-        const minSize = (_a2 = options.minSize) != null ? _a2 : 50;
-        const maxResults = (_b = options.maxResults) != null ? _b : 25;
-        const badChars = options.badChars;
-        const capability2 = options.capability;
-        const pointerSize = getPointerSize();
-        const hasBadChars = badChars !== void 0 && badChars.trim().length > 0;
-        const { caves, warnings } = findCodeCaves(module, minSize, maxResults, badChars, capability2);
-        section("Code Caves");
-        if (caves.length === 0) {
-          const parts = [`No caves >= ${minSize} bytes found`];
-          if (module) parts.push(`in '${module}'`);
-          if (capability2) parts.push(`with capability ${capability2}`);
-          info(parts.join(" ") + ".");
-        } else {
-          const parts = [`Found ${caves.length} cave(s)`, `min ${minSize} bytes`];
-          if (module) parts.push(`module: ${module}`);
-          if (capability2) parts.push(`filter: ${capability2}`);
-          if (hasBadChars) parts.push("bad chars applied");
-          info(parts.join(", "));
-          const columns = [
-            { key: "va", header: "VA", width: pointerSize * 2 + 2 },
-            { key: "rva", header: "RVA", width: pointerSize * 2 + 2 },
-            { key: "size", header: "Size", width: 11 },
-            { key: "pattern", header: "Pattern", width: 7 },
-            { key: "module", header: "Module", width: 16 },
-            { key: "section", header: "Section", width: 8 },
-            { key: "aslr", header: "ASLR" },
-            { key: "prot", header: "Prot" },
-            { key: "capability", header: "Capability", width: 14 }
-          ];
-          if (hasBadChars) {
-            columns.push({ key: "addrSafe", header: "AddrSafe" });
-            columns.push({ key: "safeVa", header: "SafeVA", width: pointerSize * 2 + 2 });
-          }
-          table(
-            columns,
-            caves.map((cave) => {
-              const row = {
-                va: formatAddress(cave.address, pointerSize),
-                rva: formatAddress(BigInt(cave.rva), pointerSize),
-                size: `0x${cave.size.toString(16).toUpperCase()} (${cave.size})`,
-                pattern: cave.pattern,
-                module: cave.module,
-                section: cave.section,
-                aslr: cave.aslr === "enabled" ? "yes" : cave.aslr === "disabled" ? "no" : "?",
-                prot: protectionLabel(cave.readable, cave.writable, cave.executable),
-                capability: displayCapabilities(cave.capabilities)
-              };
-              if (hasBadChars) {
-                row.addrSafe = cave.addrSafe ? "yes" : "no";
-                row.safeVa = cave.addrSafe ? "-" : cave.safeVa !== null ? formatAddress(cave.safeVa, pointerSize) : "(none)";
-              }
-              return row;
-            })
-          );
-          if (hasBadChars) {
-            const unsafeCount = caves.filter((c2) => c2.addrSafe === false).length;
-            if (unsafeCount > 0) {
-              const aslrNote = caves.some((c2) => c2.aslr === "enabled") ? " (ASLR addresses valid for current mapping only)" : "";
-              info(`${unsafeCount} cave address(es) contain forbidden bytes${aslrNote}.`);
-            }
-          }
-        }
-        for (const warning of warnings) {
-          warn(warning);
-        }
-        whyItMatters(
-          "Code caves are unused regions within mapped images. Their suitability for execution, staging, or ROP workspaces depends on memory protection, address stability, and input constraints."
-        );
-        return {
-          command: "code_caves",
-          args: options,
-          success: true,
-          findings: caves.map((cave) => ({
-            address: formatAddress(cave.address, pointerSize),
-            rva: cave.rva,
-            size: cave.size,
-            pattern: cave.pattern,
-            module: cave.module,
-            modulePath: cave.modulePath,
-            moduleBase: formatAddress(cave.moduleBase, pointerSize),
-            section: cave.section,
-            sectionExecutable: cave.sectionExecutable,
-            aslr: cave.aslr,
-            readable: cave.readable,
-            writable: cave.writable,
-            executable: cave.executable,
-            capabilities: cave.capabilities,
-            addrSafe: cave.addrSafe,
-            badBytes: cave.badBytes.map((b) => formatHexByte(b)),
-            safeOffset: cave.safeOffset,
-            safeVa: cave.safeVa !== null ? formatAddress(cave.safeVa, pointerSize) : null
-          })),
-          warnings,
           errors: []
         };
       }
@@ -21373,6 +21756,24 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
       output: "A commented Python skeleton with one line per stack word, or in the pushad style one line per slot from ESP up with the register and the value it must hold.",
       report: "Took the <method> frame layout from dep_function in the <style> style and replaced each placeholder with target addresses.",
       quick: true
+    },
+    {
+      name: "dep_plan_manual",
+      summary: "Fill a manual WPM chain with clean x86 gadgets",
+      what: "Prints a WriteProcessMemory ROP chain skeleton for <method> using gadgets found in <module> whose addresses avoid <badchars>.",
+      how: "Scans executable code for the fixed x86 gadget sequence, inserts stack filler for safe extra pops and ret N, then reads the live ESP, frame marker, symbols and IAT to fill values that have one unambiguous match.",
+      when: "After choosing WriteProcessMemory for a DEP bypass and before stepping through the chain in WinDbg.",
+      args: [
+        { name: "method", meaning: "WriteProcessMemory, or WPM for short." },
+        { name: "module", meaning: "Loaded module to scan, or an empty string for all loaded modules.", optional: true, default: "all loaded modules" },
+        BADCHARS('Bytes to exclude from gadget addresses and filler, such as "00 0A 0D".'),
+        { name: "shellcode", meaning: "Current shellcode address or a unique byte signature to search near ESP.", optional: true },
+        { name: "frame", meaning: "WPM frame address or four-byte dummy marker, default 45 45 45 45.", optional: true, default: "45 45 45 45" },
+        { name: "minCaveSize", meaning: "Minimum executable code cave size in bytes; default 0x210. Set it to at least the shellcode copy size.", optional: true, default: "0x210" }
+      ],
+      example: 'dx @$osed().dep_plan_manual("WPM", "", "00 0A 0D 25 26 2B 3D")',
+      output: "A WPM call-frame function with a badchar-safe executable code cave when found and a verified writable output pointer, then six numbered GetROP steps with gadgets, pop and ret N padding, and live values when unique.",
+      report: "Generated a manual WriteProcessMemory ROP skeleton from <module> with bad characters <badchars> excluded, then verified the selected gadgets and offsets in WinDbg."
     },
     {
       name: "dep_plan",
@@ -22637,7 +23038,7 @@ ${SC_BUILDER_SOURCE.slice(end)}` };
     }
     const property = /^(.+)@Property$/.exec(result3.field);
     if (property) {
-      const row = rows.find((candidate) => candidate.Property === property[1]);
+      const row = rows.find((candidate2) => candidate2.Property === property[1]);
       return row ? formatValue(row.Value, result3.kind) : void 0;
     }
     if (rows.length > 0 && result3.field in rows[0]) return formatValue(rows[0][result3.field], result3.kind);
@@ -24814,6 +25215,7 @@ ${INDENT}`)]);
       createNopCommand(),
       createRopTemplateCommand(),
       createDepFunctionCommand(),
+      createDepPlanManualCommand(),
       createScPushStringCommand(),
       createScCallFrameCommand(),
       createScTemplateCommand(),
@@ -24874,14 +25276,14 @@ ${INDENT}`)]);
       if (field.values.unknown) {
         return "unknown";
       }
-      const parts = [];
+      const parts2 = [];
       if (field.values.exact.size > 0) {
-        parts.push(`exact=${formatSet(field.values.exact)}`);
+        parts2.push(`exact=${formatSet(field.values.exact)}`);
       }
       if (field.values.conservative.size > 0) {
-        parts.push(`conservative=${formatSet(field.values.conservative)}`);
+        parts2.push(`conservative=${formatSet(field.values.conservative)}`);
       }
-      return parts.length > 0 ? `${field.confidence.toLowerCase()}(${parts.join("; ")})` : "none";
+      return parts2.length > 0 ? `${field.confidence.toLowerCase()}(${parts2.join("; ")})` : "none";
     };
     const gadgetStackDisplay = (gadget) => {
       if (gadget.categories.includes("STACK_PIVOT")) return "DYN";
@@ -25477,7 +25879,7 @@ ${INDENT}`)]);
       setResult({
         command: "rop.plan",
         args: options,
-        success: plan.strategies.some((candidate) => candidate.possible),
+        success: plan.strategies.some((candidate2) => candidate2.possible),
         findings: [plan],
         warnings: [],
         errors: []
@@ -26539,19 +26941,19 @@ ${INDENT}`)]);
       info(`Observed module: ${identity.name} base ${hex32(identity.base)} image base ${hex32(identity.imageBase)} size 0x${identity.sizeOfImage.toString(16).toUpperCase()} timestamp 0x${identity.timeDateStamp.toString(16).toUpperCase()} hash ${identity.hash}`);
       info(`Snapshot provenance: stopped-debugger reads; target path ${identity.path || "<unknown>"}`);
       info(`Badchars: ${badchars.length > 0 ? badchars.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ") : "none specified"}`);
-      const rows = snapshot.candidates.map((candidate) => {
+      const rows = snapshot.candidates.map((candidate2) => {
         var _a3, _b;
         return {
-          Strategy: candidate.strategy,
-          State: candidate.state,
-          Owner: candidate.ownerModule,
-          Slot: hex32(candidate.slot),
-          Pointer: hex32(candidate.pointer),
-          Anchor: (_b = (_a3 = candidate.anchor) == null ? void 0 : _a3.symbol) != null ? _b : "",
-          Delta: candidate.anchor ? hex32(candidate.anchor.delta) : "",
-          "Slot bytes": candidate.slotPayloadSafe ? "safe" : "contains badchar",
-          "Address evidence": candidate.exportRvaVerified ? "validated" : "incomplete",
-          Recommendation: candidate.recommendation
+          Strategy: candidate2.strategy,
+          State: candidate2.state,
+          Owner: candidate2.ownerModule,
+          Slot: hex32(candidate2.slot),
+          Pointer: hex32(candidate2.pointer),
+          Anchor: (_b = (_a3 = candidate2.anchor) == null ? void 0 : _a3.symbol) != null ? _b : "",
+          Delta: candidate2.anchor ? hex32(candidate2.anchor.delta) : "",
+          "Slot bytes": candidate2.slotPayloadSafe ? "safe" : "contains badchar",
+          "Address evidence": candidate2.exportRvaVerified ? "validated" : "incomplete",
+          Recommendation: candidate2.recommendation
         };
       });
       if (rows.length === 0) {
@@ -26569,7 +26971,7 @@ ${INDENT}`)]);
         });
       }
       renderRows("ROP API Resolution Planner", rows);
-      const warnings = snapshot.candidates.filter((candidate) => !candidate.slotPayloadSafe).map((candidate) => `${candidate.strategy} slot ${hex32(candidate.slot)} contains a forbidden byte; this does not rule out dynamic address construction.`);
+      const warnings = snapshot.candidates.filter((candidate2) => !candidate2.slotPayloadSafe).map((candidate2) => `${candidate2.strategy} slot ${hex32(candidate2.slot)} contains a forbidden byte; this does not rule out dynamic address construction.`);
       setResult({ command: "rop.api_plan", args: { target, badchars }, success: snapshot.candidates.length > 0, findings: [snapshot], warnings, errors: [] });
       return toDxResult("ROP API Resolution Planner", rows);
     };
@@ -26612,9 +27014,9 @@ ${INDENT}`)]);
         return toDxResult("ROP API Resolution Builder", rows2);
       }
       const matchesName = (actual, requested) => actual.toLowerCase().replace(/\.dll$/, "") === requested.replace(/\.dll$/, "");
-      const constrainedCandidates = snapshot.candidates.filter((candidate) => {
+      const constrainedCandidates = snapshot.candidates.filter((candidate2) => {
         var _a3;
-        return (!requestedOwner || matchesName(candidate.ownerModule, requestedOwner)) && (!requestedAnchor || ((_a3 = candidate.anchor) == null ? void 0 : _a3.symbol.toLowerCase()) === requestedAnchor);
+        return (!requestedOwner || matchesName(candidate2.ownerModule, requestedOwner)) && (!requestedAnchor || ((_a3 = candidate2.anchor) == null ? void 0 : _a3.symbol.toLowerCase()) === requestedAnchor);
       });
       if ((requestedOwner || requestedAnchor) && constrainedCandidates.length === 0) {
         const rows2 = [{ Error: `No Phase 1 candidate matches owner="${requestedOwner || "*"}" anchor="${requestedAnchor || "*"}".` }];
@@ -27305,9 +27707,9 @@ ${INDENT}`)]);
       const own2 = directRoute(depApi, modules);
       if (own2 || fixed.length === 0) return own2;
       for (const dll of ["kernel32", "kernelbase"]) {
-        const anchors = sc.api_plan(`${dll}!${depApi}`, badchars, fixed).candidates.filter((candidate) => candidate.strategy === "derived-address" && candidate.anchor);
-        const inGadgets = (candidate) => modules.some((module) => sameModule2(candidate.ownerModule, module));
-        const anchor = (_c = (_b = (_a2 = anchors.find((candidate) => candidate.slotPayloadSafe && inGadgets(candidate))) != null ? _a2 : anchors.find((candidate) => candidate.slotPayloadSafe)) != null ? _b : anchors.find(inGadgets)) != null ? _c : anchors[0];
+        const anchors = sc.api_plan(`${dll}!${depApi}`, badchars, fixed).candidates.filter((candidate2) => candidate2.strategy === "derived-address" && candidate2.anchor);
+        const inGadgets = (candidate2) => modules.some((module) => sameModule2(candidate2.ownerModule, module));
+        const anchor = (_c = (_b = (_a2 = anchors.find((candidate2) => candidate2.slotPayloadSafe && inGadgets(candidate2))) != null ? _a2 : anchors.find((candidate2) => candidate2.slotPayloadSafe)) != null ? _b : anchors.find(inGadgets)) != null ? _c : anchors[0];
         if (anchor && anchor.anchor) {
           const why = anchors.length === 1 ? "only" : anchor.slotPayloadSafe ? "its slot address has no bad byte, so the chain can pop it as it is" : inGadgets(anchor) ? `none is free of bad bytes, and this one is in ${shortName(anchor.ownerModule)}, where the gadgets come from` : "none is free of bad bytes, and none is in a module the gadgets come from, so this is the lowest slot";
           return {
@@ -27321,7 +27723,7 @@ ${INDENT}`)]);
               anchorAt: Number(anchor.pointer) >>> 0,
               apiAt: Number(anchor.target.address) >>> 0,
               why,
-              others: anchors.filter((candidate) => candidate !== anchor).map((candidate) => shortName(candidate.ownerModule))
+              others: anchors.filter((candidate2) => candidate2 !== anchor).map((candidate2) => shortName(candidate2.ownerModule))
             }
           };
         }
@@ -27340,7 +27742,7 @@ ${INDENT}`)]);
         const addressOf = (cave2) => Number(cave2.addrSafe === false && cave2.safeVa !== null ? cave2.safeVa : cave2.address);
         for (const module of modules) {
           const { caves } = findCodeCaves(module, minSize, 25, badText, capability2);
-          const found = caves.filter((candidate) => candidate.addrSafe !== false || candidate.safeVa !== null).filter((candidate) => clearOf(addressOf(candidate), minSize)).sort((left, right) => shifted(left) - shifted(right) || readOnly(left) - readOnly(right) || right.size - left.size)[0];
+          const found = caves.filter((candidate2) => candidate2.addrSafe !== false || candidate2.safeVa !== null).filter((candidate2) => clearOf(addressOf(candidate2), minSize)).sort((left, right) => shifted(left) - shifted(right) || readOnly(left) - readOnly(right) || right.size - left.size)[0];
           if (found) return { address: addressOf(found), size: found.size, writable: found.writable };
         }
         return void 0;
@@ -27736,7 +28138,7 @@ ${INDENT}`)]);
       const pickRoute = (names) => {
         var _a3;
         const routes = names.map((name) => routeFor(name, modules, badchars, fixedOwners));
-        return (_a3 = routes.find((candidate) => candidate !== void 0 && !candidate.delta)) != null ? _a3 : routes.find((candidate) => candidate !== void 0);
+        return (_a3 = routes.find((candidate2) => candidate2 !== void 0 && !candidate2.delta)) != null ? _a3 : routes.find((candidate2) => candidate2 !== void 0);
       };
       const route = pickRoute(autoApi ? DEP_PLAN_APIS : [requestedApi]);
       const ownChoice = autoApi ? route : pickRoute(DEP_PLAN_APIS);
@@ -28392,6 +28794,8 @@ ${INDENT}`)]);
         return { api: args[0], module: args[1], style: args[2] };
       case "dep_function":
         return { method: args[0], style: args[1] };
+      case "dep_plan_manual":
+        return { method: args[0], module: args[1], badchars: args[2], shellcode: args[3], frame: args[4], minCaveSize: args[5] };
       case "sc_push_string":
         return { text: args[0], badchars: args[1], register: args[2] };
       case "sc_call_frame": {
