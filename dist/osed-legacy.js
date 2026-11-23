@@ -12323,10 +12323,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-23T06:41:15.823Z" : globalThis[key2];
+        value = true ? "2026-11-23T07:39:33.097Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "636a034771b0" : globalThis[key2];
+        value = true ? "132fb1352abd" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -16403,22 +16403,36 @@ var osed_bundle = (() => {
   // src/commands/dep_build.ts
   var known = (k, text = hex325(k)) => ({ text, k });
   var computed = (text) => ({ text });
-  function measureLanding(eip, esp, read) {
-    const assumed = (why) => ({ gap: 0, measured: false, how: `not measured, ${why}: assumed 0, a plain ret` });
+  var RET_N = "If the function the overflow returns from ends in ret N, set RET_GAP = N.";
+  function measureLanding(eip, esp, read, eipModule) {
+    const assumed = (why, advice, line) => {
+      const how = `not measured, ${why}: assumed 0, a plain ret`;
+      return { gap: 0, measured: false, how, line: line != null ? line : `ESP after the crashing ret: ${how}.`, advice };
+    };
     if (eip === void 0 || esp === void 0)
-      return assumed("no registers to read");
+      return assumed("no registers to read", "Run dep_plan at the crash, where the registers hold it.");
+    if (eipModule !== void 0)
+      return assumed(`the crash is a fault in ${eipModule}, not a ret`, RET_N, `No return gap to read: EIP ${hex325(eip)} faulted inside ${eipModule}, so no ret ran. RET_GAP is assumed 0, a plain ret.`);
     const at = (offset) => read(esp + offset >>> 0);
+    const repeats = "The crash input repeats that dword: crash it with a different one after EIP, or set RET_GAP to the N of the function's ret N.";
     if (at(0) === eip)
-      return assumed(`the dword at ESP is EIP ${hex325(eip)} too`);
+      return assumed(`the dword at ESP is EIP ${hex325(eip)} too`, repeats);
     for (let below = 4; below <= 256; below += 4) {
       if (at(-below) !== eip)
         continue;
       if (at(-below - 4) === eip)
-        return assumed(`EIP ${hex325(eip)} repeats below ESP`);
+        return assumed(`EIP ${hex325(eip)} repeats below ESP`, repeats);
       const gap = below - 4;
-      return { gap, measured: true, how: `EIP ${hex325(eip)} sits at ESP-${below.toString(16).toUpperCase()}, so the ret moved ESP ${gap} byte${gap === 1 ? "" : "s"} past it (dds esp-${below.toString(16)} L2)` };
+      const how = `EIP ${hex325(eip)} sits at ESP-${below.toString(16).toUpperCase()}, so the ret moved ESP ${gap} byte${gap === 1 ? "" : "s"} past it (dds esp-${below.toString(16)} L2)`;
+      return {
+        gap,
+        measured: true,
+        how,
+        line: `ESP after the crashing ret: ${how}.`,
+        advice: gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + gap}: RET_GAP puts ${gap} junk bytes after the first gadget.`
+      };
     }
-    return assumed(`EIP ${hex325(eip)} is not on the stack below ESP`);
+    return assumed(`EIP ${hex325(eip)} is not on the stack below ESP, so no ret popped it`, RET_N);
   }
   function filler(bad) {
     var _a2;
@@ -17136,8 +17150,12 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
       chain.push({ line: "" }, { line: 'payload = PAD * CHAIN_AT + b"".join(p32(w) for w in c) + nops + shellcode' });
     }
     assignNames(table2);
-    const resolve = (text) => text.replace(/\u0001(\d+)\u0001/g, (_, i) => refs[Number(i)].name);
+    const TOKEN = /\u0001(\d+)\u0001/g;
+    const resolve = (text) => text.replace(TOKEN, (_, i) => refs[Number(i)].name);
+    const sent = /* @__PURE__ */ new Set();
     const dword2 = (value) => {
+      for (const match of value.text.matchAll(TOKEN))
+        sent.add(refs[Number(match[1])].address);
       if (value.k === void 0 || isClean(value.k, badchars))
         return resolve(value.text);
       const name = `${resolve(value.text)} = ${hex6(value.k)}`;
@@ -17154,8 +17172,6 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
       return op5.note ? `${line}${" ".repeat(Math.max(2, 44 - line.length))}# ${resolve(op5.note)}` : line;
     });
     const loaderLines = render(loaders, "    ").map((line) => line.indexOf("    def ") === 0 ? line.slice(4) : line);
-    const width = Math.max(0, ...table2.map((entry2) => entry2.name.length));
-    const cost = table2.filter((entry2) => entry2.pops > 0 || entry2.retn > 0);
     const badText = badchars.map((b) => `\\x${b.toString(16).padStart(2, "0")}`).join("");
     const sized = style !== "pushad" && FRAMES[api].some((slot2) => slot2.source.kind === "size");
     const slot = slotBlock(api, input.module, input.iatSlot, badchars, input.delta);
@@ -17172,6 +17188,9 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
         "return sendable(payload)"
       ].map((line) => line === "" ? "" : `    ${line}`)
     ];
+    const used = table2.filter((entry2) => called.has(entry2.address) || sent.has(entry2.address));
+    const width = Math.max(0, ...used.map((entry2) => entry2.name.length));
+    const cost = used.filter((entry2) => entry2.pops > 0 || entry2.retn > 0);
     return {
       table: table2,
       stages,
@@ -17183,7 +17202,7 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
         2: slot.block,
         3: CORPUS_BLOCK,
         4: { lines: [
-          ...table2.flatMap((entry2) => {
+          ...used.flatMap((entry2) => {
             var _a3;
             return [
               `${entry2.name.padEnd(width)} = ${hex6(entry2.address)}   # ${entry2.sequence}${warnings[entry2.address] ? `   <<< ${warnings[entry2.address]}` : byAddress[entry2.address] && far(byAddress[entry2.address]) ? `   <<< takes 0x${((_a3 = stackMove(byAddress[entry2.address])) != null ? _a3 : 0).toString(16)} bytes of stack: c.rop pads that much junk into the payload` : ""}`,
@@ -17193,7 +17212,7 @@ dx @$osed().code_caves("", ${hex6(span)}, 25, "${badSpaced}", "STAGING")` : "[4/
           "# (the stack dwords each one takes, ret N). The swap-ins are here too, so swapping one in needs no other edit.",
           ...dictLines("COST", [
             ...cost.map((entry2) => `${entry2.name}: (${entry2.pops}, ${entry2.retn ? `0x${entry2.retn.toString(16)}` : 0})`),
-            ...table2.flatMap((entry2) => swapsFor(entry2.address, entry2.loads)).filter((swap, i, all) => (swap.pops > 0 || swap.retn > 0) && table2.every((entry2) => entry2.address !== swap.address) && all.findIndex((other) => other.address === swap.address) === i).map((swap) => `${hex6(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`)
+            ...used.flatMap((entry2) => swapsFor(entry2.address, entry2.loads)).filter((swap, i, all) => (swap.pops > 0 || swap.retn > 0) && used.every((entry2) => entry2.address !== swap.address) && all.findIndex((other) => other.address === swap.address) === i).map((swap) => `${hex6(swap.address)}: (${swap.pops}, ${swap.retn ? `0x${swap.retn.toString(16)}` : 0})`)
           ]),
           `PAD = b"\\x${(JUNK & 255).toString(16).padStart(2, "0")}"                   # the byte the payload pads with, not a bad char`,
           'JUNK = int.from_bytes(PAD * 4, "little")   # and the junk dword made of it',
@@ -28813,10 +28832,11 @@ ${INDENT}`)]);
       const searches = solved && style === "pushad" ? espSearches(modules, badSet) : [];
       const jmpEsp = firstEsp(searches);
       const regs = readRegisters(4);
+      const eipAt = regs.ip === void 0 ? void 0 : findModuleByAddress(__bi(Number(regs.ip) >>> 0));
       const landing2 = measureLanding(regs.ip === void 0 ? void 0 : Number(regs.ip) >>> 0, regs.sp === void 0 ? void 0 : Number(regs.sp) >>> 0, (address) => {
         const bytes = tryReadMemory(__bi(address), 4);
         return bytes && bytes.length === 4 ? (bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24) >>> 0 : void 0;
-      });
+      }, eipAt ? shortName(eipAt.name) : void 0);
       const seh = sehCrash && solved ? sehDelivery(sehCrash, corpus) : void 0;
       const delivery = seh && seh.pivots.length > 0 ? seh : { kind: "ret" };
       const build = buildExploit({
@@ -28905,8 +28925,8 @@ ${INDENT}`)]);
         if (seh)
           printSehDelivery(seh, sehCrash, delivery.kind === "seh", style === "skeleton" ? 4 * FRAMES[depApi].length : 0, style);
         if (delivery.kind !== "seh") {
-          output_exports[landing2.measured ? "info" : "warn"](`ESP after the crashing ret: ${landing2.how}.`);
-          output_exports[landing2.measured ? "info" : "warn"](!landing2.measured ? "Run dep_plan at the crash, or find the EIP dword with dds esp-10 L8 and set RET_GAP." : landing2.gap === 0 ? "The chain's second dword sits right after EIP." : `The chain's second dword sits at OFFSET + ${4 + landing2.gap}: RET_GAP puts ${landing2.gap} junk bytes after the first gadget.`);
+          output_exports[landing2.measured ? "info" : "warn"](landing2.line);
+          output_exports[landing2.measured ? "info" : "warn"](landing2.advice);
         }
         printBlock(build.blocks[6]);
       }
