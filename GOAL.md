@@ -284,25 +284,54 @@ gadgets always contains a plain `pop <reg> ; ret`, which always wins on cost, so
 never exercised at all. The tests under "over a generated corpus" build every shape over every register
 pair and drop the lone pops, and they check the model against the disassembly rather than against itself.
 
-### Evidence gaps found in the same review and deliberately left
+### Evidence gaps found in the same review, closed on 2026-11-23
 
-These are in `[2/7]`, `[5/7]` and `[6/7]`, they predate the register search, and fixing them means moving
-printed output that other guarantees are pinned to. Measured on the Sync Breeze shape.
+Every gap this section listed is closed. `dep_plan` scores zero violations against
+`src/core/screenshot_rule.ts` on both fixture runs and on three real captures replayed through
+`tools/harness/replay.ts`, and the ratchet in `tests/screenshot_rule.test.ts` is now an assertion that the
+list is empty. No decision changed: the picked gadgets, the routes, the holes, the verdict and every line
+of pasted code are identical to what the same runs printed before.
 
-- **`[5/7]` is 128 lines and fails the one-screen rule.** About 36 of those are `rop.construct` printing
-  each recipe and then a `Value Construction` table repeating the same facts. Cutting that table is the
-  single biggest win available anywhere in the output.
-- **The `[5/7]` recipes are for EAX only and can contradict the loaders.** They are printed per constant
-  argument, so the section can show a clean recipe for `0x1000` in EAX directly above the line saying EDX
-  cannot be reached. A sentence now says they are a reference and the route list is the chain, but the two
-  still sit together.
-- **`[2/7]`'s API-layer conclusion is a 351-character line**, four facts in one sentence.
-- **Python above the separator in `[5/7]` and `[6/7]`.** `rop.construct` prints `from struct import pack`
-  blocks, and the skeleton `[6/7]` prints a frame using six names nothing defines (`vaAddr`,
-  `shellcodeReturnAddr`, `shellcodeAddr`, `dwSize`, `flAllocationType`, `flProtect`), immediately above the
-  same frame printed correctly with `p32`. Both break the separator's two purposes at once.
-- **`[4/7]`'s `find_bytes` output** prints a two-column table whose columns hold the same value, and spends
-  five lines of boilerplate to say `call esp: none without bad bytes`.
+What each gap cost and what was done:
+
+- **`[5/7]` was 128 lines.** `rop.construct` ran per constant and printed a recipe block and then a
+  `Value Construction` table of the same facts. Both are gone; each constant keeps its value and the
+  `rop.construct` call that builds it by hand. 81 rows to 15 on a real target, 91 to 17 on the fixture.
+  That also closed the contradiction: the recipes targeted EAX whatever register the frame wanted, so the
+  section could print a clean EAX recipe above a loader saying the register that needs it cannot be
+  reached. The route list, which is what the chain does, is what the section now shows.
+- **`[4/7]` was over 40 rows on 11 of 13 captures.** Two cuts. The usable candidates ranked after the pick
+  were two lines each and are already commented drop-in swaps in the same section's copy block, so they
+  are no longer printed above the separator; the candidates ranked *above* the pick stay, because they are
+  the evidence it was not taken blind. And `find_bytes` runs quietly behind its echo, which removed the
+  two-column table whose columns held the same value and the five lines of boilerplate for `call esp:
+  none without bad bytes`. 57 to 37, 61 to 29, 58 to 34 on the three real targets.
+- **The echo said `"auto"` for the style on every run that built a chain.** The style is the last choice
+  made, so the scan and the solve now run before the header with their output held back by
+  `output.capture` and replayed under `[3/7]`. A run with no corpus still echoes `"auto"`, because it
+  chose nothing, and the rule's exemption for a stopped run covers it.
+- **Python above the separator in `[5/7]` and `[6/7]`.** Gone with the `rop.construct` output, and the
+  skeleton `[6/7]` no longer invokes `dep_function`: it was printing the call frame a second time, in
+  `pack` with six names nothing defines, directly above the same frame built correctly with `p32`.
+- **Width, everywhere, the widest 493 characters.** `out.info`, `out.warn` and `out.error` break a message
+  at spaces before 130 columns, reading the budget from the rule itself. A `dx` call is one token, so a
+  command never breaks where nobody could paste it. Copy blocks go through `output.fitted`, which breaks a
+  pasted line inside its Python comment. Two lines needed their source changed instead: `COST` breaks
+  after a comma inside its braces, and `settledLines` is two sentences rather than one that named the
+  module twice. `[2/7]`'s 351-character conclusion is three `out.info` lines, one per fact.
+
+What this did not touch, and is the next evidence work:
+
+- The `[4/7]` ranking is not wrapped, because its rows are aligned in columns and a continuation of one
+  could not be told from the `PICK` line under it. A module whose gadget disassembly is long enough can
+  still put a row past 130. Nothing in the corpus does today.
+- `[4/7]`'s height fits by how much was cut, not by construction: nine pushad jobs each with four
+  candidates ranked above the pick would still exceed 40 rows. A budget that spends the rejected
+  candidates against the rows left is the structural fix, and it needs the section's lines counted before
+  any of them is printed.
+- A run with DEP off has no chain and so no style, and it prints no `STOP`, so the rule's echo exemption
+  does not cover it and its echo still reads `"auto"`. Either the run should say it stopped, or the rule
+  should know that a run needing no chain made no choice. Not in the measured set, so not yet decided.
 
 ## Out of scope
 

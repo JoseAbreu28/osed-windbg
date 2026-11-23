@@ -30,7 +30,7 @@ describe("a tagged line is broken to fit the screen", () => {
 
   // A broken command is a command nobody can paste in one drag, so a dx call moves whole to the next line.
   test("a dx call is never broken, even when it does not fit where it starts", () => {
-    const call = 'dx @$osed().dep_plan("VirtualProtect", "wbcore.dll", "00 03 0a 0d 7c", "skeleton", 1)';
+    const call = 'dx @$osed().dep_plan("VirtualProtect", "libbkup.dll", "00 03 0a 0d 7c", "skeleton", 1)';
     const lines = wrapped("[+] ", `${sentence(8)} ${call}`);
     expect(lines.some((line) => line.indexOf(call) >= 0)).toBe(true);
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(SCREEN.columns);

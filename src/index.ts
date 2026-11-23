@@ -3648,7 +3648,11 @@ function bindApi(): OsedApi {
     } else if (route.delta) {
       const delta = route.delta;
       const signed = delta.value > 0x7fffffff ? `- ${dwordHex(-delta.value >>> 0)}` : `+ ${dwordHex(delta.value)}`;
-      out.info(`No module with ASLR disabled imports ${depApi} itself, but ${owner} imports ${delta.dll}!${delta.anchor}, at slot ${dwordHex(route.slot)}. ${depApi} is a fixed distance from it inside ${delta.dll}: ${depApi} = [${dwordHex(route.slot)}] ${signed}, measured now with ${delta.anchor} at ${dwordHex(delta.anchorAt)} and ${depApi} at ${dwordHex(delta.apiAt)}. The chain reads the slot and adds API_DELTA.`);
+      // Three facts, so three lines. As one sentence this was 351 characters: the route to the API is
+      // the hardest thing this command concludes, and a screenshot of it should show the steps apart.
+      out.info(`No module with ASLR disabled imports ${depApi} itself, but ${owner} imports ${delta.dll}!${delta.anchor}, at slot ${dwordHex(route.slot)}.`);
+      out.info(`${depApi} is a fixed distance from it inside ${delta.dll}: ${depApi} = [${dwordHex(route.slot)}] ${signed}, measured now with ${delta.anchor} at ${dwordHex(delta.anchorAt)} and ${depApi} at ${dwordHex(delta.apiAt)}.`);
+      out.info("The chain reads the slot and adds API_DELTA.");
       const others = delta.others.filter((name, i) => delta.others.indexOf(name) === i);
       out.info(delta.why === "only"
         ? `This is the only slot in a module without ASLR that reaches ${depApi} by a distance.`
