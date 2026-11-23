@@ -401,7 +401,7 @@ describe("dep_plan", () => {
     // neg eax ; mov eax, dword [ebx] ; ret: fewer side effects than the clean neg, so it ranks above it.
     const fresh = loadApi({ extra: [[0x1371, [0xf7, 0xd8, 0x8b, 0x03, 0xc3]]] });
     fresh.dep_plan("VirtualAlloc", "libbkup", "00 0A 0D");
-    const output = text();
+    const output = unwrap(text());
     const negate = output.slice(output.indexOf("  negate"), output.indexOf("  pivot ESP"));
     expect(negate).toContain("neg eax ; mov eax, dword [ebx] ; ret");
     expect(negate).toContain("reads through ebx, which nothing in the chain has pointed anywhere yet");

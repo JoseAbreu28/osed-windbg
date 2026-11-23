@@ -46,7 +46,7 @@ type Port = "dest" | "source" | "address";
 const ROLE_NAMES: Record<string, string> = {
   pointer: "the captured ESP",
   field: "the field address",
-  value: "the value for the field",
+  value: "the field's value",
 };
 
 function roleName(role: Role): string {
@@ -450,7 +450,7 @@ export function planJobs(index: CapabilityIndex | undefined, style: DepPlanStyle
       const far = movesStackFar(gadget, job);
       const note = (uncontrolled.length > 0
         ? `; reads through ${uncontrolled.join(", ")}, which nothing in the chain has pointed anywhere yet`
-        : "") + (far ? `; takes 0x${(stackMove(gadget) ?? 0).toString(16)} bytes of stack, all of it junk in the payload` : "");
+        : "") + (far ? `; 0x${(stackMove(gadget) ?? 0).toString(16)} bytes of stack, all junk` : "");
       const rejected = rejection(gadget, job, at, live, bound);
       if (rejected) return { gadget, at, usable: false, far, uncontrolled, leads, reason: rejected };
       const needed = moves(job, at, bound);
